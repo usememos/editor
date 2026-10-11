@@ -17,7 +17,6 @@ import {
   type Block,
   type Doc,
   type HeadingLevel,
-  type Inline,
   type ListType,
   type Mark,
   MAX_INDENT,
@@ -150,7 +149,7 @@ class Converter {
   private spans: Span[] = [];
 
   finish(): Block[] {
-    this.flush(paragraph);
+    this.flush();
     return this.out;
   }
 
@@ -171,32 +170,32 @@ class Converter {
     const format = formatOf(el, parentFormat);
 
     if (/^h[1-6]$/.test(tag)) {
-      this.flush(paragraph);
+      this.flush();
       const content = this.inlineOf(el, format);
       this.out.push(heading(Number(tag[1]) as HeadingLevel, content));
     } else if (isList(tag)) {
-      this.flush(paragraph);
+      this.flush();
       this.list(el, 0, format);
     } else if (tag === 'li') {
       // A list item outside a list.
-      this.flush(paragraph);
+      this.flush();
       this.listItem(el, 'bullet', 0, undefined, format);
     } else if (tag === 'blockquote') {
-      this.flush(paragraph);
+      this.flush();
       this.blockquote(el, format);
     } else if (tag === 'pre') {
-      this.flush(paragraph);
+      this.flush();
       this.out.push(codeBlock(languageOf(el), preText(el)));
     } else if (tag === 'table') {
-      this.flush(paragraph);
+      this.flush();
       this.table(el, format);
     } else if (tag === 'hr') {
-      this.flush(paragraph);
+      this.flush();
       this.out.push(divider());
     } else if (BLOCKS.has(tag)) {
-      this.flush(paragraph);
+      this.flush();
       this.blocks(el, format);
-      this.flush(paragraph);
+      this.flush();
     } else if (el.querySelector(BLOCK_SELECTOR)) {
       // An inline element wrapping blocks (like Google Docs' outer <b>):
       // its formatting applies to the blocks inside.
@@ -267,31 +266,32 @@ class Converter {
     }
     const block = BLOCKS.has(tag);
     if (block && this.lastChar() !== '' && this.lastChar() !== '\n') this.lineBreak(format);
+    this.inlineChildren(el, format);
+    if (block && this.lastChar() !== '' && this.lastChar() !== '\n') this.lineBreak(format);
+  }
+
+  private inlineChildren(el: Element, format: Format): void {
     for (const node of Array.from(el.childNodes)) {
       if (node.nodeType === TEXT_NODE) this.text(node.nodeValue ?? '', format);
       else if (node.nodeType === ELEMENT_NODE) this.inline(node as Element, format);
     }
-    if (block && this.lastChar() !== '' && this.lastChar() !== '\n') this.lineBreak(format);
   }
 
   /** An element's content as inline content (for headings, list items and table cells). */
   private inlineOf(el: Element, format: Format): Span[] {
     const saved = this.spans;
     this.spans = [];
-    for (const node of Array.from(el.childNodes)) {
-      if (node.nodeType === TEXT_NODE) this.text(node.nodeValue ?? '', format);
-      else if (node.nodeType === ELEMENT_NODE) this.inline(node as Element, format);
-    }
+    this.inlineChildren(el, format);
     const content = finishInline(this.spans);
     this.spans = saved;
     return content;
   }
 
-  /** Ends the current run of inline content as a block made by `make`. */
-  private flush(make: (content: Inline) => Block): void {
+  /** Ends the current run of inline content as a paragraph. */
+  private flush(): void {
     const content = finishInline(this.spans);
     this.spans = [];
-    if (content.length > 0) this.out.push(make(content));
+    if (content.length > 0) this.out.push(paragraph(content));
   }
 
   // -- Lists ----------------------------------------------------------------
@@ -310,7 +310,7 @@ class Converter {
         this.list(child, depth + 1, formatOf(child, format));
       } else if (!SKIPPED.has(tag)) {
         this.element(child, format);
-        this.flush(paragraph);
+        this.flush();
       }
     }
   }
@@ -367,7 +367,7 @@ class Converter {
         this.element(child, format);
       }
     }
-    if (emitted) this.flush(paragraph);
+    if (emitted) this.flush();
     else emit();
     this.spans = saved;
   }
@@ -382,6 +382,8 @@ class Converter {
         case 'paragraph':
         case 'heading':
         case 'quote':
+        case 'code':
+        case 'html':
           this.out.push(quote(block.content));
           break;
         case 'listItem': {
@@ -389,10 +391,6 @@ class Converter {
           this.out.push(quote([...plain(marker), ...block.content]));
           break;
         }
-        case 'code':
-        case 'html':
-          this.out.push(quote(block.content));
-          break;
         default:
           this.out.push(block);
       }

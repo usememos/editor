@@ -6,7 +6,6 @@ import { parseAst } from './blocks';
 import { astToDoc } from './lower';
 
 export { parseAst } from './blocks';
-export { astToDoc } from './lower';
 
 export function parseMarkdown(src: string): Doc {
   return astToDoc(parseAst(src));

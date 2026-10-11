@@ -19,6 +19,7 @@ import {
   MAX_INDENT,
   blockIndex,
   caret,
+  clampSelection,
   codeBlock,
   concatInline,
   containerContent,
@@ -203,12 +204,10 @@ export function deleteBackward(state: EditorState): EditorState {
   if (!prev) return state;
   if (prev.type === 'divider') return withBlocks(state, splice(state, index - 1, 1));
   if (prev.type === 'table') {
-    if (inlineLength(block.content) === 0) {
-      const end = endOf(prev);
-      return withBlocks(state, splice(state, index, 1), { anchor: end, focus: end });
-    }
+    // Backspace moves into the table; an empty block is removed on the way.
     const end = endOf(prev);
-    return { ...state, selection: { anchor: end, focus: end } };
+    const selection = { anchor: end, focus: end };
+    return inlineLength(block.content) === 0 ? withBlocks(state, splice(state, index, 1), selection) : { ...state, selection };
   }
   return deleteRange(state, endOf(prev), { blockId: block.id, offset: 0 });
 }
@@ -343,17 +342,21 @@ function tableEnter(state: EditorState, block: TableBlock, pos: Position): Edito
 // ---------------------------------------------------------------------------
 // Marks and links
 
-/** Calls `fn` for each text container in the range, with the offsets inside it. */
-function mapContainersInRange(
+/**
+ * Calls `fn` for each text container in the range, with the offsets inside it,
+ * and returns the document's blocks with the results. Code and HTML blocks are
+ * skipped: marks and links do not apply there.
+ */
+function mapTextInRange(
   state: EditorState,
   from: Position,
   to: Position,
-  fn: (content: Inline, a: number, b: number, block: Block) => Inline,
+  fn: (content: Inline, a: number, b: number) => Inline,
 ): Block[] {
   const start = blockIndex(state.doc, from.blockId);
   const end = blockIndex(state.doc, to.blockId);
-  return state.doc.blocks.slice(start, end + 1).map((block) => {
-    if (block.type === 'divider') return block;
+  const updated = state.doc.blocks.slice(start, end + 1).map((block) => {
+    if (block.type === 'divider' || isPlainTextBlock(block)) return block;
     if (block.type === 'table') {
       const cols = block.align.length;
       const fromIdx = block.id === from.blockId && from.cell ? from.cell.row * cols + from.cell.col : 0;
@@ -364,26 +367,16 @@ function mapContainersInRange(
           if (i < fromIdx || i > toIdx) return cell;
           const a = i === fromIdx && block.id === from.blockId ? from.offset : 0;
           const b = i === toIdx && block.id === to.blockId ? to.offset : inlineLength(cell);
-          return a < b ? fn(cell, a, b, block) : cell;
+          return a < b ? fn(cell, a, b) : cell;
         }),
       );
       return { ...block, rows };
     }
     const a = block.id === from.blockId ? from.offset : 0;
     const b = block.id === to.blockId ? to.offset : inlineLength(block.content);
-    return a < b ? withContent(block, fn(block.content, a, b, block)) : block;
+    return a < b ? withContent(block, fn(block.content, a, b)) : block;
   });
-}
-
-/** Text ranges of the selection, skipping code blocks and HTML blocks, where marks do not apply. */
-function collectRanges(state: EditorState): { content: Inline; a: number; b: number }[] {
-  const { from, to } = orderedRange(state.doc, state.selection);
-  const out: { content: Inline; a: number; b: number }[] = [];
-  mapContainersInRange(state, from, to, (content, a, b, block) => {
-    if (!isPlainTextBlock(block)) out.push({ content, a, b });
-    return content;
-  });
-  return out;
+  return splice(state, start, updated.length, ...updated);
 }
 
 /** True if every character of the selection carries the mark (or, collapsed, the next typed text will). */
@@ -394,8 +387,13 @@ export function isMarkActive(state: EditorState, mark: Mark): boolean {
     const marks = state.storedMarks ?? formatAt(contentOf(block, pos.cell), pos.offset).marks;
     return marks.includes(mark);
   }
-  const ranges = collectRanges(state);
-  return ranges.length > 0 && ranges.every((r) => rangeHasMark(r.content, r.a, r.b, mark));
+  const { from, to } = orderedRange(state.doc, state.selection);
+  const hasMark: boolean[] = [];
+  mapTextInRange(state, from, to, (content, a, b) => {
+    hasMark.push(rangeHasMark(content, a, b, mark));
+    return content;
+  });
+  return hasMark.length > 0 && hasMark.every(Boolean);
 }
 
 export function toggleMark(state: EditorState, mark: Mark): EditorState {
@@ -408,11 +406,8 @@ export function toggleMark(state: EditorState, mark: Mark): EditorState {
     return { ...state, storedMarks: next };
   }
   const on = !isMarkActive(state, mark);
-  const updated = mapContainersInRange(state, from, to, (content, a, b, block) =>
-    isPlainTextBlock(block) ? content : setMarkInRange(content, a, b, mark, on),
-  );
-  const start = blockIndex(state.doc, from.blockId);
-  return { ...state, doc: { blocks: splice(state, start, updated.length, ...updated) }, storedMarks: null };
+  const blocks = mapTextInRange(state, from, to, (content, a, b) => setMarkInRange(content, a, b, mark, on));
+  return { ...state, doc: { blocks }, storedMarks: null };
 }
 
 /** The link under the caret or at the start of the selection. */
@@ -440,11 +435,8 @@ export function setLink(state: EditorState, href: string | null): EditorState {
   } else {
     ({ from, to } = orderedRange(state.doc, state.selection));
   }
-  const updated = mapContainersInRange(state, from, to, (content, a, b, block) =>
-    isPlainTextBlock(block) ? content : setLinkInRange(content, a, b, href),
-  );
-  const start = blockIndex(state.doc, from.blockId);
-  return { ...state, doc: { blocks: splice(state, start, updated.length, ...updated) }, storedMarks: null };
+  const blocks = mapTextInRange(state, from, to, (content, a, b) => setLinkInRange(content, a, b, href));
+  return { ...state, doc: { blocks }, storedMarks: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -482,13 +474,11 @@ function convert(block: TextBlock, spec: BlockTypeSpec): TextBlock {
   }
 }
 
-/** True if the selection's blocks all have this type. Used for active states in menus. */
-export function isBlockTypeActive(state: EditorState, spec: BlockTypeSpec): boolean {
-  const block = getBlock(state.doc, state.selection.focus.blockId);
-  if (block.type !== spec.type) return false;
-  if (spec.type === 'heading') return block.type === 'heading' && block.level === spec.level;
-  if (spec.type === 'listItem') return block.type === 'listItem' && block.listType === spec.listType;
-  return true;
+/** True if the block has this type (and heading level or list type). Used for active states in menus. */
+export function isBlockType(block: Block, spec: BlockTypeSpec): boolean {
+  if (block.type === 'heading') return spec.type === 'heading' && block.level === spec.level;
+  if (block.type === 'listItem') return spec.type === 'listItem' && block.listType === spec.listType;
+  return block.type === spec.type;
 }
 
 /**
@@ -501,17 +491,8 @@ export function setBlockType(state: EditorState, spec: BlockTypeSpec): EditorSta
   const start = blockIndex(state.doc, from.blockId);
   const end = blockIndex(state.doc, to.blockId);
   const updated = state.doc.blocks.slice(start, end + 1).map((b) => (isTextBlock(b) && b.type !== 'html' ? convert(b, spec) : b));
-  const sel = clampSelection(updated, state.selection);
-  return { doc: { blocks: splice(state, start, updated.length, ...updated) }, selection: sel, storedMarks: null };
-}
-
-function clampSelection(blocks: readonly Block[], sel: Selection): Selection {
-  const clamp = (p: Position): Position => {
-    const b = blocks.find((x) => x.id === p.blockId);
-    if (!b || p.cell) return p;
-    return { ...p, offset: Math.min(p.offset, isTextBlock(b) ? inlineLength(b.content) : 0) };
-  };
-  return { anchor: clamp(sel.anchor), focus: clamp(sel.focus) };
+  const doc = { blocks: splice(state, start, updated.length, ...updated) };
+  return { doc, selection: clampSelection(doc, state.selection), storedMarks: null };
 }
 
 /**
@@ -525,27 +506,10 @@ export function insertBlock(state: EditorState, spec: BlockTypeSpec): EditorStat
   const current = state.doc.blocks[index]!;
   const isEmpty = isTextBlock(current) && inlineLength(current.content) === 0;
 
-  let created: Block;
-  switch (spec.type) {
-    case 'table':
-      created = emptyTable(3, 3);
-      break;
-    case 'divider':
-      created = divider();
-      break;
-    case 'code':
-      created = codeBlock(spec.language ?? '');
-      break;
-    case 'paragraph':
-      created = paragraph();
-      break;
-    default:
-      created = convert(paragraph(), spec);
-  }
-  if (isEmpty && isTextBlock(created)) {
-    // Keep the ID so the DOM element and history stay stable.
-    return setBlockType(state, spec);
-  }
+  // An empty text block is converted in place, keeping its ID so the DOM
+  // element and history stay stable.
+  if (isEmpty && spec.type !== 'table' && spec.type !== 'divider') return setBlockType(state, spec);
+  const created = spec.type === 'table' ? emptyTable(3, 3) : spec.type === 'divider' ? divider() : convert(paragraph(), spec);
   const blocks: Block[] = [created];
   let target: Block = created;
   if (created.type === 'divider') {
@@ -591,6 +555,13 @@ export function toggleTask(state: EditorState, blockId: string): EditorState {
   if (block.type !== 'listItem' || block.listType !== 'task') return state;
   const next: ListItemBlock = { ...block, checked: !block.checked };
   return replaceBlock(state, next);
+}
+
+/** Sets a code block's language, from the input in its header. */
+export function setCodeLanguage(state: EditorState, blockId: string, language: string): EditorState {
+  const block = getBlock(state.doc, blockId);
+  if (block.type !== 'code' || block.language === language) return state;
+  return replaceBlock(state, { ...block, language });
 }
 
 // ---------------------------------------------------------------------------
@@ -661,17 +632,12 @@ export function tableAction(state: EditorState, action: TableAction): EditorStat
       table = addColumn(block, col + 1);
       cell = { row, col: col + 1 };
       break;
-    case 'deleteRow': {
+    case 'deleteRow':
       if (block.rows.length <= 1) return deleteBlock(state, block.id);
-      if (row === 0) {
-        // Deleting the header promotes the next row.
-        table = { ...block, rows: block.rows.slice(1) };
-      } else {
-        table = { ...block, rows: block.rows.filter((_, r) => r !== row) };
-      }
+      // Deleting the header promotes the next row.
+      table = { ...block, rows: block.rows.filter((_, r) => r !== row) };
       cell = { row: Math.min(row, table.rows.length - 1), col };
       break;
-    }
     case 'deleteColumn': {
       if (block.align.length <= 1) return deleteBlock(state, block.id);
       table = {
@@ -730,7 +696,7 @@ export function applyBlockInputRules(state: EditorState): EditorState | null {
     return withBlocks(state, splice(state, index, 1, divider(), rest), caret(rest.id, 0));
   }
 
-  const rules: [RegExp, (m: RegExpExecArray) => BlockTypeSpec | null][] = [
+  const rules: [RegExp, (m: RegExpExecArray) => BlockTypeSpec][] = [
     [/^(#{1,6}) $/, (m) => ({ type: 'heading', level: m[1]!.length as HeadingLevel })],
     [/^[-*+] $/, () => ({ type: 'listItem', listType: 'bullet' })],
     [/^\d{1,9}[.)] $/, () => ({ type: 'listItem', listType: 'ordered' })],
@@ -745,7 +711,6 @@ export function applyBlockInputRules(state: EditorState): EditorState | null {
     const m = re.exec(before);
     if (!m) continue;
     const spec = toSpec(m);
-    if (!spec) continue;
     if (block.type === 'listItem' && !(spec.type === 'listItem' && spec.listType === 'task')) continue;
     const stripped = deleteRange(state, { blockId: block.id, offset: 0 }, pos);
     let next = setBlockType(stripped, spec);
@@ -904,10 +869,4 @@ export function insertBlocks(state: EditorState, fragment: readonly Block[]): Ed
     caretPos = { blockId: tail.id, offset: 0 };
   }
   return withBlocks(s, splice(s, index, 1, ...out), { anchor: caretPos, focus: caretPos });
-}
-
-/** Selects the whole document. */
-export function selectAll(state: EditorState): EditorState {
-  const blocks = state.doc.blocks;
-  return { ...state, selection: { anchor: startOf(blocks[0]!), focus: endOf(blocks[blocks.length - 1]!) } };
 }

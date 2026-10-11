@@ -99,7 +99,7 @@ export function isUnicodePunctuation(ch: string): boolean {
 }
 
 /** Decodes one entity reference such as `&amp;` or `&#x41;`. Returns null if it is not a valid one. */
-export function decodeEntity(entity: string): string | null {
+function decodeEntity(entity: string): string | null {
   if (entity[1] === '#') {
     const hex = entity[2] === 'x' || entity[2] === 'X';
     const code = parseInt(entity.slice(hex ? 3 : 2, -1), hex ? 16 : 10);
@@ -121,7 +121,7 @@ export function unescapeString(s: string): string {
  * whitespace and case-folds. `toLowerCase().toUpperCase()` approximates
  * Unicode case folding well enough for the spec (for example "ẞ" and "SS").
  */
-export function normalizeLabel(label: string): string {
+function normalizeLabel(label: string): string {
   return label
     .slice(1, -1)
     .replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '')

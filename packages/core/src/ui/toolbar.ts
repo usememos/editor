@@ -2,11 +2,9 @@
 
 import type { Editor } from '../editor';
 import type { Mark } from '../model';
-import { Menu, Popup } from './popup';
+import { Menu, Popup, isMac, isTouch } from './popup';
 
-const isMac = typeof navigator !== 'undefined' && /Mac|iP(hone|ad|od)/.test(navigator.platform);
 const mod = (key: string) => (isMac ? `⌘${key}` : `Ctrl+${key}`);
-const isTouch = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 
 interface MarkButton {
   mark: Mark;

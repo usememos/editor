@@ -17,6 +17,7 @@ import {
   MARK_ORDER,
   inlineLength,
 } from '../model';
+import type { Labels } from '../labels';
 
 export const BLOCK_ATTR = 'data-block-id';
 const CONTENT_ATTR = 'data-content';
@@ -39,7 +40,7 @@ export function safeHref(href: string): string | null {
   return ['http', 'https', 'mailto', 'tel'].includes(scheme[1]!.toLowerCase()) ? trimmed : null;
 }
 
-export function renderBlock(block: Block, doc: Document = document): HTMLElement {
+function renderBlock(block: Block, doc: Document, labels: Labels): HTMLElement {
   const el = (tag: string, className?: string) => {
     const e = doc.createElement(tag);
     if (className) e.className = className;
@@ -71,7 +72,6 @@ export function renderBlock(block: Block, doc: Document = document): HTMLElement
         box.tabIndex = -1;
         box.checked = block.checked;
         marker.appendChild(box);
-
       }
       const content = el('div', 'mbe-content');
       fillContent(content, block.content, doc);
@@ -86,7 +86,7 @@ export function renderBlock(block: Block, doc: Document = document): HTMLElement
       const lang = el('input', 'mbe-code-lang') as HTMLInputElement;
       lang.value = block.language;
       lang.spellcheck = false;
-      lang.setAttribute('aria-label', 'Language');
+      lang.setAttribute('aria-label', labels.language);
       bar.appendChild(lang);
       const pre = el('pre');
       const code = el('code');
@@ -220,7 +220,10 @@ export class BlockRenderer {
   /** Last number written into each ordered item's marker, keyed by element. */
   private readonly numbers = new WeakMap<HTMLElement, number>();
 
-  constructor(private readonly root: HTMLElement) {}
+  constructor(
+    private readonly root: HTMLElement,
+    private readonly labels: Labels,
+  ) {}
 
   /**
    * `force` re-renders every block. `lazy` (with a full render) lets blocks
@@ -231,7 +234,7 @@ export class BlockRenderer {
     for (const block of doc.blocks) {
       const prev = this.rendered.get(block.id);
       const reuse = !force && prev && prev.block === block && prev.el.parentNode === this.root;
-      next.set(block.id, { block, el: reuse ? prev.el : renderBlock(block, this.root.ownerDocument) });
+      next.set(block.id, { block, el: reuse ? prev.el : renderBlock(block, this.root.ownerDocument, this.labels) });
     }
 
     if (force || this.rendered.size === 0) {
@@ -309,7 +312,7 @@ function updateListNumbers(
 // ---------------------------------------------------------------------------
 // DOM <-> model positions
 
-export function blockElementOf(root: HTMLElement, node: Node): HTMLElement | null {
+function blockElementOf(root: HTMLElement, node: Node): HTMLElement | null {
   let n: Node | null = node;
   while (n && n.parentNode !== root) n = n.parentNode;
   return n instanceof HTMLElement && n.hasAttribute(BLOCK_ATTR) ? n : null;

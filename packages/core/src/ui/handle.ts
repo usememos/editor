@@ -11,10 +11,7 @@ export class BlockHandle {
   private hideTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly cleanup: (() => void)[] = [];
 
-  constructor(
-    private readonly editor: Editor,
-    private readonly onOpen: (blockId: string, rect: DOMRect) => void,
-  ) {
+  constructor(private readonly editor: Editor) {
     const root = editor.root;
     const doc = root.ownerDocument;
     this.el = doc.createElement('button');
@@ -37,7 +34,7 @@ export class BlockHandle {
     // Keep focus and the selection in the editor.
     on(this.el, 'mousedown', (e) => e.preventDefault());
     on(this.el, 'click', () => {
-      if (this.blockId) this.onOpen(this.blockId, this.el.getBoundingClientRect());
+      if (this.blockId) editor.openBlockMenu(this.blockId, this.el.getBoundingClientRect());
     });
   }
 

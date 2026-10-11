@@ -2,17 +2,13 @@
 // reference implementation (and cmark-gfm for tables and task items). Used by
 // the spec tests and handy for debugging the parser.
 
+import { escapeHtml } from '../clipboard/toHtml';
 import type { BlockNode, InlineNode, ListItemNode, Root } from './ast';
 
 export function renderAstToHtml(root: Root): string {
   const r = new Renderer();
   for (const block of root.children) r.block(block, false);
   return r.out;
-}
-
-/** Escapes text for HTML content and attribute values. */
-export function escapeHtml(s: string): string {
-  return s.replace(/[&<>"]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&quot;'));
 }
 
 /** ASCII characters left as they are in URLs; everything else is percent-encoded. */
@@ -23,7 +19,7 @@ const URL_SAFE = /[A-Za-z0-9;/?:@&=+$,\-_.!~*'()#]/;
  * (mdurl's `encode`): existing `%XX` escapes are kept, unsafe ASCII and all
  * non-ASCII characters are encoded as UTF-8.
  */
-export function encodeUrl(url: string): string {
+function encodeUrl(url: string): string {
   let out = '';
   for (let i = 0; i < url.length; i++) {
     const ch = url[i]!;

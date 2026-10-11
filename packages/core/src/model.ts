@@ -347,9 +347,8 @@ export function formatAt(inline: Inline, offset: number): Format {
   return link ? { marks, link } : { marks };
 }
 
-export function insertInline(inline: Inline, offset: number, text: string, format: Format | readonly Mark[]): Span[] {
-  const f: Format = Array.isArray(format) ? { marks: format as readonly Mark[] } : (format as Format);
-  const span: Span = f.link ? { text, marks: f.marks, link: f.link } : { text, marks: f.marks };
+export function insertInline(inline: Inline, offset: number, text: string, format: Format): Span[] {
+  const span: Span = format.link ? { text, marks: format.marks, link: format.link } : { text, marks: format.marks };
   return concatInline(sliceInline(inline, 0, offset), [span], sliceInline(inline, offset));
 }
 
@@ -461,6 +460,17 @@ export function endOf(block: Block): Position {
   }
   if (block.type === 'divider') return { blockId: block.id, offset: 0 };
   return { blockId: block.id, offset: inlineLength(block.content) };
+}
+
+/** Moves positions that point past the end of their container back inside it, and positions in removed blocks to the start. */
+export function clampSelection(doc: Doc, sel: Selection): Selection {
+  const clamp = (p: Position): Position => {
+    const block = doc.blocks.find((b) => b.id === p.blockId);
+    if (!block) return startOf(doc.blocks[0]!);
+    const content = containerContent(block, p.cell);
+    return { ...p, offset: Math.min(p.offset, content ? inlineLength(content) : 0) };
+  };
+  return { anchor: clamp(sel.anchor), focus: clamp(sel.focus) };
 }
 
 export function createState(doc: Doc): EditorState {

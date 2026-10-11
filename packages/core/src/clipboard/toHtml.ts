@@ -109,6 +109,7 @@ function listHtml(items: readonly ListItemBlock[]): string {
   return out;
 }
 
+/** Escapes text for HTML content and attribute values. */
 export function escapeHtml(s: string): string {
   return s.replace(/[&<>"]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&quot;'));
 }

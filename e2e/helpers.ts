@@ -29,5 +29,3 @@ export const blocks = (page: Page) =>
       }
     }) as string[];
   });
-
-export const mod = process.platform === 'darwin' ? 'Meta' : 'Control';

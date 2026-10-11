@@ -23,12 +23,10 @@ import {
   type Mark,
   type Position,
   type Selection,
-  blockIndex,
-  caret,
+  clampSelection,
   containerContent,
   createState,
   getBlock,
-  inlineLength,
   inlineText,
   isCollapsed,
   isPlainTextBlock,
@@ -40,7 +38,7 @@ import {
 } from './model';
 import { BlockToolbar, LinkPopover } from './ui/toolbar';
 import { BlockHandle } from './ui/handle';
-import { Menu, type MenuItem, type MenuSection, matches } from './ui/popup';
+import { Menu, type MenuItem, type MenuSection, isMac, isTouch, matches } from './ui/popup';
 import { BlockRenderer, contentElement, domText, domToPosition, positionToDom, safeHref } from './view/dom';
 
 export interface EditorOptions {
@@ -64,30 +62,6 @@ export interface EditorOptions {
   labels?: Partial<Labels>;
 }
 
-const isMac = typeof navigator !== 'undefined' && /Mac|iP(hone|ad|od)/.test(navigator.platform);
-
-interface BlockItem {
-  id: SlashItemId;
-  label: keyof Labels;
-  icon: string;
-  aliases: string[];
-  spec: cmd.BlockTypeSpec;
-}
-
-const BLOCK_ITEMS: BlockItem[] = [
-  { id: 'text', label: 'text', icon: 'T', aliases: ['paragraph', 'plain'], spec: { type: 'paragraph' } },
-  { id: 'heading1', label: 'heading1', icon: 'H1', aliases: ['h1', 'title'], spec: { type: 'heading', level: 1 } },
-  { id: 'heading2', label: 'heading2', icon: 'H2', aliases: ['h2', 'subtitle'], spec: { type: 'heading', level: 2 } },
-  { id: 'heading3', label: 'heading3', icon: 'H3', aliases: ['h3'], spec: { type: 'heading', level: 3 } },
-  { id: 'bulletList', label: 'bulletList', icon: '•', aliases: ['ul', 'unordered', 'bullet'], spec: { type: 'listItem', listType: 'bullet' } },
-  { id: 'numberedList', label: 'numberedList', icon: '1.', aliases: ['ol', 'ordered'], spec: { type: 'listItem', listType: 'ordered' } },
-  { id: 'todoList', label: 'todoList', icon: '☐', aliases: ['task', 'checkbox', 'checklist'], spec: { type: 'listItem', listType: 'task' } },
-  { id: 'quote', label: 'quote', icon: '❝', aliases: ['blockquote', 'citation'], spec: { type: 'quote' } },
-  { id: 'code', label: 'code', icon: '</>', aliases: ['pre', 'snippet', 'fence'], spec: { type: 'code' } },
-  { id: 'table', label: 'table', icon: '⊞', aliases: ['grid'], spec: { type: 'table' } },
-  { id: 'divider', label: 'divider', icon: '—', aliases: ['hr', 'separator', 'line', 'rule'], spec: { type: 'divider' } },
-];
-
 export const SLASH_ITEM_IDS = [
   'text',
   'heading1',
@@ -102,6 +76,41 @@ export const SLASH_ITEM_IDS = [
   'divider',
 ] as const;
 export type SlashItemId = (typeof SLASH_ITEM_IDS)[number];
+
+interface BlockItem {
+  id: SlashItemId;
+  icon: string;
+  aliases: string[];
+  spec: cmd.BlockTypeSpec;
+}
+
+/** Block types for the slash menu and the toolbar's Turn into dropdown. Each label is `labels[id]`. */
+const BLOCK_ITEMS: readonly BlockItem[] = [
+  { id: 'text', icon: 'T', aliases: ['paragraph', 'plain'], spec: { type: 'paragraph' } },
+  { id: 'heading1', icon: 'H1', aliases: ['h1', 'title'], spec: { type: 'heading', level: 1 } },
+  { id: 'heading2', icon: 'H2', aliases: ['h2', 'subtitle'], spec: { type: 'heading', level: 2 } },
+  { id: 'heading3', icon: 'H3', aliases: ['h3'], spec: { type: 'heading', level: 3 } },
+  { id: 'bulletList', icon: '•', aliases: ['ul', 'unordered', 'bullet'], spec: { type: 'listItem', listType: 'bullet' } },
+  { id: 'numberedList', icon: '1.', aliases: ['ol', 'ordered'], spec: { type: 'listItem', listType: 'ordered' } },
+  { id: 'todoList', icon: '☐', aliases: ['task', 'checkbox', 'checklist'], spec: { type: 'listItem', listType: 'task' } },
+  { id: 'quote', icon: '❝', aliases: ['blockquote', 'citation'], spec: { type: 'quote' } },
+  { id: 'code', icon: '</>', aliases: ['pre', 'snippet', 'fence'], spec: { type: 'code' } },
+  { id: 'table', icon: '⊞', aliases: ['grid'], spec: { type: 'table' } },
+  { id: 'divider', icon: '—', aliases: ['hr', 'separator', 'line', 'rule'], spec: { type: 'divider' } },
+];
+
+/** Block menu actions for the table cell with the caret. Each label is `labels[id]`. */
+const TABLE_ITEMS: readonly { id: keyof Labels; icon: string; action: cmd.TableAction }[] = [
+  { id: 'addRowAbove', icon: '↑', action: { kind: 'addRowAbove' } },
+  { id: 'addRowBelow', icon: '↓', action: { kind: 'addRowBelow' } },
+  { id: 'addColumnLeft', icon: '←', action: { kind: 'addColumnLeft' } },
+  { id: 'addColumnRight', icon: '→', action: { kind: 'addColumnRight' } },
+  { id: 'alignLeft', icon: '⇤', action: { kind: 'align', align: 'left' } },
+  { id: 'alignCenter', icon: '↔', action: { kind: 'align', align: 'center' } },
+  { id: 'alignRight', icon: '⇥', action: { kind: 'align', align: 'right' } },
+  { id: 'deleteRow', icon: '✕', action: { kind: 'deleteRow' } },
+  { id: 'deleteColumn', icon: '✕', action: { kind: 'deleteColumn' } },
+];
 
 const SLASH_CHARS = ['/', '／'];
 
@@ -119,6 +128,7 @@ export class Editor {
   private changeFrame: number | null = null;
   private plainPasteNext = false;
   private destroyed = false;
+  private focused = false;
 
   private readonly slashMenu: Menu;
   private slash: { blockId: string; from: number; query?: string } | null = null;
@@ -134,7 +144,7 @@ export class Editor {
     this.labels = { ...DEFAULT_LABELS, ...options.labels };
     this.readOnly = options.readOnly ?? false;
     this.state = createState(parseMarkdown(options.value ?? ''));
-    this.renderer = new BlockRenderer(root);
+    this.renderer = new BlockRenderer(root, this.labels);
 
     root.classList.add('mbe-root');
     root.setAttribute('role', 'textbox');
@@ -150,7 +160,7 @@ export class Editor {
     this.blockMenu.onPicked = () => this.blockMenu.hide();
     this.linkPopover = new LinkPopover(this);
     this.toolbar = options.toolbar === false ? null : new BlockToolbar(this);
-    this.handle = new BlockHandle(this, (blockId, rect) => this.openBlockMenu(blockId, rect));
+    this.handle = new BlockHandle(this);
 
     this.listen(root, 'beforeinput', (e) => this.onBeforeInput(e as InputEvent));
     this.listen(root, 'input', (e) => this.onInput(e as InputEvent));
@@ -562,6 +572,7 @@ export class Editor {
     let state = this.state;
     let changed = false;
     for (const block of state.doc.blocks) {
+      let blockChanged = false;
       const el = this.renderer.elementFor(block.id);
       if (!el || !el.isConnected) continue;
       const containers: { cell?: { row: number; col: number } }[] =
@@ -589,9 +600,12 @@ export class Editor {
         const at: Position = cell ? { blockId: block.id, offset: start, cell } : { blockId: block.id, offset: start };
         state = cmd.deleteRange(state, at, { ...at, offset: endOld });
         if (inserted) state = cmd.insertText({ ...state, storedMarks: this.state.storedMarks }, inserted);
+        blockChanged = true;
+      }
+      if (blockChanged) {
+        this.renderer.invalidate(block.id);
         changed = true;
       }
-      if (changed) this.renderer.invalidate(block.id);
     }
     if (!changed) {
       // Text is unchanged but the browser may have altered structure.
@@ -616,7 +630,7 @@ export class Editor {
     };
 
     // Open menus take the navigation keys.
-    const menu = this.slashMenu.isOpen ? this.slashMenu : this.blockMenu.isOpen ? this.blockMenu : null;
+    const menu = this.openMenu();
     if (menu) {
       if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) return handled(() => this.moveMenu(menu, 1));
       if (e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey)) return handled(() => this.moveMenu(menu, -1));
@@ -688,13 +702,11 @@ export class Editor {
     }
     const link = target.closest?.<HTMLAnchorElement>('a.mbe-link');
     if (!link) return;
-    const mod = isMac ? e.metaKey : e.ctrlKey;
-    if (this.readOnly || mod) {
-      e.preventDefault();
+    // Links open on click when read-only, and on Mod+click while editing.
+    e.preventDefault();
+    if (this.readOnly || (isMac ? e.metaKey : e.ctrlKey)) {
       const href = safeHref(link.dataset.href ?? '');
       if (href) this.root.ownerDocument.defaultView?.open(href, '_blank', 'noopener,noreferrer');
-    } else {
-      e.preventDefault();
     }
   }
 
@@ -703,20 +715,8 @@ export class Editor {
     const input = e.target;
     if (!(input instanceof HTMLInputElement) || !input.classList.contains('mbe-code-lang')) return;
     const blockEl = input.closest<HTMLElement>('[data-block-id]');
-    if (!blockEl) return;
-    const id = blockEl.dataset.blockId!;
-    const language = input.value.trim();
-    this.run((s) => {
-      const block = getBlock(s.doc, id);
-      if (block.type !== 'code' || block.language === language) return s;
-      const index = blockIndex(s.doc, id);
-      const blocks = s.doc.blocks.slice();
-      blocks[index] = { ...block, language };
-      return { ...s, doc: { blocks } };
-    });
+    if (blockEl) this.run((s) => cmd.setCodeLanguage(s, blockEl.dataset.blockId!, input.value.trim()));
   }
-
-  private focused = false;
 
   private onFocusIn(): void {
     if (this.focused || !this.hasFocus()) return;
@@ -839,17 +839,15 @@ export class Editor {
 
   private slashItems(query: string): MenuItem[] {
     const ids = this.options.slashItems ?? SLASH_ITEM_IDS;
-    const items = ids
+    return ids
       .map((id) => BLOCK_ITEMS.find((b) => b.id === id))
       .filter((b): b is BlockItem => !!b)
-      .map<MenuItem>((b) => ({
-        id: b.id,
-        label: this.labels[b.label],
-        icon: b.icon,
-        aliases: b.aliases,
-        run: () => this.pickSlashItem(b.spec),
-      }));
-    return items.filter((item) => matches(item, query));
+      .map<MenuItem>((b) => ({ ...this.blockItem(b), aliases: b.aliases, run: () => this.pickSlashItem(b.spec) }))
+      .filter((item) => matches(item, query));
+  }
+
+  private blockItem(b: BlockItem): Pick<MenuItem, 'id' | 'label' | 'icon'> {
+    return { id: b.id, label: this.labels[b.id], icon: b.icon };
   }
 
   private pickSlashItem(spec: cmd.BlockTypeSpec): void {
@@ -871,20 +869,14 @@ export class Editor {
     const block = getBlock(this.state.doc, blockId);
     const sections: MenuSection[] = [];
     if (block.type === 'table' && this.state.selection.focus.blockId === blockId && this.state.selection.focus.cell) {
-      const t = (kind: cmd.TableAction) => () => this.run((s) => cmd.tableAction(s, kind));
       sections.push({
         title: this.labels.tableSection,
-        items: [
-          { id: 'addRowAbove', label: this.labels.addRowAbove, icon: '↑', run: t({ kind: 'addRowAbove' }) },
-          { id: 'addRowBelow', label: this.labels.addRowBelow, icon: '↓', run: t({ kind: 'addRowBelow' }) },
-          { id: 'addColumnLeft', label: this.labels.addColumnLeft, icon: '←', run: t({ kind: 'addColumnLeft' }) },
-          { id: 'addColumnRight', label: this.labels.addColumnRight, icon: '→', run: t({ kind: 'addColumnRight' }) },
-          { id: 'alignLeft', label: this.labels.alignLeft, icon: '⇤', run: t({ kind: 'align', align: 'left' }) },
-          { id: 'alignCenter', label: this.labels.alignCenter, icon: '↔', run: t({ kind: 'align', align: 'center' }) },
-          { id: 'alignRight', label: this.labels.alignRight, icon: '⇥', run: t({ kind: 'align', align: 'right' }) },
-          { id: 'deleteRow', label: this.labels.deleteRow, icon: '✕', run: t({ kind: 'deleteRow' }) },
-          { id: 'deleteColumn', label: this.labels.deleteColumn, icon: '✕', run: t({ kind: 'deleteColumn' }) },
-        ],
+        items: TABLE_ITEMS.map(({ id, icon, action }) => ({
+          id,
+          label: this.labels[id],
+          icon,
+          run: () => this.run((s) => cmd.tableAction(s, action)),
+        })),
       });
     }
     sections.push({
@@ -894,10 +886,6 @@ export class Editor {
       ],
     });
     return sections;
-  }
-
-  private isType(block: Block, spec: cmd.BlockTypeSpec): boolean {
-    return cmd.isBlockTypeActive({ ...this.state, selection: caret(block.id, 0) }, spec);
   }
 
   /**
@@ -938,10 +926,8 @@ export class Editor {
   turnIntoItems(): MenuItem[] {
     const block = getBlock(this.state.doc, this.state.selection.focus.blockId);
     return BLOCK_ITEMS.filter((b) => b.spec.type !== 'table' && b.spec.type !== 'divider').map((b) => ({
-      id: b.id,
-      label: this.labels[b.label],
-      icon: b.icon,
-      active: this.isType(block, b.spec),
+      ...this.blockItem(b),
+      active: cmd.isBlockType(block, b.spec),
       run: () => this.run((s) => cmd.setBlockType(s, b.spec)),
     }));
   }
@@ -949,8 +935,8 @@ export class Editor {
   /** Label of the current block type, for the toolbar's dropdown button. */
   currentTypeLabel(): string {
     const block = getBlock(this.state.doc, this.state.selection.focus.blockId);
-    const item = BLOCK_ITEMS.find((b) => this.isType(block, b.spec));
-    return item ? this.labels[item.label] : this.labels.text;
+    const item = BLOCK_ITEMS.find((b) => cmd.isBlockType(block, b.spec));
+    return this.labels[item?.id ?? 'text'];
   }
 
   isMarkActive(mark: Mark): boolean {
@@ -1037,7 +1023,7 @@ export class Editor {
       else this.toolbar.hide();
     }
     // On touch devices there is no hover, so the handle follows the caret.
-    if (focused && !this.readOnly && typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) {
+    if (focused && !this.readOnly && isTouch()) {
       if (this.hasBlockMenu(pos.blockId)) this.handle.showFor(pos.blockId);
       else this.handle.hide();
     }
@@ -1045,9 +1031,12 @@ export class Editor {
     this.syncActiveDescendant();
   }
 
+  private openMenu(): Menu | null {
+    return this.slashMenu.isOpen ? this.slashMenu : this.blockMenu.isOpen ? this.blockMenu : null;
+  }
+
   private syncActiveDescendant(): void {
-    const menu = this.slashMenu.isOpen ? this.slashMenu : this.blockMenu.isOpen ? this.blockMenu : null;
-    const id = menu?.activeDescendant;
+    const id = this.openMenu()?.activeDescendant;
     if (id) this.root.setAttribute('aria-activedescendant', id);
     else this.root.removeAttribute('aria-activedescendant');
   }
@@ -1065,15 +1054,4 @@ export class Editor {
     target.addEventListener(type, fn, capture);
     this.cleanup.push(() => target.removeEventListener(type, fn, capture));
   }
-}
-
-function clampSelection(doc: Doc, sel: Selection): Selection {
-  const clamp = (p: Position): Position => {
-    const index = blockIndex(doc, p.blockId);
-    if (index < 0) return startOf(doc.blocks[0]!);
-    const block = doc.blocks[index]!;
-    const content = containerContent(block, p.cell);
-    return { ...p, offset: Math.min(p.offset, content ? inlineLength(content) : 0) };
-  };
-  return { anchor: clamp(sel.anchor), focus: clamp(sel.focus) };
 }

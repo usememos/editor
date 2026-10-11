@@ -41,7 +41,6 @@ export function serializeMarkdown(doc: Doc): string {
   for (const block of doc.blocks) {
     // Markdown cannot represent empty paragraphs and quotes.
     if ((block.type === 'paragraph' || block.type === 'quote') && block.content.length === 0) continue;
-    if (block.type !== 'listItem') lists.reset();
     let text: string;
     let separator = '\n\n';
     switch (block.type) {
@@ -140,12 +139,9 @@ class ListState {
   /** Per open nesting level: content column, list kind and last number. */
   private levels: { column: number; ordered: boolean; number: number }[] = [];
 
-  reset(): void {
-    this.levels = [];
-  }
-
+  /** `prev` is the list item right before this one, or null when this item starts a list. */
   next(item: ListItemBlock, prev: ListItemBlock | null): { text: string; blankLineBefore: boolean } {
-    if (!prev) this.reset();
+    if (!prev) this.levels = [];
     const prevLevel = this.levels.length - 1;
     // An item cannot be nested more than one level below the previous one.
     const level = Math.min(item.indent, this.levels.length);

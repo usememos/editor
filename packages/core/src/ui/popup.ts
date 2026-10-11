@@ -17,7 +17,12 @@ const THEME_VARS = [
   '--mbe-radius',
 ];
 
-export type Placement = 'below' | 'above';
+type Placement = 'below' | 'above';
+
+export const isMac = typeof navigator !== 'undefined' && /Mac|iP(hone|ad|od)/.test(navigator.platform);
+
+/** True on touch devices, which have no hover and show their own menu over a selection. */
+export const isTouch = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 
 export class Popup {
   readonly el: HTMLElement;
@@ -87,8 +92,6 @@ export interface MenuItem {
   label: string;
   /** Short glyph shown before the label. */
   icon?: string;
-  /** Shown on the right, e.g. a shortcut. */
-  hint?: string;
   /** Extra words that match when filtering. */
   aliases?: string[];
   active?: boolean;
@@ -160,12 +163,6 @@ export class Menu {
         label.className = 'mbe-menu-label';
         label.textContent = item.label;
         row.append(icon, label);
-        if (item.hint) {
-          const hint = doc.createElement('span');
-          hint.className = 'mbe-menu-hint';
-          hint.textContent = item.hint;
-          row.appendChild(hint);
-        }
         row.addEventListener('mousemove', () => this.highlight(i));
         row.addEventListener('click', () => this.pick(i));
         this.el.appendChild(row);

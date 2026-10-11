@@ -41,7 +41,7 @@
     --mbe-block-code-bg: #1d1f22;
     --mbe-border: #2a2c30;
     --mbe-quote-border: #3a3d42;
-      --mbe-popup-bg: #1f2023;
+    --mbe-popup-bg: #1f2023;
     --mbe-popup-border: #2f3236;
     --mbe-popup-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
     --mbe-hover: #2a2c30;
@@ -184,32 +184,20 @@
 }
 .mbe-root > .mbe-table th { font-weight: 600; background: var(--mbe-hover); }
 
-/* Placeholders and hints */
+/* Placeholders and hints. When both apply, the slash hint wins over the placeholder. */
 .mbe-root .mbe-empty-content { position: relative; }
-.mbe-root > .mbe-paragraph.mbe-empty:only-child::before {
-  content: var(--mbe-placeholder, '');
-  color: var(--mbe-muted);
-  pointer-events: none;
-  position: absolute;
-}
-.mbe-root > .mbe-paragraph.mbe-empty.mbe-show-hint::before {
-  content: var(--mbe-slash-hint, '');
-  color: var(--mbe-muted);
-  pointer-events: none;
-  position: absolute;
-}
-.mbe-root > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote)::before {
-  content: attr(data-hint);
-  color: var(--mbe-muted);
-  pointer-events: none;
-  position: absolute;
-}
+.mbe-root > .mbe-paragraph.mbe-empty:only-child::before,
+.mbe-root > .mbe-paragraph.mbe-empty.mbe-show-hint::before,
+.mbe-root > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote)::before,
 .mbe-root > .mbe-list-item.mbe-empty[data-hint] > .mbe-content::before {
-  content: attr(data-hint);
   color: var(--mbe-muted);
   pointer-events: none;
   position: absolute;
 }
+.mbe-root > .mbe-paragraph.mbe-empty:only-child::before { content: var(--mbe-placeholder, ''); }
+.mbe-root > .mbe-paragraph.mbe-empty.mbe-show-hint::before { content: var(--mbe-slash-hint, ''); }
+.mbe-root > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote)::before,
+.mbe-root > .mbe-list-item.mbe-empty[data-hint] > .mbe-content::before { content: attr(data-hint); }
 
 /* Floating UI ------------------------------------------------------------- */
 
@@ -250,7 +238,6 @@
 }
 .mbe-menu-label { flex: 1; }
 .mbe-menu-item.mbe-active .mbe-menu-label::after { content: ' ✓'; color: var(--mbe-accent); }
-.mbe-menu-hint { color: var(--mbe-muted); font-size: 12px; }
 .mbe-menu-empty { padding: 6px 8px; color: var(--mbe-muted); }
 
 .mbe-toolbar { display: flex; align-items: center; gap: 2px; padding: 3px; }

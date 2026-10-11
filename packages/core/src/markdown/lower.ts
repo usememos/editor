@@ -109,7 +109,7 @@ function withMark(marks: readonly Mark[], mark: Mark): readonly Mark[] {
 }
 
 /** Plain text of inline nodes, as used for image alt text. */
-export function plainText(nodes: readonly InlineNode[]): string {
+function plainText(nodes: readonly InlineNode[]): string {
   let s = '';
   for (const node of nodes) {
     switch (node.type) {
