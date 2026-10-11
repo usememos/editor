@@ -42,8 +42,10 @@ import {
   paragraph,
   quote,
   rangeHasMark,
+  sameMarks,
   setLinkInRange,
   setMarkInRange,
+  setTokenInRange,
   sliceInline,
   sortMarks,
   startOf,
@@ -52,6 +54,7 @@ import {
   withContent,
   createId,
 } from './model';
+import type { InlineSyntax } from './markdown/options';
 
 export type Command = (state: EditorState) => EditorState;
 
@@ -395,16 +398,29 @@ function mapTextInRange(
           if (i < fromIdx || i > toIdx) return cell;
           const a = i === fromIdx && block.id === from.blockId ? from.offset : 0;
           const b = i === toIdx && block.id === to.blockId ? to.offset : inlineLength(cell);
-          return a < b ? fn(cell, a, b) : cell;
+          return a < b ? keepIfSame(cell, fn(cell, a, b)) : cell;
         }),
       );
-      return { ...block, rows };
+      return rows.every((row, r) => row.every((cell, c) => cell === block.rows[r]![c])) ? block : { ...block, rows };
     }
     const a = block.id === from.blockId ? from.offset : 0;
     const b = block.id === to.blockId ? to.offset : inlineLength(block.content);
-    return a < b ? withContent(block, fn(block.content, a, b)) : block;
+    if (a >= b) return block;
+    const content = keepIfSame(block.content, fn(block.content, a, b));
+    return content === block.content ? block : withContent(block, content);
   });
   return splice(state, start, updated.length, ...updated);
+}
+
+/** `before` if `after` has the same spans, so an edit that changed nothing keeps the block. */
+function keepIfSame(before: Inline, after: Inline): Inline {
+  if (before.length !== after.length) return after;
+  for (let i = 0; i < before.length; i++) {
+    const x = before[i]!;
+    const y = after[i]!;
+    if (x.text !== y.text || x.link !== y.link || x.token !== y.token || x.image !== y.image || !sameMarks(x.marks, y.marks)) return after;
+  }
+  return before;
 }
 
 /** True if every character of the selection carries the mark (or, collapsed, the next typed text will). */
@@ -476,7 +492,7 @@ export type BlockTypeSpec =
   | { type: 'listItem'; listType: ListType }
   | { type: 'quote' }
   | { type: 'code'; language?: string }
-  | { type: 'table' }
+  | { type: 'table'; rows?: number; cols?: number }
   | { type: 'divider' };
 
 /** Converts one text block to another type, keeping its ID and text. */
@@ -511,9 +527,36 @@ export function setBlockType(state: EditorState, spec: BlockTypeSpec): EditorSta
   const { from, to } = orderedRange(state.doc, state.selection);
   const start = blockIndex(state.doc, from.blockId);
   const end = blockIndex(state.doc, to.blockId);
-  const updated = state.doc.blocks.slice(start, end + 1).map((b) => (isTextBlock(b) && b.type !== 'html' ? convert(b, spec) : b));
+  const updated = state.doc.blocks.slice(start, end + 1).map((b) => (isTextBlock(b) && b.type !== 'raw' ? convert(b, spec) : b));
   const doc = { blocks: splice(state, start, updated.length, ...updated) };
   return { doc, selection: clampSelection(doc, state.selection), storedMarks: null };
+}
+
+/** True if the block already has the type `spec` describes. */
+function hasType(block: Block, spec: BlockTypeSpec): boolean {
+  switch (spec.type) {
+    case 'heading':
+      return block.type === 'heading' && block.level === spec.level;
+    case 'listItem':
+      return block.type === 'listItem' && block.listType === spec.listType;
+    case 'code':
+      return block.type === 'code';
+    default:
+      return block.type === spec.type;
+  }
+}
+
+/**
+ * Sets the type of the selected text blocks, or turns them back into
+ * paragraphs when they all have that type already.
+ */
+export function toggleBlockType(state: EditorState, spec: BlockTypeSpec): EditorState {
+  const { from, to } = orderedRange(state.doc, state.selection);
+  const blocks = state.doc.blocks.slice(blockIndex(state.doc, from.blockId), blockIndex(state.doc, to.blockId) + 1);
+  const text = blocks.filter((b) => isTextBlock(b) && b.type !== 'raw');
+  if (text.length === 0) return state;
+  const on = text.every((b) => hasType(b, spec));
+  return setBlockType(state, on ? { type: 'paragraph' } : spec);
 }
 
 /**
@@ -527,7 +570,7 @@ export function insertBlock(state: EditorState, spec: BlockTypeSpec): EditorStat
   const current = state.doc.blocks[index]!;
   if (spec.type !== 'table' && spec.type !== 'divider') return setBlockType(state, spec);
   const isEmpty = isTextBlock(current) && inlineLength(current.content) === 0;
-  const created = spec.type === 'table' ? emptyTable(3, 3) : divider();
+  const created = spec.type === 'table' ? emptyTable(spec.rows ?? 3, spec.cols ?? 3) : divider();
   const blocks: Block[] = [created];
   let target: Block = created;
   if (created.type === 'divider') {
@@ -794,6 +837,35 @@ export function applyInlineInputRules(state: EditorState): EditorState | null {
   return null;
 }
 
+/**
+ * Text just typed that completes a token of an inline syntax extension (for
+ * example the closing `$` of `$x^2$`) becomes that token, so it is saved
+ * verbatim instead of escaped. Only plain text on the caret's line counts.
+ */
+export function applyTokenInputRules(state: EditorState, syntax: readonly InlineSyntax[]): EditorState | null {
+  if (syntax.length === 0 || !isCollapsed(state.selection)) return null;
+  const pos = state.selection.focus;
+  const block = getBlock(state.doc, pos.blockId);
+  if (isPlainTextBlock(block)) return null;
+  const content = containerContent(block, pos.cell);
+  if (!content) return null;
+  const text = inlineText(content);
+  const end = pos.offset;
+  const lineStart = Math.max(text.lastIndexOf('\n', end - 1) + 1, end - 1000);
+  for (let start = end - 1; start >= lineStart; start--) {
+    for (const s of syntax) {
+      if (!s.triggers.includes(text[start]!) || s.match(text, start) !== end) continue;
+      const plainRange = sliceInline(content, start, end).every(
+        (span) => !span.token && !span.image && !span.marks.includes('code') && !span.marks.includes('html'),
+      );
+      if (!plainRange) continue;
+      const updated = withContainerContent(block, pos.cell, setTokenInRange(content, start, end, s.name));
+      return replaceBlock(state, updated, state.selection);
+    }
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Clipboard
 
@@ -887,4 +959,96 @@ export function insertBlocks(state: EditorState, fragment: readonly Block[]): Ed
     caretPos = { blockId: tail.id, offset: 0 };
   }
   return withBlocks(s, splice(s, index, 1, ...out), { anchor: caretPos, focus: caretPos });
+}
+
+// ---------------------------------------------------------------------------
+// Selection
+
+export function selectAll(state: EditorState): EditorState {
+  const blocks = state.doc.blocks;
+  const selection = { anchor: startOf(blocks[0]!), focus: endOf(blocks[blocks.length - 1]!) };
+  return { ...state, selection, storedMarks: null };
+}
+
+// ---------------------------------------------------------------------------
+// Inserting content
+
+export interface InsertOptions {
+  /**
+   * Where to insert. `'selection'` (default) replaces the selection, like a
+   * paste. `'end'` appends after the last block. A position inserts there
+   * and replaces nothing.
+   */
+  readonly at?: 'selection' | 'end' | Position;
+  /**
+   * Insert as separate blocks even when the content is a single paragraph.
+   * A text block at the target is split. Default false: a single text block
+   * is inserted inline.
+   */
+  readonly block?: boolean;
+  /** `'end'` (default) puts the caret after the inserted content; `'keep'` keeps the current selection. */
+  readonly select?: 'end' | 'keep';
+}
+
+/** Inserts blocks, for example parsed Markdown. See InsertOptions. */
+export function insertFragment(state: EditorState, fragment: readonly Block[], options: InsertOptions = {}): EditorState {
+  if (fragment.length === 0) return state;
+  const at = options.at ?? 'selection';
+  let s = state;
+  let target: Position;
+  if (at === 'selection') {
+    s = deleteSelection(state);
+    target = s.selection.focus;
+  } else if (at === 'end') {
+    const last = state.doc.blocks[state.doc.blocks.length - 1]!;
+    target = endOf(last);
+  } else {
+    target = clampSelection(state.doc, { anchor: at, focus: at }).focus;
+  }
+
+  let next: EditorState;
+  /** Where text that was after the target ends up. */
+  let after: Position;
+  if (options.block || at === 'end') {
+    ({ state: next, after } = insertAsBlocks(s, fragment, target));
+  } else {
+    next = insertBlocks({ ...s, selection: { anchor: target, focus: target } }, fragment);
+    after = next.selection.focus;
+  }
+  if (options.select !== 'keep') return next;
+  const map = (p: Position): Position =>
+    p.blockId === target.blockId && sameCellOf(p.cell, target.cell) && p.offset > target.offset
+      ? { ...after, offset: after.offset + p.offset - target.offset }
+      : p;
+  const selection = clampSelection(next.doc, { anchor: map(s.selection.anchor), focus: map(s.selection.focus) });
+  return { ...next, selection };
+}
+
+function sameCellOf(a?: Cell, b?: Cell): boolean {
+  return a?.row === b?.row && a?.col === b?.col;
+}
+
+/**
+ * Inserts blocks before or after the block at `target`, splitting a text
+ * block when the target is inside it. An empty paragraph is replaced.
+ */
+function insertAsBlocks(state: EditorState, fragment: readonly Block[], target: Position): { state: EditorState; after: Position } {
+  const index = blockIndex(state.doc, target.blockId);
+  const block = state.doc.blocks[index]!;
+  const end = (blocks: readonly Block[], last: Block, after: Position) => {
+    const pos = endOf(last);
+    return { state: withBlocks(state, blocks, { anchor: pos, focus: pos }), after };
+  };
+  const last = fragment[fragment.length - 1]!;
+  if (block.type === 'paragraph' && inlineLength(block.content) === 0) {
+    return end(splice(state, index, 1, ...fragment), last, endOf(last));
+  }
+  if (!isTextBlock(block) || isPlainTextBlock(block) || target.offset >= inlineLength(block.content)) {
+    return end(splice(state, index + 1, 0, ...fragment), last, target);
+  }
+  if (target.offset === 0) return end(splice(state, index, 0, ...fragment), last, startOf(block));
+  const head = withContent(block, sliceInline(block.content, 0, target.offset));
+  let tail: TextBlock = { ...withContent(block, sliceInline(block.content, target.offset)), id: createId() };
+  if (tail.type === 'listItem' && tail.start !== undefined) tail = { ...tail, start: undefined };
+  return end(splice(state, index, 1, head, ...fragment, tail), last, startOf(tail));
 }

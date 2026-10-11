@@ -17,6 +17,8 @@ export type InlineNode =
   | { readonly type: 'code'; readonly value: string }
   /** Raw inline HTML, verbatim. */
   | { readonly type: 'html'; readonly value: string }
+  /** A token of an inline syntax extension (`name`), verbatim source. */
+  | { readonly type: 'token'; readonly name: string; readonly value: string }
   | { readonly type: 'emphasis'; readonly children: InlineNode[] }
   | { readonly type: 'strong'; readonly children: InlineNode[] }
   /** GFM strikethrough (`~text~` or `~~text~~`). */
@@ -53,6 +55,7 @@ export type BlockNode =
   | ListNode
   | CodeBlockNode
   | HtmlBlockNode
+  | RawNode
   | TableNode;
 
 export interface ParagraphNode {
@@ -108,6 +111,13 @@ export interface HtmlBlockNode {
   readonly value: string;
 }
 
+/** A block of a block syntax extension (`name`): its source lines, verbatim, without the final line ending. */
+export interface RawNode {
+  readonly type: 'raw';
+  readonly name: string;
+  readonly value: string;
+}
+
 export type TableAlign = 'left' | 'center' | 'right' | null;
 
 export interface TableNode {
@@ -117,7 +127,17 @@ export interface TableNode {
   readonly rows: InlineNode[][][];
 }
 
+/** Source lines of a top-level block, 1-based and inclusive. */
+export interface SourceLines {
+  readonly start: number;
+  readonly end: number;
+}
+
 export interface Root {
   readonly type: 'root';
   readonly children: BlockNode[];
+  /** Source lines of each child, by index. */
+  readonly lines?: readonly SourceLines[];
+  /** Source text of every link reference definition, in order. */
+  readonly definitions?: readonly string[];
 }

@@ -164,7 +164,16 @@
   width: 8em;
 }
 .mbe-root .mbe-code-lang:focus { color: var(--mbe-text); }
-.mbe-root > .mbe-html { font-family: var(--mbe-mono); font-size: 0.85em; color: var(--mbe-muted); margin: 0; white-space: pre-wrap; }
+/* Tokens of syntax extensions (math, footnote references), shown as source */
+.mbe-root .mbe-token { font-family: var(--mbe-mono); font-size: 0.88em; color: var(--mbe-muted); }
+
+/* Raw blocks: Markdown kept as source (HTML, structure the editor cannot hold, extension syntax) */
+.mbe-root > .mbe-raw { font-family: var(--mbe-mono); font-size: 0.85em; color: var(--mbe-muted); margin: 0; white-space: pre-wrap; tab-size: 2; }
+.mbe-root > .mbe-raw:not([data-syntax='html']) {
+  color: var(--mbe-text);
+  border-left: 2px solid var(--mbe-border);
+  padding: 0.1em 0 0.1em 0.8em;
+}
 
 /* Divider */
 .mbe-root > .mbe-divider { padding: 0.5em 0; cursor: default; }
@@ -286,3 +295,6 @@
   opacity: 0.7;
 }
 .mbe-handle:hover { background: var(--mbe-hover); opacity: 1; }
+
+/* Widgets: app UI between blocks, such as an upload placeholder. Not editable text. */
+.mbe-root > .mbe-widget { cursor: default; user-select: none; -webkit-user-select: none; white-space: normal; }

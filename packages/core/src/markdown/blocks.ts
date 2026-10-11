@@ -11,12 +11,13 @@
 // type defines how a line continues it (`continueBlock`), what happens when it
 // closes (`finalizeBlock`), and the list of block starts is tried in order.
 
-import type { BlockNode, ListItemNode, Root, TableAlign } from './ast';
+import type { BlockNode, ListItemNode, Root, SourceLines, TableAlign } from './ast';
 import { CLOSETAG, OPENTAG, type RefMap, extractReferences, parseInlines, unescapeString } from './inline';
+import { type BlockSyntaxMatcher, DEFAULT_MARKDOWN, type MarkdownOptions, type ResolvedMarkdown, resolveMarkdown } from './options';
 
 /** Parses Markdown source into a syntax tree. */
-export function parseAst(src: string): Root {
-  return new BlockParser().parse(src);
+export function parseAst(src: string, options: MarkdownOptions = DEFAULT_MARKDOWN): Root {
+  return new BlockParser(resolveMarkdown(options)).parse(src);
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +76,7 @@ type BlockType =
   | 'item'
   | 'codeBlock'
   | 'htmlBlock'
+  | 'rawBlock'
   | 'table';
 
 interface ListData {
@@ -109,6 +111,9 @@ class BNode {
   info = '';
   // HTML block
   htmlType = 0;
+  // Block of a syntax extension
+  syntax = '';
+  matcher: BlockSyntaxMatcher | null = null;
   // List and list item
   list: ListData | null = null;
   tight = true;
@@ -118,7 +123,7 @@ class BNode {
 
   constructor(
     readonly type: BlockType,
-    readonly startLine: number,
+    public startLine: number,
   ) {}
 
   get lastChild(): BNode | undefined {
@@ -155,7 +160,7 @@ const enum Start {
 }
 
 function acceptsLines(type: BlockType): boolean {
-  return type === 'paragraph' || type === 'codeBlock' || type === 'htmlBlock';
+  return type === 'paragraph' || type === 'codeBlock' || type === 'htmlBlock' || type === 'rawBlock';
 }
 
 function canContain(parent: BlockType, child: BlockType): boolean {
@@ -184,6 +189,9 @@ class BlockParser {
   private oldTip: BNode = this.doc;
   private lastMatchedContainer: BNode = this.doc;
   private refs: RefMap = new Map();
+  private definitions: string[] = [];
+
+  constructor(private readonly options: ResolvedMarkdown) {}
 
   // State for the current line.
   private line = '';
@@ -206,7 +214,22 @@ class BlockParser {
     for (let i = 0; i < count; i++) this.incorporateLine(lines[i]!);
     while (this.tip !== this.doc) this.finalize(this.tip, count);
     this.finalize(this.doc, count);
-    return { type: 'root', children: this.doc.children.flatMap((c) => this.toAst(c)) };
+    const children: BlockNode[] = [];
+    const sourceLines: SourceLines[] = [];
+    for (const child of this.doc.children) {
+      for (const node of this.toAst(child)) {
+        children.push(node);
+        sourceLines.push({ start: child.startLine, end: child.endLine });
+      }
+    }
+    return { type: 'root', children, lines: sourceLines, definitions: this.definitions };
+  }
+
+  /** Link reference definitions at the start of a paragraph's content. Keeps their source. */
+  private extractReferences(content: string): string {
+    const rest = extractReferences(content, this.refs);
+    if (rest.length < content.length) this.definitions.push(content.slice(0, content.length - rest.length).replace(/\n$/, ''));
+    return rest;
   }
 
   // -- Line position helpers ------------------------------------------------
@@ -332,7 +355,9 @@ class BlockParser {
     let matchedLeaf = container.type !== 'paragraph' && acceptsLines(container.type);
     while (!matchedLeaf) {
       this.findNextNonspace();
-      if (!this.indented && !reMaybeSpecial.test(this.line.charAt(this.nextNonspace))) {
+      // Lines that cannot start a block skip the start checks; with block
+      // syntax extensions, any line might.
+      if (!this.indented && this.options.block.length === 0 && !reMaybeSpecial.test(this.line.charAt(this.nextNonspace))) {
         this.advanceNextNonspace();
         break;
       }
@@ -433,6 +458,16 @@ class BlockParser {
         return Continue.Matched;
       case 'htmlBlock':
         return this.blank && (block.htmlType === 6 || block.htmlType === 7) ? Continue.Failed : Continue.Matched;
+      case 'rawBlock': {
+        const next = block.matcher!.next(line.slice(this.offset));
+        if (next === 'end') return Continue.Failed;
+        if (next === 'close') {
+          this.addLine();
+          this.finalize(block, this.lineNumber);
+          return Continue.LineDone;
+        }
+        return Continue.Matched;
+      }
       case 'paragraph':
       case 'table':
         return this.blank ? Continue.Failed : Continue.Matched;
@@ -446,7 +481,7 @@ class BlockParser {
 
     switch (block.type) {
       case 'paragraph':
-        block.content = extractReferences(block.content, this.refs);
+        block.content = this.extractReferences(block.content);
         if (!reNonSpace.test(block.content)) block.remove();
         break;
       case 'codeBlock':
@@ -465,6 +500,9 @@ class BlockParser {
         break;
       case 'htmlBlock':
         block.content = block.content.replace(/(\n *)+$/, '');
+        break;
+      case 'rawBlock':
+        block.content = block.content.replace(/\n$/, '');
         break;
       case 'item':
         block.endLine = block.lastChild ? block.lastChild.endLine : block.startLine;
@@ -488,6 +526,7 @@ class BlockParser {
     return (
       (nest && this.startBlockQuote(rest)) ||
       this.startAtxHeading(rest) ||
+      this.startSyntaxBlock(container, rest) ||
       this.startFencedCode(rest) ||
       this.startHtmlBlock(container, rest) ||
       this.startSetextHeading(container, rest) ||
@@ -526,6 +565,24 @@ class BlockParser {
     return Start.Leaf;
   }
 
+  /** A block of a syntax extension. Like an HTML block, its indentation is part of it. */
+  private startSyntaxBlock(container: BNode, rest: string): Start {
+    if (this.indented || this.options.block.length === 0) return Start.None;
+    const inParagraph =
+      container.type === 'paragraph' || (!this.allClosed && !this.blank && this.tip.type === 'paragraph');
+    for (const syntax of this.options.block) {
+      if (inParagraph && !syntax.interruptsParagraph) continue;
+      const matcher = syntax.open(rest);
+      if (!matcher) continue;
+      this.closeUnmatchedBlocks();
+      const block = this.addChild('rawBlock');
+      block.syntax = syntax.name;
+      block.matcher = matcher;
+      return Start.Leaf;
+    }
+    return Start.None;
+  }
+
   private startFencedCode(rest: string): Start {
     const ch = rest[0];
     if (this.indented || (ch !== '`' && ch !== '~')) return Start.None;
@@ -562,12 +619,12 @@ class BlockParser {
   }
 
   private startSetextHeading(container: BNode, rest: string): Start {
-    if (this.indented || container.type !== 'paragraph') return Start.None;
+    if (!this.options.setext || this.indented || container.type !== 'paragraph') return Start.None;
     const m = reSetextHeadingLine.exec(rest);
     if (!m) return Start.None;
     this.closeUnmatchedBlocks();
     // Link reference definitions are not heading content.
-    container.content = extractReferences(container.content, this.refs);
+    container.content = this.extractReferences(container.content);
     if (container.content.length === 0) return Start.None;
     const heading = new BNode('heading', container.startLine);
     heading.level = m[0][0] === '=' ? 1 : 2;
@@ -594,7 +651,7 @@ class BlockParser {
     const align = parseDelimiterRow(rest);
     if (!align) return Start.None;
 
-    container.content = extractReferences(container.content, this.refs);
+    container.content = this.extractReferences(container.content);
     const lines = container.content.split('\n');
     lines.pop(); // the content ends with "\n"
     const headerLine = lines.pop();
@@ -606,12 +663,15 @@ class BlockParser {
     const parent = container.parent!;
     if (lines.length > 0) {
       container.content = lines.join('\n') + '\n';
-      this.finalize(container, this.lineNumber - 1);
+      // The paragraph ends before the header row.
+      this.finalize(container, this.lineNumber - 2);
     } else {
       container.remove();
       this.tip = parent;
     }
     const table = this.addChild('table');
+    // The header row is the line before the delimiter row.
+    table.startLine = this.lineNumber - 1;
     table.align = align;
     table.rows.push(header);
     this.advanceOffset(this.line.length - this.offset, false);
@@ -710,14 +770,14 @@ class BlockParser {
   private toAst(node: BNode): BlockNode[] {
     switch (node.type) {
       case 'paragraph':
-        return [{ type: 'paragraph', children: parseInlines(trimContent(node.content), this.refs) }];
+        return [{ type: 'paragraph', children: parseInlines(trimContent(node.content), this.refs, this.options.inline) }];
       case 'heading':
         return [
           {
             type: 'heading',
             level: node.level as 1 | 2 | 3 | 4 | 5 | 6,
             setext: node.setext,
-            children: parseInlines(trimContent(node.content), this.refs),
+            children: parseInlines(trimContent(node.content), this.refs, this.options.inline),
           },
         ];
       case 'thematicBreak':
@@ -726,6 +786,8 @@ class BlockParser {
         return [{ type: 'codeBlock', fenced: node.fenced, info: node.info, value: node.content }];
       case 'htmlBlock':
         return [{ type: 'htmlBlock', value: node.content }];
+      case 'rawBlock':
+        return [{ type: 'raw', name: node.syntax, value: node.content }];
       case 'blockQuote':
         return [{ type: 'blockQuote', children: node.children.flatMap((c) => this.toAst(c)) }];
       case 'list': {
@@ -746,7 +808,7 @@ class BlockParser {
           {
             type: 'table',
             align: node.align,
-            rows: node.rows.map((row) => row.map((cell) => parseInlines(cell, this.refs))),
+            rows: node.rows.map((row) => row.map((cell) => parseInlines(cell, this.refs, this.options.inline))),
           },
         ];
       default:

@@ -48,8 +48,8 @@ function blockHtml(block: Block): string {
       const cls = block.language ? ` class="language-${escapeHtml(block.language)}"` : '';
       return `<pre><code${cls}>${escapeHtml(inlineText(block.content))}</code></pre>`;
     }
-    case 'html':
-      return inlineText(block.content);
+    case 'raw':
+      return block.syntax === 'html' ? inlineText(block.content) : `<pre>${escapeHtml(inlineText(block.content))}</pre>`;
     case 'divider':
       return '<hr>';
     case 'table': {

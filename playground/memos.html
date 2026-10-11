@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>editor memos playground</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background: #f7f7f8; color: #1f2328; }
+      main { max-width: 680px; margin: 40px auto; padding: 0 16px 40px; }
+      nav { display: flex; gap: 12px; margin-bottom: 16px; font-size: 13px; color: #8b919a; }
+      nav a { color: inherit; }
+      .memo { background: #fff; border: 1px solid #e3e4e8; border-radius: 12px; padding: 12px 16px 8px 36px; }
+      .memo:focus-within { border-color: #b9bcc6; }
+      #editor { min-height: 120px; max-height: 60vh; overflow: auto; }
+      .bar { display: flex; flex-wrap: wrap; gap: 4px; padding-top: 8px; border-top: 1px solid #eee; margin-top: 8px; }
+      .bar button { font: inherit; font-size: 12px; padding: 3px 8px; border-radius: 6px; border: 1px solid #d0d3d9; background: #fff; color: inherit; cursor: pointer; }
+      .bar button.on { background: #1f2328; color: #fff; border-color: #1f2328; }
+      .bar .spacer { flex: 1; }
+      .tag { color: #2563eb; background: rgba(37, 99, 235, .08); border-radius: 4px; }
+      .mention { color: #9333ea; }
+      .upload { display: flex; gap: 8px; align-items: center; font-size: 12px; color: #8b919a; padding: 6px 10px; margin: 4px 0; border: 1px dashed #d0d3d9; border-radius: 8px; }
+      .upload progress { width: 120px; }
+      .upload button { font: inherit; font-size: 12px; }
+      h2 { font-size: 12px; font-weight: 600; color: #8b919a; text-transform: uppercase; letter-spacing: .04em; margin: 24px 0 8px; }
+      pre { background: #fff; border: 1px solid #e3e4e8; border-radius: 10px; padding: 12px 16px; font-size: 13px; white-space: pre-wrap; margin: 0; }
+      #memos { list-style: none; padding: 0; }
+      #memos li { margin-bottom: 8px; }
+      p.help { font-size: 13px; color: #8b919a; line-height: 1.5; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #111214; color: #e6e6e6; }
+        .memo, pre, .bar button { background: #18191b; border-color: #2a2c30; }
+        .bar button.on { background: #e6e6e6; color: #111214; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav><a href="./index.html">Core</a> · <a href="./react.html">React</a> · <strong>memos</strong></nav>
+      <p class="help">
+        The memos setup: breaks, no setext headings, math and footnotes. Type <code>#</code> for tag suggestions,
+        paste or drop an image to see an upload placeholder, Ctrl/⌘+Enter to save. The caret is remembered across reloads.
+      </p>
+      <div class="memo">
+        <div id="editor"></div>
+        <div class="bar" id="bar"></div>
+      </div>
+      <h2>Markdown</h2>
+      <pre id="output"></pre>
+      <h2>Saved memos</h2>
+      <ul id="memos"></ul>
+    </main>
+    <script type="module" src="./memos.ts"></script>
+  </body>
+</html>

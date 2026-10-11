@@ -3,10 +3,11 @@
 
 import type { Doc } from '../model';
 import { parseAst } from './blocks';
-import { astToDoc } from './lower';
+import type { MarkdownOptions } from './options';
+import { loadMarkdown } from './source';
 
 export { parseAst } from './blocks';
 
-export function parseMarkdown(src: string): Doc {
-  return astToDoc(parseAst(src));
+export function parseMarkdown(src: string, options?: MarkdownOptions): Doc {
+  return loadMarkdown(src, options).doc;
 }

@@ -6,7 +6,7 @@ Notes for people and coding agents. See `README.md` for usage and `docs/architec
 
 ```sh
 npm install
-npm run dev        # playground: core at /, React at /react.html
+npm run dev        # playground: core at /, React at /react.html, memos setup at /memos.html
 npm test           # unit, spec and round-trip tests (vitest)
 npm run test:e2e   # browser tests (Playwright, Chromium)
 npm run test:perf  # timing gates, run alone

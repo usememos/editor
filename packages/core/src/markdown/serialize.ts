@@ -35,33 +35,50 @@ import {
   setMarkInRange,
 } from '../model';
 import { isUnicodePunctuation, isUnicodeWhitespace, parseInline } from './inline';
+import { type MarkdownOptions, type ResolvedMarkdown, resolveMarkdown } from './options';
+import { type MarkdownSource, saveWithSource } from './source';
 
-export function serializeMarkdown(doc: Doc): string {
-  let out = '';
-  let prev: Block | null = null;
-  const lists = new ListState();
-
+export function serializeMarkdown(doc: Doc, options: SerializeOptions = {}): string {
+  if (options.source) return saveWithSource(doc.blocks, options.source, options);
   // Empty lines at the end render as nothing, so they are not written.
   let end = doc.blocks.length;
   while (end > 0 && isEmptyParagraph(doc.blocks[end - 1]!)) end--;
+  const out = serializeBlocks(doc.blocks.slice(0, end), options);
+  return out ? out + '\n' : '';
+}
 
-  for (const block of doc.blocks.slice(0, end)) {
+export interface SerializeOptions extends MarkdownOptions {
+  /**
+   * The source the document was loaded from (see `loadMarkdown`). Blocks
+   * that are unchanged since loading are written exactly as they were.
+   */
+  readonly source?: MarkdownSource | null;
+}
+
+/** Blocks as Markdown, without a final line ending. */
+export function serializeBlocks(blocks: readonly Block[], options?: MarkdownOptions): string {
+  const ctx = contexts(options);
+  let out = '';
+  let prev: Block | null = null;
+  const lists = new ListState(ctx.paragraph);
+
+  for (const block of blocks) {
     if (block.type === 'quote' && block.content.length === 0) continue;
     let text: string;
     let separator = '\n\n';
     switch (block.type) {
       case 'paragraph':
         // Markdown has no empty paragraph.
-        text = block.content.length === 0 ? '&nbsp;' : serializeInline(block.content);
+        text = block.content.length === 0 ? '&nbsp;' : inlineToMarkdown(block.content, ctx.paragraph);
         break;
       case 'quote': {
-        text = prefixLines(serializeInline(block.content), '> ', '>');
+        text = prefixLines(inlineToMarkdown(block.content, ctx.paragraph), '> ', '>');
         // Adjacent quotes are paragraphs of one blockquote.
         if (prev?.type === 'quote') separator = '\n>\n';
         break;
       }
       case 'heading':
-        text = serializeHeading(block.level, block.content);
+        text = serializeHeading(block.level, block.content, ctx.heading);
         break;
       case 'listItem': {
         const item = lists.next(block, prev?.type === 'listItem' ? prev : null);
@@ -72,11 +89,11 @@ export function serializeMarkdown(doc: Doc): string {
       case 'code':
         text = serializeCode(block.language, inlineText(block.content));
         break;
-      case 'html':
+      case 'raw':
         text = inlineText(block.content);
         break;
       case 'table':
-        text = serializeTable(block.align, block.rows);
+        text = serializeTable(block.align, block.rows, ctx.cell);
         break;
       case 'divider':
         text = '---';
@@ -86,10 +103,10 @@ export function serializeMarkdown(doc: Doc): string {
     out += text;
     prev = block;
   }
-  return out ? out + '\n' : '';
+  return out;
 }
 
-function isEmptyParagraph(block: Block): boolean {
+export function isEmptyParagraph(block: Block): boolean {
   return block.type === 'paragraph' && block.content.length === 0;
 }
 
@@ -103,8 +120,8 @@ function prefixLines(text: string, prefix: string, emptyPrefix: string): string 
 // ---------------------------------------------------------------------------
 // Blocks
 
-function serializeHeading(level: number, content: Inline): string {
-  let text = inlineToMarkdown(content, HEADING);
+function serializeHeading(level: number, content: Inline, ctx: InlineContext): string {
+  let text = inlineToMarkdown(content, ctx);
   // A trailing run of "#" would be read as the closing sequence.
   text = text.replace(/(^|[ \t])(#+)$/, (_m, sp: string, hashes: string) => `${sp}\\${hashes}`);
   return '#'.repeat(level) + (text ? ' ' + text : '');
@@ -128,11 +145,11 @@ function serializeCode(language: string, text: string): string {
   return `${fence}${info}\n${text ? text + '\n' : ''}${fence}`;
 }
 
-function serializeTable(align: readonly (string | null)[], rows: readonly (readonly Inline[])[]): string {
+function serializeTable(align: readonly (string | null)[], rows: readonly (readonly Inline[])[], ctx: InlineContext): string {
   // Pipes are escaped everywhere in a row, even in code spans: GFM splits
   // cells before parsing inlines and turns `\|` back into `|`.
   const row = (cells: readonly Inline[]) =>
-    '| ' + cells.map((cell) => inlineToMarkdown(cell, CELL).replace(/\|/g, '\\|')).join(' | ') + ' |';
+    '| ' + cells.map((cell) => inlineToMarkdown(cell, ctx).replace(/\|/g, '\\|')).join(' | ') + ' |';
   const delimiter =
     '| ' +
     align.map((a) => (a === 'left' ? ':--' : a === 'center' ? ':-:' : a === 'right' ? '--:' : '---')).join(' | ') +
@@ -149,6 +166,8 @@ function serializeTable(align: readonly (string | null)[], rows: readonly (reado
 class ListState {
   /** Per open nesting level: content column, list kind and last number. */
   private levels: { column: number; ordered: boolean; number: number }[] = [];
+
+  constructor(private readonly ctx: InlineContext) {}
 
   /** `prev` is the list item right before this one, or null when this item starts a list. */
   next(item: ListItemBlock, prev: ListItemBlock | null): { text: string; blankLineBefore: boolean } {
@@ -168,7 +187,7 @@ class ListState {
 
     let head = ' '.repeat(indent) + marker;
     if (item.listType === 'task') head += item.checked ? ' [x]' : ' [ ]';
-    const lines = inlineToMarkdown(item.content, PARAGRAPH).split('\n');
+    const lines = inlineToMarkdown(item.content, this.ctx).split('\n');
     const first = lines.shift()!;
     if (first) head += ' ' + first;
     const text = [head, ...lines.map((line) => (line ? ' '.repeat(column) + line : line))].join('\n');
@@ -189,17 +208,27 @@ class ListState {
 interface InlineContext {
   /** Escape block syntax at the start of each line (paragraph-like blocks). */
   readonly lineStart: boolean;
-  /** How "\n" is written: a hard line break, or `&#10;` where lines cannot break. */
-  readonly newline: 'break' | 'entity';
+  /**
+   * How "\n" is written: a hard line break (a backslash before the line
+   * ending), a plain line ending (with the `breaks` option), or `&#10;` where
+   * lines cannot break.
+   */
+  readonly newline: 'break' | 'soft' | 'entity';
+  readonly options: ResolvedMarkdown;
 }
 
-const PARAGRAPH: InlineContext = { lineStart: true, newline: 'break' };
-const HEADING: InlineContext = { lineStart: false, newline: 'entity' };
-const CELL: InlineContext = { lineStart: false, newline: 'entity' };
+function contexts(options: MarkdownOptions | undefined) {
+  const o = resolveMarkdown(options);
+  return {
+    paragraph: { lineStart: true, newline: o.breaks ? 'soft' : 'break', options: o } satisfies InlineContext,
+    heading: { lineStart: false, newline: 'entity', options: o } satisfies InlineContext,
+    cell: { lineStart: false, newline: 'entity', options: o } satisfies InlineContext,
+  };
+}
 
 /** Serializes inline content as it appears in a paragraph. */
-export function serializeInline(inline: Inline): string {
-  return inlineToMarkdown(inline, PARAGRAPH);
+export function serializeInline(inline: Inline, options?: MarkdownOptions): string {
+  return inlineToMarkdown(inline, contexts(options).paragraph);
 }
 
 type EmphasisMark = 'bold' | 'italic' | 'strike';
@@ -213,10 +242,10 @@ function inlineToMarkdown(inline: Inline, ctx: InlineContext): string {
   // overlap. Check by parsing the output back, and if it does not give the
   // same content, try the other strategies.
   if (!spans.some((s) => s.marks.some((m) => m === 'bold' || m === 'italic' || m === 'strike'))) return first;
-  if (sameInline(parseInline(first), spans)) return first;
+  if (sameInline(parseInline(first, ctx.options), spans)) return first;
   for (const strategy of STRATEGIES.slice(1)) {
     const out = render(spans, ctx, strategy);
-    if (sameInline(parseInline(out), spans)) return out;
+    if (sameInline(parseInline(out, ctx.options), spans)) return out;
   }
   return first;
 }
@@ -361,7 +390,7 @@ function tokenize(spans: readonly Span[], ctx: InlineContext, italic: '*' | '_')
     openMarks(target, index, limit);
     if (span.image) {
       tokens.push({ kind: 'raw', text: imageMarkdown(span.image, ctx) });
-    } else if (span.marks.includes('html')) {
+    } else if (span.marks.includes('html') || span.token) {
       tokens.push({ kind: 'raw', text: span.text });
     } else if (span.marks.includes('code')) {
       tokens.push({ kind: 'raw', text: codeSpan(span.text) });
@@ -539,7 +568,15 @@ function escapeText(
       ctx.newline === 'entity' ||
       (li === last && line === '' && (edges.atEnd || tok.encodeLast)) ||
       (li === 1 && lines[0] === '' && tok.encodeFirst);
-    return entity ? '&#10;' : '\\\n';
+    if (entity) return '&#10;';
+    // With `breaks`, a plain line ending is a line break. Not after an empty
+    // line (that would be a blank line, which ends the paragraph), and not
+    // after a space, which a soft break strips even when written as an entity.
+    // Before the first "\n" of a token, the previous token may end with an entity (";").
+    const fromEdge = li === 1 && lines[0] === '';
+    const before = fromEdge ? (edges.lineStart ? '' : (edges.before ?? '')) : lines[li - 1]!;
+    const plainBreak = ctx.newline === 'soft' && before !== '' && !(fromEdge ? /[ \t;]$/ : /[ \t]$/).test(before);
+    return plainBreak ? '\n' : '\\\n';
   });
   let out = '';
   lines.forEach((line, li) => {
@@ -556,6 +593,7 @@ function escapeText(
       startsLine,
       endsLine,
       blockSyntax: ctx.lineStart && startsLine,
+      escape: ctx.options.escape,
     });
   });
   return out;
@@ -571,6 +609,8 @@ function escapeLine(
     startsLine: boolean;
     endsLine: boolean;
     blockSyntax: boolean;
+    /** Characters syntax extensions need escaped. */
+    escape?: string;
   },
 ): string {
   if (line === '') return '';
@@ -627,7 +667,7 @@ function escapeLine(
         out += next === '[' ? '\\!' : ch;
         break;
       default:
-        out += ch;
+        out += o.escape && o.escape.includes(ch) ? '\\' + ch : ch;
     }
   }
   return out;
@@ -692,7 +732,9 @@ function linkDestination(url: string): string {
 }
 
 function imageMarkdown(image: { src: string; alt: string; title?: string }, ctx: InlineContext): string {
-  const alt = escapeText({ text: image.alt, encodeFirst: false, encodeLast: false }, ctx, {
+  // Alt text keeps line breaks as hard breaks: a soft break in alt text reads back as a space.
+  const altCtx: InlineContext = ctx.newline === 'soft' ? { ...ctx, newline: 'break' } : ctx;
+  const alt = escapeText({ text: image.alt, encodeFirst: false, encodeLast: false }, altCtx, {
     before: '[',
     after: ']',
     lineStart: false,

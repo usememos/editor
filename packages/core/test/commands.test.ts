@@ -13,6 +13,7 @@ import {
   inlineText,
   listItem,
   paragraph,
+  plain,
   quote,
   table,
 } from '../src/model';
@@ -36,8 +37,8 @@ function describeBlock(b: Block): string {
       return `quote:${fmt(b.content)}`;
     case 'code':
       return `code(${b.language}):${inlineText(b.content)}`;
-    case 'html':
-      return `html:${inlineText(b.content)}`;
+    case 'raw':
+      return `${b.syntax}:${inlineText(b.content)}`;
     case 'divider':
       return 'hr';
     case 'table':
@@ -487,3 +488,71 @@ describe('insertBlocks (paste)', () => {
     expect(show(cmd.insertBlocks(at(state(paragraph()), 0, 0), [heading(1, txt('T'))]))).toEqual(['h1:T']);
   });
 });
+
+describe('toggleBlockType', () => {
+  it('sets the type, and turns blocks back into paragraphs when they all have it', () => {
+    const p1 = paragraph(plain('a'));
+    const p2 = heading(2, plain('b'));
+    let s: EditorState = { ...createState({ blocks: [p1, p2] }), selection: { anchor: caret(p1.id, 0).anchor, focus: caret(p2.id, 1).focus } };
+    s = cmd.toggleBlockType(s, { type: 'heading', level: 2 });
+    expect(show(s)).toEqual(['h2:a', 'h2:b']);
+    s = cmd.toggleBlockType(s, { type: 'heading', level: 2 });
+    expect(show(s)).toEqual(['p:a', 'p:b']);
+    s = cmd.toggleBlockType(s, { type: 'listItem', listType: 'task' });
+    expect(show(s)).toEqual(['task0[ ]:a', 'task0[ ]:b']);
+  });
+});
+
+describe('insertFragment', () => {
+  const frag = (...blocks: Block[]) => blocks;
+
+  it('inserts a single paragraph inline at the selection, like a paste', () => {
+    const p = paragraph(plain('hello world'));
+    const s = cmd.insertFragment(stateAt([p], caret(p.id, 6)), frag(paragraph(plain('big '))));
+    expect(show(s)).toEqual(['p:hello big world']);
+    expect(s.selection.focus.offset).toBe(10);
+  });
+
+  it('inserts as its own block at a position, keeping the selected text and the selection', () => {
+    const p = paragraph(plain('hello world'));
+    const sel: Selection = { anchor: { blockId: p.id, offset: 0 }, focus: { blockId: p.id, offset: 11 } };
+    const s = cmd.insertFragment(stateAt([p], sel), frag(paragraph(plain('X'))), {
+      at: { blockId: p.id, offset: 5 },
+      block: true,
+      select: 'keep',
+    });
+    expect(show(s)).toEqual(['p:hello', 'p:X', 'p: world']);
+    expect(s.selection.anchor).toEqual({ blockId: p.id, offset: 0 });
+    expect(s.selection.focus).toEqual({ blockId: s.doc.blocks[2]!.id, offset: 6 });
+  });
+
+  it('inserts blocks before or after a block when the position is at its edge, and replaces an empty paragraph', () => {
+    const p = paragraph(plain('ab'));
+    const empty = paragraph();
+    const at = (offset: number) => cmd.insertFragment(stateAt([p, empty], caret(p.id, 0)), frag(paragraph(plain('X'))), { at: { blockId: p.id, offset }, block: true });
+    expect(show(at(0))).toEqual(['p:X', 'p:ab', 'p:']);
+    expect(show(at(2))).toEqual(['p:ab', 'p:X', 'p:']);
+    const s = cmd.insertFragment(stateAt([p, empty], caret(empty.id, 0)), frag(paragraph(plain('X'))), { block: true });
+    expect(show(s)).toEqual(['p:ab', 'p:X']);
+  });
+
+  it("appends at 'end', after a code block, and puts the caret at the end of the insertion", () => {
+    const c = codeBlock('js', 'x');
+    const s = cmd.insertFragment(stateAt([c], caret(c.id, 0)), frag(paragraph(plain('a')), paragraph(plain('bc'))), { at: 'end' });
+    expect(show(s)).toEqual(['code(js):x', 'p:a', 'p:bc']);
+    expect(s.selection.focus).toEqual({ blockId: s.doc.blocks[2]!.id, offset: 2 });
+  });
+});
+
+describe('selectAll', () => {
+  it('selects from the start of the first block to the end of the last', () => {
+    const a = paragraph(plain('a'));
+    const b = paragraph(plain('bcd'));
+    const s = cmd.selectAll(stateAt([a, b], caret(a.id, 1)));
+    expect(s.selection).toEqual({ anchor: { blockId: a.id, offset: 0 }, focus: { blockId: b.id, offset: 3 } });
+  });
+});
+
+function stateAt(blocks: Block[], selection: Selection): EditorState {
+  return { ...createState({ blocks }), selection };
+}

@@ -177,7 +177,7 @@ test('Ctrl+Enter calls onSubmit', async ({ page }) => {
 
 test('read-only mode ignores typing', async ({ page }) => {
   await page.keyboard.type('fixed');
-  await page.evaluate(() => (window as any).editor.setReadOnly(true));
+  await page.evaluate(() => (window as any).editor.setOptions({ editable: false }));
   await page.locator('#editor').click();
   await page.keyboard.type('more');
   expect(await md(page)).toBe('fixed\n');

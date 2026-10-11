@@ -1,6 +1,7 @@
 // The floating formatting toolbar shown over selected text, and the link input.
 
 import type { Editor } from '../editor';
+import { toggleMark } from '../commands';
 import type { Mark } from '../model';
 import { Popup, isMac, isTouch } from './popup';
 
@@ -46,7 +47,7 @@ export class FormatToolbar {
     const labels = editor.labels;
     for (const b of MARK_BUTTONS) {
       const btn = button(b.text, `${labels[b.label]} (${b.shortcut})`, `mbe-tool-${b.mark}`, () => {
-        editor.toggleMark(b.mark);
+        editor.run((s) => toggleMark(s, b.mark));
         this.update();
       });
       btn.setAttribute('aria-pressed', 'false');
@@ -78,11 +79,11 @@ export class FormatToolbar {
 
   private update(): void {
     for (const [mark, btn] of this.markButtons) {
-      const on = this.editor.isMarkActive(mark);
+      const on = this.editor.isActive(mark as 'bold');
       btn.classList.toggle('mbe-active', on);
       btn.setAttribute('aria-pressed', String(on));
     }
-    this.linkButton.classList.toggle('mbe-active', this.editor.activeLinkHref() !== null);
+    this.linkButton.classList.toggle('mbe-active', this.editor.isActive('link'));
   }
 }
 

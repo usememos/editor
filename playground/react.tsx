@@ -1,4 +1,4 @@
-import { MarkdownEditor } from '@editor/react';
+import { EditorContent, MarkdownEditor, useEditor } from '@editor/react';
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import '../packages/core/src/style.css';
@@ -30,4 +30,32 @@ function CommentBox() {
   );
 }
 
-createRoot(document.getElementById('app')!).render(<CommentBox />);
+/** ?demo=api: live props, outside values, and useEditor. Used by the browser tests. */
+function ApiDemo() {
+  const [value, setValue] = useState('start');
+  const [placeholder, setPlaceholder] = useState('First placeholder');
+  const [editable, setEditable] = useState(true);
+  const [hookOutput, setHookOutput] = useState('');
+  const editor = useEditor({ content: '# From useEditor', autofocus: 'end', onChange: setHookOutput });
+  return (
+    <>
+      <div className="comment" id="controlled">
+        <MarkdownEditor value={value} onChange={setValue} placeholder={placeholder} editable={editable} />
+      </div>
+      <div className="row">
+        <button id="set-outside" onClick={() => setValue('from outside')}>Set value</button>
+        <button id="clear" onClick={() => setValue('')}>Clear</button>
+        <button id="placeholder" onClick={() => setPlaceholder('Second placeholder')}>Placeholder</button>
+        <button id="editable" onClick={() => setEditable((e) => !e)}>Editable</button>
+      </div>
+      <pre id="value">{value}</pre>
+      <div className="comment" id="hook">
+        <EditorContent editor={editor} />
+      </div>
+      <pre id="hook-output">{hookOutput}</pre>
+    </>
+  );
+}
+
+const demo = new URLSearchParams(location.search).get('demo');
+createRoot(document.getElementById('app')!).render(demo === 'api' ? <ApiDemo /> : <CommentBox />);

@@ -39,7 +39,7 @@ export class BlockHandle {
   }
 
   private onMove(e: MouseEvent): void {
-    if (this.editor.isReadOnly()) return;
+    if (!this.editor.isEditable) return;
     const target = e.target as Element | null;
     let node: Element | null = target;
     while (node && node.parentElement !== this.editor.root) node = node.parentElement;

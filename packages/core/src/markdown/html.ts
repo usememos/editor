@@ -93,6 +93,11 @@ class Renderer {
         this.out += node.value;
         this.cr();
         break;
+      case 'raw':
+        this.cr();
+        this.out += `<pre>${escapeHtml(node.value)}</pre>`;
+        this.cr();
+        break;
       case 'blockQuote':
         this.cr();
         this.out += '<blockquote>';
@@ -166,6 +171,9 @@ class Renderer {
       case 'html':
         this.out += node.value;
         break;
+      case 'token':
+        this.out += escapeHtml(node.value);
+        break;
       case 'emphasis':
         this.out += '<em>';
         this.inlines(node.children);
@@ -205,6 +213,7 @@ function altText(nodes: readonly InlineNode[]): string {
       case 'text':
       case 'code':
       case 'html':
+      case 'token':
         s += node.value;
         break;
       case 'softBreak':

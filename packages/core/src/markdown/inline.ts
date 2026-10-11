@@ -13,6 +13,7 @@ import type { Inline } from '../model';
 import type { InlineNode } from './ast';
 import { lookupEntity } from '#entities';
 import { lowerInlines } from './lower';
+import { type InlineSyntax, type MarkdownOptions, resolveMarkdown } from './options';
 
 /** Link reference definitions, keyed by normalized label. */
 export type RefMap = Map<string, { readonly destination: string; readonly title: string }>;
@@ -21,13 +22,13 @@ export type RefMap = Map<string, { readonly destination: string; readonly title:
  * Parses a paragraph's inline content into the document model. Link
  * reference definitions are not available here, so reference links stay text.
  */
-export function parseInline(src: string): Inline {
-  return lowerInlines(parseInlines(src, new Map()));
+export function parseInline(src: string, options?: MarkdownOptions): Inline {
+  return lowerInlines(parseInlines(src, new Map(), resolveMarkdown(options).inline), options);
 }
 
 /** Parses inline content to syntax tree nodes. `src` should already be trimmed. */
-export function parseInlines(src: string, refs: RefMap): InlineNode[] {
-  return new InlineParser(src, refs).parse();
+export function parseInlines(src: string, refs: RefMap, syntax: readonly InlineSyntax[] = []): InlineNode[] {
+  return new InlineParser(src, refs, syntax).parse();
 }
 
 // ---------------------------------------------------------------------------
@@ -137,6 +138,8 @@ type NodeType = InlineNode['type'] | 'root';
 
 class Node {
   value = '';
+  /** Syntax name of a token. */
+  name = '';
   /** Nesting depth of the subtree (0 for leaves). */
   depth = 0;
   destination = '';
@@ -220,6 +223,9 @@ function toAst(parent: Node): InlineNode[] {
       case 'html':
         out.push({ type: n.type, value: n.value });
         break;
+      case 'token':
+        out.push({ type: 'token', name: n.name, value: n.value });
+        break;
       case 'emphasis':
       case 'strong':
       case 'strike':
@@ -282,10 +288,27 @@ class InlineParser {
   /** Per opening quote character, a position from which no link title can close. */
   private titleFailedFrom = new Map<string, number>();
 
+  /** Inline syntax extensions by trigger character code. */
+  private readonly triggers = new Map<number, InlineSyntax[]>();
+  /** A run of characters that cannot start any construct, including extension triggers. */
+  private readonly reText: RegExp = reMain;
+
   constructor(
     private readonly subject: string,
     private readonly refs: RefMap,
-  ) {}
+    syntax: readonly InlineSyntax[],
+  ) {
+    for (const s of syntax) {
+      for (const ch of s.triggers) {
+        const code = ch.charCodeAt(0);
+        this.triggers.set(code, [...(this.triggers.get(code) ?? []), s]);
+      }
+    }
+    if (this.triggers.size > 0) {
+      const extra = [...this.triggers.keys()].map((c) => '\\u' + c.toString(16).padStart(4, '0')).join('');
+      this.reText = new RegExp(reMain.source.replace(/\]\+$/, extra + ']+'), 'y');
+    }
+  }
 
   parse(): InlineNode[] {
     const root = new Node('root');
@@ -309,6 +332,7 @@ class InlineParser {
 
   private parseOne(block: Node): void {
     const c = this.peek();
+    if (this.triggers.size > 0 && this.parseToken(c, block)) return;
     let handled = false;
     switch (c) {
       case C_NEWLINE:
@@ -349,8 +373,25 @@ class InlineParser {
     }
   }
 
+  /** An inline syntax extension's token at the current position. */
+  private parseToken(c: number, block: Node): boolean {
+    const syntaxes = this.triggers.get(c);
+    if (!syntaxes) return false;
+    for (const s of syntaxes) {
+      const end = s.match(this.subject, this.pos);
+      if (end > this.pos) {
+        const node = new Node('token', this.subject.slice(this.pos, end));
+        node.name = s.name;
+        block.append(node);
+        this.pos = end;
+        return true;
+      }
+    }
+    return false;
+  }
+
   private parseString(block: Node): boolean {
-    const m = this.match(reMain);
+    const m = this.match(this.reText);
     if (!m) return false;
     block.append(new Node('text', m[0]));
     return true;
@@ -853,7 +894,7 @@ class InlineParser {
  */
 export function extractReferences(content: string, refs: RefMap): string {
   while (content.charCodeAt(0) === C_OPEN_BRACKET) {
-    const consumed = new InlineParser(content, refs).parseReference();
+    const consumed = new InlineParser(content, refs, []).parseReference();
     if (consumed === 0) break;
     content = content.slice(consumed);
   }

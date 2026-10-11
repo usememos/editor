@@ -17,7 +17,7 @@ This is **standard Markdown** with *block editor* features. Type \`/\` for the s
 > Quotes keep *inline* formatting.
 
 \`\`\`ts
-const editor = new Editor(element, { value, onChange });
+const editor = new Editor({ element, content, onChange });
 \`\`\`
 
 | Feature | Status |

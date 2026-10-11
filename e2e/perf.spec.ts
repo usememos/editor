@@ -22,7 +22,7 @@ test('typing latency in a 2,000-block document', async ({ page }) => {
   const count = await page.evaluate((m) => {
     const editor = (window as any).editor;
     editor.setMarkdown(m);
-    return editor.getDoc().blocks.length;
+    return editor.state.doc.blocks.length;
   }, md);
   expect(count).toBeGreaterThanOrEqual(2000);
   // Put the caret in a block in the middle.

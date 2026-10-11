@@ -18,6 +18,7 @@ import {
   inlineLength,
 } from '../model';
 import type { Labels } from '../labels';
+import { type Decoration, decorationContext, splitByDecorations } from '../decorations';
 
 export const BLOCK_ATTR = 'data-block-id';
 const CONTENT_ATTR = 'data-content';
@@ -40,7 +41,17 @@ export function safeHref(href: string): string | null {
   return ['http', 'https', 'mailto', 'tel'].includes(scheme[1]!.toLowerCase()) ? trimmed : null;
 }
 
-function renderBlock(block: Block, doc: Document, labels: Labels): HTMLElement {
+/** What rendering needs besides the block. */
+export interface RenderContext {
+  readonly doc: Document;
+  readonly labels: Labels;
+  readonly resolveImageSrc?: (src: string) => string;
+  /** Decorations for a text container. */
+  readonly decorate?: (block: Block, content: Inline, cell?: Cell) => readonly Decoration[];
+}
+
+function renderBlock(block: Block, ctx: RenderContext): HTMLElement {
+  const { doc, labels } = ctx;
   const el = (tag: string, className?: string) => {
     const e = doc.createElement(tag);
     if (className) e.className = className;
@@ -50,15 +61,15 @@ function renderBlock(block: Block, doc: Document, labels: Labels): HTMLElement {
   switch (block.type) {
     case 'paragraph':
       root = el('p');
-      fillContent(root, block.content, doc);
+      fillContent(root, block.content, ctx, block);
       break;
     case 'heading':
       root = el(`h${block.level}`);
-      fillContent(root, block.content, doc);
+      fillContent(root, block.content, ctx, block);
       break;
     case 'quote':
       root = el('blockquote');
-      fillContent(root, block.content, doc);
+      fillContent(root, block.content, ctx, block);
       break;
     case 'listItem': {
       root = el('div');
@@ -74,7 +85,7 @@ function renderBlock(block: Block, doc: Document, labels: Labels): HTMLElement {
         marker.appendChild(box);
       }
       const content = el('div', 'mbe-content');
-      fillContent(content, block.content, doc);
+      fillContent(content, block.content, ctx, block);
       root.append(marker, content);
       break;
     }
@@ -91,15 +102,16 @@ function renderBlock(block: Block, doc: Document, labels: Labels): HTMLElement {
       const pre = el('pre');
       const code = el('code');
       code.spellcheck = false;
-      fillContent(code, block.content, doc);
+      fillContent(code, block.content, ctx);
       pre.appendChild(code);
       root.append(bar, pre);
       break;
     }
-    case 'html':
+    case 'raw':
       root = el('pre');
+      root.dataset.syntax = block.syntax;
       root.spellcheck = false;
-      fillContent(root, block.content, doc);
+      fillContent(root, block.content, ctx);
       break;
     case 'divider':
       root = el('div');
@@ -120,7 +132,7 @@ function renderBlock(block: Block, doc: Document, labels: Labels): HTMLElement {
           td.dataset.col = String(c);
           const align = block.align[c];
           if (align) td.style.textAlign = align;
-          fillContent(td, cell, doc);
+          fillContent(td, cell, ctx, block, { row: r, col: c });
           tr.appendChild(td);
         });
         tbody.appendChild(tr);
@@ -139,7 +151,9 @@ function renderBlock(block: Block, doc: Document, labels: Labels): HTMLElement {
   return root;
 }
 
-function fillContent(target: HTMLElement, inline: Inline, doc: Document): void {
+/** `block` is given for containers that take decorations (not code or raw blocks). */
+function fillContent(target: HTMLElement, inline: Inline, ctx: RenderContext, block?: Block, cell?: Cell): void {
+  const doc = ctx.doc;
   target.setAttribute(CONTENT_ATTR, '');
   if (inlineLength(inline) === 0) {
     target.classList.add('mbe-empty-content');
@@ -147,7 +161,8 @@ function fillContent(target: HTMLElement, inline: Inline, doc: Document): void {
     target.appendChild(fill(doc));
     return;
   }
-  renderInline(inline, target, doc);
+  const decorations = block && ctx.decorate ? ctx.decorate(block, inline, cell) : [];
+  renderInline(inline, target, ctx, decorations);
   // A trailing line break needs a <br> after it to show the empty last line.
   const last = inline[inline.length - 1];
   if (last && last.text.endsWith('\n')) target.appendChild(fill(doc));
@@ -159,33 +174,50 @@ function fill(doc: Document): HTMLElement {
   return br;
 }
 
-function renderInline(inline: Inline, parent: HTMLElement, doc: Document): void {
+function renderInline(inline: Inline, parent: HTMLElement, ctx: RenderContext, decorations: readonly Decoration[] = []): void {
+  const doc = ctx.doc;
+  const pieces = splitByDecorations(inline, decorations);
+  const render = (piece: (typeof pieces)[number]) => decorate(renderSpan(piece.span, ctx), piece.decorations, doc);
   // Consecutive spans with the same link share one <a>.
   let i = 0;
-  while (i < inline.length) {
-    const span = inline[i]!;
+  while (i < pieces.length) {
+    const span = pieces[i]!.span;
     if (span.link) {
       const a = doc.createElement('a');
       const href = safeHref(span.link);
       if (href !== null) a.setAttribute('href', href);
       a.dataset.href = span.link;
       a.className = 'mbe-link';
-      while (i < inline.length && inline[i]!.link === span.link) {
-        a.appendChild(renderSpan(inline[i]!, doc));
+      while (i < pieces.length && pieces[i]!.span.link === span.link) {
+        a.appendChild(render(pieces[i]!));
         i++;
       }
       parent.appendChild(a);
     } else {
-      parent.appendChild(renderSpan(span, doc));
+      parent.appendChild(render(pieces[i]!));
       i++;
     }
   }
 }
 
-function renderSpan(span: Span, doc: Document): Node {
+/** Wraps a rendered span in one element per decoration. */
+function decorate(node: Node, decorations: readonly Decoration[], doc: Document): Node {
+  for (let i = decorations.length - 1; i >= 0; i--) {
+    const d = decorations[i]!;
+    const wrapper = doc.createElement('span');
+    for (const [name, value] of Object.entries(d.attributes ?? {})) wrapper.setAttribute(name, value);
+    wrapper.className = `mbe-deco ${d.class}`;
+    wrapper.appendChild(node);
+    node = wrapper;
+  }
+  return node;
+}
+
+function renderSpan(span: Span, ctx: RenderContext): Node {
+  const doc = ctx.doc;
   if (span.image) {
     const img = doc.createElement('img');
-    const src = safeHref(span.image.src);
+    const src = safeHref(ctx.resolveImageSrc ? ctx.resolveImageSrc(span.image.src) : span.image.src);
     if (src !== null) img.src = src;
     img.alt = span.image.alt;
     if (span.image.title) img.title = span.image.title;
@@ -195,6 +227,14 @@ function renderSpan(span: Span, doc: Document): Node {
     return img;
   }
   let node: Node = doc.createTextNode(span.text);
+  if (span.token) {
+    // A token of a syntax extension, shown as its source.
+    const wrapper = doc.createElement('span');
+    wrapper.className = `mbe-token mbe-token-${span.token}`;
+    wrapper.spellcheck = false;
+    wrapper.appendChild(node);
+    node = wrapper;
+  }
   // Innermost mark first, so the outer order matches MARK_ORDER.
   for (let i = MARK_ORDER.length - 1; i >= 0; i--) {
     const mark = MARK_ORDER[i]!;
@@ -220,21 +260,41 @@ export class BlockRenderer {
   /** Last number written into each ordered item's marker, keyed by element. */
   private readonly numbers = new WeakMap<HTMLElement, number>();
 
+  /** Maps an image `src` to the URL to display. Set before a full render. */
+  resolveImageSrc?: (src: string) => string;
+  /** Decorations for a text container. */
+  decorate?: RenderContext['decorate'];
+  /** Widget elements to place after a block. */
+  widgetsAfter?: (blockId: string) => readonly HTMLElement[] | undefined;
+
   constructor(
     private readonly root: HTMLElement,
     private readonly labels: Labels,
   ) {}
+
+  private context(): RenderContext {
+    return { doc: this.root.ownerDocument, labels: this.labels, resolveImageSrc: this.resolveImageSrc, decorate: this.decorate };
+  }
 
   /**
    * `force` re-renders every block. `lazy` (with a full render) lets blocks
    * skip layout while off screen; use it only when loading a document.
    */
   render(doc: Doc, force = false, lazy = false): void {
+    const ctx = this.context();
     const next = new Map<string, { block: Block; el: HTMLElement }>();
     for (const block of doc.blocks) {
       const prev = this.rendered.get(block.id);
       const reuse = !force && prev && prev.block === block && prev.el.parentNode === this.root;
-      next.set(block.id, { block, el: reuse ? prev.el : renderBlock(block, this.root.ownerDocument, this.labels) });
+      next.set(block.id, { block, el: reuse ? prev.el : renderBlock(block, ctx) });
+    }
+
+    // Block elements in order, each followed by its widgets.
+    const nodes: HTMLElement[] = [];
+    for (const [id, { el }] of next) {
+      nodes.push(el);
+      const widgets = this.widgetsAfter?.(id);
+      if (widgets) nodes.push(...widgets);
     }
 
     if (force || this.rendered.size === 0) {
@@ -244,15 +304,15 @@ export class BlockRenderer {
       // and arrow keys pressed before then put the caret in the wrong place,
       // so blocks rendered while editing never get it.
       const fragment = this.root.ownerDocument.createDocumentFragment();
-      for (const { el } of next.values()) {
-        if (lazy) el.classList.add('mbe-lazy');
+      for (const el of nodes) {
+        if (lazy && el.hasAttribute(BLOCK_ATTR)) el.classList.add('mbe-lazy');
         fragment.appendChild(el);
       }
       this.root.replaceChildren(fragment);
     } else {
       let ref: ChildNode | null = this.root.firstChild;
       let moved = false;
-      for (const { el } of next.values()) {
+      for (const el of nodes) {
         if (el === ref) {
           ref = ref.nextSibling;
         } else {
@@ -261,8 +321,8 @@ export class BlockRenderer {
         }
       }
       // Remove stale blocks and anything the browser inserted on its own.
-      if (moved || ref !== null || this.root.childNodes.length !== next.size) {
-        const keep = new Set<Node>([...next.values()].map((v) => v.el));
+      if (moved || ref !== null || this.root.childNodes.length !== nodes.length) {
+        const keep = new Set<Node>(nodes);
         for (const child of Array.from(this.root.childNodes)) {
           if (!keep.has(child)) child.remove();
         }

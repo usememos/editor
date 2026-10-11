@@ -28,6 +28,11 @@ export interface Span {
   readonly link?: string;
   /** An image. Its `text` is a single ATOM_CHAR. */
   readonly image?: ImageAtom;
+  /**
+   * A token of an inline syntax extension, by syntax name (for example
+   * `math`). Its `text` is the token's Markdown source, saved verbatim.
+   */
+  readonly token?: string;
 }
 
 /** Inline content: normalized spans (no empty spans, no adjacent spans with equal format). */
@@ -36,6 +41,7 @@ export type Inline = readonly Span[];
 export interface Format {
   readonly marks: readonly Mark[];
   readonly link?: string;
+  readonly token?: string;
 }
 
 export type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
@@ -84,10 +90,16 @@ export interface CodeBlock {
   readonly content: Inline;
 }
 
-/** Raw HTML block, kept and saved verbatim. Content is plain text. */
-export interface HtmlBlock {
+/**
+ * Markdown kept as source, shown and edited as plain text and saved
+ * verbatim. `syntax` says what it is: `html` for an HTML block, `markdown`
+ * for structure the editor cannot edit as blocks (a list inside a quote, a
+ * code block inside a list item), or the name of a syntax extension.
+ */
+export interface RawBlock {
   readonly id: string;
-  readonly type: 'html';
+  readonly type: 'raw';
+  readonly syntax: string;
   readonly content: Inline;
 }
 
@@ -104,7 +116,7 @@ export interface DividerBlock {
   readonly type: 'divider';
 }
 
-export type TextBlock = ParagraphBlock | HeadingBlock | ListItemBlock | QuoteBlock | CodeBlock | HtmlBlock;
+export type TextBlock = ParagraphBlock | HeadingBlock | ListItemBlock | QuoteBlock | CodeBlock | RawBlock;
 export type Block = TextBlock | TableBlock | DividerBlock;
 export type BlockType = Block['type'];
 
@@ -185,8 +197,13 @@ export function codeBlock(language = '', text = '', id = createId()): CodeBlock 
   return { id, type: 'code', language, content: plain(text) };
 }
 
-export function htmlBlock(text = '', id = createId()): HtmlBlock {
-  return { id, type: 'html', content: plain(text) };
+export function rawBlock(syntax: string, text = '', id = createId()): RawBlock {
+  return { id, type: 'raw', syntax, content: plain(text) };
+}
+
+/** A raw HTML block. */
+export function htmlBlock(text = '', id = createId()): RawBlock {
+  return rawBlock('html', text, id);
 }
 
 export function table(align: readonly Align[], rows: readonly (readonly Inline[])[], id = createId()): TableBlock {
@@ -222,8 +239,8 @@ export function isTextBlock(block: Block): block is TextBlock {
 }
 
 /** Blocks whose content is plain text: no marks, links or images, and Enter inserts a newline. */
-export function isPlainTextBlock(block: Block): block is CodeBlock | HtmlBlock {
-  return block.type === 'code' || block.type === 'html';
+export function isPlainTextBlock(block: Block): block is CodeBlock | RawBlock {
+  return block.type === 'code' || block.type === 'raw';
 }
 
 /** Inline content at a position's container: the block's content, or a table cell. Null for dividers. */
@@ -272,7 +289,7 @@ export function sameMarks(a: readonly Mark[], b: readonly Mark[]): boolean {
 }
 
 function sameFormat(a: Span, b: Span): boolean {
-  return !a.image && !b.image && a.link === b.link && sameMarks(a.marks, b.marks);
+  return !a.image && !b.image && a.link === b.link && a.token === b.token && sameMarks(a.marks, b.marks);
 }
 
 // ---------------------------------------------------------------------------
@@ -344,11 +361,15 @@ export function formatAt(inline: Inline, offset: number): Format {
   const before = offset > 0 ? spanAt(inline, offset - 1) : undefined;
   const after = spanAt(inline, offset);
   const link = before?.link && before.link === after?.link ? before.link : undefined;
-  return link ? { marks, link } : { marks };
+  // Text typed inside a token is part of its source; at its edges it is not.
+  const token = before?.token && before.token === after?.token ? before.token : undefined;
+  const format: Format = link ? { marks, link } : { marks };
+  return token ? { ...format, token } : format;
 }
 
 export function insertInline(inline: Inline, offset: number, text: string, format: Format): Span[] {
-  const span: Span = format.link ? { text, marks: format.marks, link: format.link } : { text, marks: format.marks };
+  let span: Span = format.link ? { text, marks: format.marks, link: format.link } : { text, marks: format.marks };
+  if (format.token) span = { ...span, token: format.token };
   return concatInline(sliceInline(inline, 0, offset), [span], sliceInline(inline, offset));
 }
 
@@ -366,6 +387,12 @@ export function setMarkInRange(inline: Inline, from: number, to: number, mark: M
   const middle = sliceInline(inline, from, to).map((s) =>
     s.image ? s : { ...s, marks: on ? sortMarks([...s.marks, mark]) : s.marks.filter((m) => m !== mark) },
   );
+  return concatInline(sliceInline(inline, 0, from), middle, sliceInline(inline, to));
+}
+
+/** Makes [from, to) one token of an inline syntax extension. */
+export function setTokenInRange(inline: Inline, from: number, to: number, token: string): Span[] {
+  const middle = sliceInline(inline, from, to).map((s) => ({ ...s, token }));
   return concatInline(sliceInline(inline, 0, from), middle, sliceInline(inline, to));
 }
 

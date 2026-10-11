@@ -29,6 +29,9 @@ import {
 import { parseMarkdown } from '../src/markdown/parse';
 import { representableInline, serializeInline, serializeMarkdown } from '../src/markdown/serialize';
 import { commonmark, gfm } from './fixtures/examples';
+import type { MarkdownOptions } from '../src/markdown/options';
+import { footnotes } from '../src/extensions/footnotes';
+import { math } from '../src/extensions/math';
 
 const t = (text: string, ...marks: Mark[]): Span => ({ text, marks: sortMarks(marks) });
 const link = (text: string, href: string, ...marks: Mark[]): Span => ({ text, marks: sortMarks(marks), link: href });
@@ -55,9 +58,11 @@ describe('lowering: Markdown → model', () => {
     expect(shape(parseMarkdown('a\nb  \nc\\\nd'))).toEqual([{ type: 'paragraph', content: [t('a b\nc\nd')] }]);
   });
 
-  it('flattens nested lists with indent capped at 5', () => {
-    const doc = parseMarkdown('- a\n  - b\n    - c\n      - d\n        - e\n          - f\n            - g');
-    expect(doc.blocks.map((b) => (b.type === 'listItem' ? b.indent : -1))).toEqual([0, 1, 2, 3, 4, 5, 5]);
+  it('flattens nested lists into indents up to 5, and keeps deeper lists as source', () => {
+    const doc = parseMarkdown('- a\n  - b\n    - c\n      - d\n        - e\n          - f');
+    expect(doc.blocks.map((b) => (b.type === 'listItem' ? b.indent : -1))).toEqual([0, 1, 2, 3, 4, 5]);
+    const deeper = '- a\n  - b\n    - c\n      - d\n        - e\n          - f\n            - g';
+    expect(shape(parseMarkdown(deeper))).toEqual([{ type: 'raw', syntax: 'markdown', content: [t(deeper)] }]);
   });
 
   it('keeps the start number on the first ordered item and reads task items', () => {
@@ -69,33 +74,29 @@ describe('lowering: Markdown → model', () => {
     ]);
   });
 
-  it('joins the paragraphs of an item and moves other blocks after it', () => {
-    expect(shape(parseMarkdown('- p1\n\n  p2\n\n  ```js\n  code\n  ```\n\n  > q\n- next'))).toEqual([
-      { type: 'listItem', listType: 'bullet', indent: 0, checked: false, content: [t('p1\np2')] },
-      { type: 'code', language: 'js', content: [t('code')] },
-      { type: 'quote', content: [t('q')] },
-      { type: 'listItem', listType: 'bullet', indent: 0, checked: false, content: [t('next')] },
-    ]);
+  it('keeps lists and quotes the model cannot hold as Markdown source', () => {
+    const cases = [
+      '- p1\n\n  p2\n- next',
+      '- item\n  ```js\n  code\n  ```',
+      '- item\n\n  > q',
+      '> p1\n> - a\n> - [ ] b',
+      '> # H',
+      '>     code',
+      '> > nested',
+    ];
+    for (const md of cases) {
+      expect(shape(parseMarkdown(`before\n\n${md}\n\nafter`)), md).toEqual([
+        { type: 'paragraph', content: [t('before')] },
+        { type: 'raw', syntax: 'markdown', content: [t(md)] },
+        { type: 'paragraph', content: [t('after')] },
+      ]);
+    }
   });
 
-  it('flattens block quotes', () => {
-    const md = '> p1\n>\n> p2\n> - a\n> - [ ] b\n> 1. c\n>\n> # H\n>\n>     code\n> > nested\n> > > deeper';
-    expect(shape(parseMarkdown(md))).toEqual([
+  it('lowers each paragraph of a quote to a quote block', () => {
+    expect(shape(parseMarkdown('> p1\n>\n> p2\nlazy'))).toEqual([
       { type: 'quote', content: [t('p1')] },
-      { type: 'quote', content: [t('p2')] },
-      { type: 'quote', content: [t('- a\n- [ ] b')] },
-      { type: 'quote', content: [t('1. c')] },
-      { type: 'quote', content: [t('H')] },
-      { type: 'quote', content: [t('code')] },
-      { type: 'quote', content: [t('nested')] },
-      { type: 'quote', content: [t('deeper')] },
-    ]);
-  });
-
-  it('keeps list markers literally inside quotes', () => {
-    expect(shape(parseMarkdown('> * a\n>   * b\n>\n> 7) c'))).toEqual([
-      { type: 'quote', content: [t('* a\n* b')] },
-      { type: 'quote', content: [t('7) c')] },
+      { type: 'quote', content: [t('p2 lazy')] },
     ]);
   });
 
@@ -124,7 +125,7 @@ describe('lowering: Markdown → model', () => {
   it('lowers code, HTML blocks, dividers and tables', () => {
     const md = '<div>\nhtml\n</div>\n\n---\n\n    indented\n\n~~~ ruby startline=3\nx\n~~~\n\n| a | b |\n|:-|-:|\n| `x\\|y` | **z** |';
     expect(shape(parseMarkdown(md))).toEqual([
-      { type: 'html', content: [t('<div>\nhtml\n</div>')] },
+      { type: 'raw', syntax: 'html', content: [t('<div>\nhtml\n</div>')] },
       { type: 'divider' },
       { type: 'code', language: '', content: [t('indented')] },
       { type: 'code', language: 'ruby', content: [t('x')] },
@@ -398,8 +399,8 @@ function describe_(block: Block): unknown {
       return ['divider'];
     case 'code':
       return ['code', block.language, inlineText(block.content)];
-    case 'html':
-      return ['html', inlineText(block.content)];
+    case 'raw':
+      return ['raw', block.syntax, inlineText(block.content)];
     case 'listItem':
       return ['listItem', block.listType, block.indent, block.checked, content(block.content)];
     case 'heading':
@@ -409,36 +410,78 @@ function describe_(block: Block): unknown {
   }
 }
 
-describe('random documents survive a round trip', () => {
-  it('inline content (paragraphs)', () => {
-    const r = random(42);
-    for (let i = 0; i < 3000; i++) {
-      const inline = randomInline(r, false);
-      const md = serializeMarkdown({ blocks: [paragraph(inline)] });
-      const back = parseMarkdown(md);
-      const expected = representableInline(inline).length ? [describe_(paragraph(inline))] : [];
-      expect(back.blocks.map(describe_), md).toEqual(expected);
-    }
+const DIALECTS: { name: string; options: MarkdownOptions }[] = [
+  { name: 'CommonMark', options: {} },
+  { name: 'breaks', options: { breaks: true } },
+  { name: 'breaks, no setext', options: { breaks: true, setext: false } },
+  {
+    name: 'memos: breaks, no setext, math, footnotes',
+    options: { breaks: true, setext: false, syntax: [math().markdown!, footnotes().markdown!] },
+  },
+];
+
+for (const { name, options } of DIALECTS) {
+  describe(`random documents survive a round trip (${name})`, () => {
+    it('inline content (paragraphs)', () => {
+      const r = random(42);
+      for (let i = 0; i < 3000; i++) {
+        const inline = randomInline(r, false);
+        const md = serializeMarkdown({ blocks: [paragraph(inline)] }, options);
+        const back = parseMarkdown(md, options);
+        const expected = representableInline(inline).length ? [describe_(paragraph(inline))] : [];
+        expect(back.blocks.map(describe_), md).toEqual(expected);
+      }
+    });
+
+    it('all block types', () => {
+      const r = random(7);
+      for (let i = 0; i < 1000; i++) {
+        const blocks: Block[] = [];
+        let indent = -1;
+        for (let n = 1 + Math.floor(r.next() * 6); n > 0; n--) {
+          const block = randomBlock(r, indent);
+          indent = block.type === 'listItem' ? block.indent : -1;
+          blocks.push(block);
+        }
+        const md = serializeMarkdown({ blocks }, options);
+        const back = parseMarkdown(md, options);
+        // Empty quotes and empty paragraphs at the end are not saved.
+        const kept = blocks.filter((b) => !(b.type === 'quote' && b.content.length === 0));
+        const emptyParagraph = (b: Block | undefined) => b?.type === 'paragraph' && b.content.length === 0;
+        while (emptyParagraph(kept.at(-1))) kept.pop();
+        expect(back.blocks.map(describe_), md).toEqual(kept.map(describe_));
+        expect(serializeMarkdown(back, options)).toBe(md);
+      }
+    });
   });
 
-  it('all block types', () => {
-    const r = random(7);
-    for (let i = 0; i < 1000; i++) {
-      const blocks: Block[] = [];
-      let indent = -1;
-      for (let n = 1 + Math.floor(r.next() * 6); n > 0; n--) {
-        const block = randomBlock(r, indent);
-        indent = block.type === 'listItem' ? block.indent : -1;
-        blocks.push(block);
-      }
-      const md = serializeMarkdown({ blocks });
-      const back = parseMarkdown(md);
-      // Empty quotes and empty paragraphs at the end are not saved.
-      const kept = blocks.filter((b) => !(b.type === 'quote' && b.content.length === 0));
-      const emptyParagraph = (b: Block | undefined) => b?.type === 'paragraph' && b.content.length === 0;
-      while (emptyParagraph(kept.at(-1))) kept.pop();
-      expect(back.blocks.map(describe_), md).toEqual(kept.map(describe_));
-      expect(serializeMarkdown(back)).toBe(md);
+  if (name === 'CommonMark') continue;
+  describe(`save stability on spec examples (${name})`, () => {
+    for (const ex of [...commonmark, ...gfm]) {
+      it(`example ${ex.example}`, () => {
+        const once = serializeMarkdown(parseMarkdown(ex.markdown, options), options);
+        expect(serializeMarkdown(parseMarkdown(once, options), options)).toBe(once);
+      });
     }
+  });
+}
+
+describe('dialect options', () => {
+  it('breaks: a single newline is a line break and is saved as a newline', () => {
+    const o = { breaks: true };
+    expect(shape(parseMarkdown('a\nb  \nc\\\nd', o))).toEqual([{ type: 'paragraph', content: [t('a\nb\nc\nd')] }]);
+    expect(serializeMarkdown(parseMarkdown('a\nb  \nc\\\nd', o), o)).toBe('a\nb\nc\nd\n');
+    expect(serializeMarkdown({ blocks: [paragraph([t('a\n\nb')])] }, o)).toBe('a\n\\\nb\n');
+    expect(serializeMarkdown({ blocks: [listItem('bullet', [t('a\nb')])] }, o)).toBe('- a\n  b\n');
+    expect(serializeMarkdown({ blocks: [quote([t('a\nb')])] }, o)).toBe('> a\n> b\n');
+  });
+
+  it('setext: false reads underlines as a divider or text', () => {
+    const o = { setext: false };
+    expect(shape(parseMarkdown('Title\n---', o))).toEqual([
+      { type: 'paragraph', content: [t('Title')] },
+      { type: 'divider' },
+    ]);
+    expect(shape(parseMarkdown('Title\n===', o))).toEqual([{ type: 'paragraph', content: [t('Title ===')] }]);
   });
 });

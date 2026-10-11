@@ -1,9 +1,34 @@
-export { Editor, type EditorOptions, SLASH_ITEM_IDS, type SlashItemId } from './editor';
+export {
+  Editor,
+  type ActiveName,
+  type EditorCommands,
+  type EditorEvents,
+  type EditorOptions,
+  type InsertMarkdownOptions,
+  type InsertTarget,
+  type PositionJSON,
+  type RuntimeOptions,
+  type SelectionJSON,
+  SLASH_ITEM_IDS,
+  type SlashItemId,
+} from './editor';
 export { DEFAULT_LABELS, type Labels } from './labels';
 export * from './model';
 export * as commands from './commands';
 export { parseMarkdown } from './markdown/parse';
 export { parseInline } from './markdown/inline';
-export { serializeMarkdown, serializeInline } from './markdown/serialize';
+export { serializeMarkdown, serializeInline, type SerializeOptions } from './markdown/serialize';
+export { loadMarkdown, type MarkdownSource } from './markdown/source';
+export type { MarkdownOptions } from './markdown/options';
 export { docToHtml } from './clipboard/toHtml';
 export { htmlToDoc } from './clipboard/fromHtml';
+export type { Extension, ExtensionContext, KeyHandler } from './extension';
+export { defaultKeymap } from './extensions/keymap';
+export { math } from './extensions/math';
+export { footnotes } from './extensions/footnotes';
+export type { BlockSyntax, BlockSyntaxMatcher, InlineSyntax, MarkdownSyntax } from './markdown/options';
+export { textDecorator, type TextDecoratorOptions } from './extensions/textDecorator';
+export type { Decoration, DecorationContext, Decorator, TextRange } from './decorations';
+export { suggestion, type SuggestionConfig, type SuggestionItem, type SuggestionRange } from './extensions/suggestion';
+export type { Widget, WidgetRender } from './widgets';
+export { fileHandler, type FileHandlerOptions } from './extensions/fileHandler';

@@ -6,7 +6,7 @@ export const md = (page: Page) => page.evaluate(() => (window as any).editor.get
 export const blocks = (page: Page) =>
   page.evaluate(() => {
     const text = (c: any[]) => c.map((s) => s.text).join('');
-    return (window as any).editor.getDoc().blocks.map((b: any) => {
+    return (window as any).editor.state.doc.blocks.map((b: any) => {
       switch (b.type) {
         case 'paragraph':
           return `p:${text(b.content)}`;

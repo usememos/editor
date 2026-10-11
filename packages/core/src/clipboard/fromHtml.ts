@@ -383,7 +383,7 @@ class Converter {
         case 'heading':
         case 'quote':
         case 'code':
-        case 'html':
+        case 'raw':
           this.out.push(quote(block.content));
           break;
         case 'listItem': {

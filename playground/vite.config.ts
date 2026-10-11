@@ -13,6 +13,6 @@ export default defineConfig({
     },
   },
   build: {
-    rollupOptions: { input: { main: src('index.html'), react: src('react.html') } },
+    rollupOptions: { input: { main: src('index.html'), react: src('react.html'), memos: src('memos.html') } },
   },
 });
