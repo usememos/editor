@@ -1,0 +1,40 @@
+/* Default theme. Every value is a custom property so hosts can restyle it. */
+.mbe-root {
+  --mbe-font: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --mbe-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --mbe-text: #1f2328;
+  --mbe-muted: #8b919a;
+  --mbe-code-bg: rgba(135, 131, 120, 0.15);
+  --mbe-block-gap: 0.35em;
+
+  font: 15px/1.6 var(--mbe-font);
+  color: var(--mbe-text);
+  outline: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  caret-color: currentColor;
+}
+.mbe-root > .mbe-block { margin: 0; padding: 1px 0; }
+.mbe-root > .mbe-block + .mbe-block { margin-top: var(--mbe-block-gap); }
+.mbe-root > h1 { font-size: 1.6em; line-height: 1.3; font-weight: 650; margin-top: 0.8em; }
+.mbe-root > h2 { font-size: 1.3em; line-height: 1.35; font-weight: 650; margin-top: 0.7em; }
+.mbe-root > h3 { font-size: 1.1em; font-weight: 650; margin-top: 0.6em; }
+.mbe-root > h4, .mbe-root > h5, .mbe-root > h6 { font-size: 1em; font-weight: 650; }
+.mbe-root > .mbe-block:first-child { margin-top: 0; }
+.mbe-root code {
+  font-family: var(--mbe-mono);
+  font-size: 0.88em;
+  background: var(--mbe-code-bg);
+  border-radius: 4px;
+  padding: 0.1em 0.3em;
+}
+/* Placeholder: only in an empty editor (one empty block). */
+.mbe-root > .mbe-empty:only-child::before {
+  content: var(--mbe-placeholder, '');
+  color: var(--mbe-muted);
+  pointer-events: none;
+  position: absolute;
+}
+@media (prefers-color-scheme: dark) {
+  .mbe-root { --mbe-text: #e6e6e6; --mbe-muted: #6e7681; --mbe-code-bg: rgba(255, 255, 255, 0.1); }
+}
