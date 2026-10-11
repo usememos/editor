@@ -868,18 +868,6 @@ export class Editor {
   private blockMenuSections(blockId: string): MenuSection[] {
     const block = getBlock(this.state.doc, blockId);
     const sections: MenuSection[] = [];
-    if (isTextBlock(block) && block.type !== 'html') {
-      sections.push({
-        title: this.labels.turnInto,
-        items: BLOCK_ITEMS.filter((b) => b.spec.type !== 'table' && b.spec.type !== 'divider').map((b) => ({
-          id: b.id,
-          label: this.labels[b.label],
-          icon: b.icon,
-          active: this.isType(block, b.spec),
-          run: () => this.run((s) => cmd.turnBlockInto(s, blockId, b.spec)),
-        })),
-      });
-    }
     if (block.type === 'table' && this.state.selection.focus.blockId === blockId && this.state.selection.focus.cell) {
       const t = (kind: cmd.TableAction) => () => this.run((s) => cmd.tableAction(s, kind));
       sections.push({

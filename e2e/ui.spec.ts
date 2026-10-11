@@ -136,15 +136,17 @@ test('block handle: hover shows it, the menu duplicates and deletes', async ({ p
   expect(await blocks(page)).toEqual(['p:first', 'p:first']);
 });
 
-test('block menu with Ctrl+/: Turn into from the keyboard', async ({ page }) => {
+test('block menu with Ctrl+/: keyboard only, no Turn into section', async ({ page }) => {
   await page.keyboard.type('item');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('next');
   await page.keyboard.press('Control+/');
   const menu = page.locator('.mbe-block-menu');
   await expect(menu).toBeVisible();
-  // Items: Text, Heading 1-3, Bulleted list, ... Move to "Bulleted list".
-  for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowDown');
+  await expect(menu.locator('.mbe-menu-item')).toHaveText([/Duplicate/, /Delete/]);
+  await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
-  expect(await blocks(page)).toEqual(['ul0:item']);
+  expect(await blocks(page)).toEqual(['p:item']);
   await expect(menu).toBeHidden();
 });
 

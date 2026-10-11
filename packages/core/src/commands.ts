@@ -607,14 +607,6 @@ export function deleteBlock(state: EditorState, blockId: string): EditorState {
   return removeBlockAt(state, blockIndex(state.doc, blockId), -1);
 }
 
-/** Converts one block (by ID, from the block menu) to another type. */
-export function turnBlockInto(state: EditorState, blockId: string, spec: BlockTypeSpec): EditorState {
-  const block = getBlock(state.doc, blockId);
-  if (!isTextBlock(block)) return state;
-  const inBlock = state.selection.focus.blockId === blockId ? state.selection : caret(blockId, 0);
-  return setBlockType({ ...state, selection: inBlock }, spec);
-}
-
 // ---------------------------------------------------------------------------
 // Tables
 
