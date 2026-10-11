@@ -1,6 +1,6 @@
-# Markdown Block Editor
+# editor
 
-A block editor for standard Markdown (CommonMark + GFM), built from scratch with zero runtime dependencies, with React bindings.
+Working name. A block editor for standard Markdown (CommonMark + GFM), built from scratch with zero runtime dependencies, with React bindings.
 
 Status: step 1 prototype. See [docs/architecture.md](docs/architecture.md).
 

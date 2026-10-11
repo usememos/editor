@@ -1,5 +1,5 @@
 {
-  "name": "markdown-block-editor-monorepo",
+  "name": "editor-monorepo",
   "private": true,
   "type": "module",
   "workspaces": ["packages/*"],

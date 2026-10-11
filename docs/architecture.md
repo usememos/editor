@@ -6,7 +6,7 @@ Status: prototype done. This note records the core decisions for the editor, wha
 
 | Area | Decision |
 | --- | --- |
-| Packages | `@markdown-block-editor/core` (plain TypeScript, zero runtime dependencies) and `@markdown-block-editor/react` (thin wrapper, React as a peer dependency). Package names are placeholders. |
+| Packages | `@editor/core` (plain TypeScript, zero runtime dependencies) and `@editor/react` (thin wrapper, React as a peer dependency). Package names use the working name `editor`; the final name is deferred. |
 | Document model | A flat list of immutable blocks. Each block has a stable ID and inline content made of text spans with marks. |
 | Editing surface | One `contentEditable` root that the editor owns completely. |
 | Input | Cancel `beforeinput` and apply a model command. IME composition is the one exception: let the browser edit the DOM, then read the result back on `compositionend`. |
