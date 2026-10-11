@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>editor React playground</title>
+    <style>
+      body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background: #f7f7f8; color: #1f2328; }
+      main { max-width: 640px; margin: 40px auto; padding: 0 16px; }
+      nav { font-size: 13px; color: #8b919a; margin-bottom: 16px; }
+      nav a { color: inherit; }
+      .comment { background: #fff; border: 1px solid #e3e4e8; border-radius: 10px; padding: 10px 14px; }
+      .comment:focus-within { border-color: #b9bcc6; }
+      .row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 12px; color: #8b919a; }
+      button { font: inherit; padding: 4px 12px; border-radius: 6px; border: 1px solid #d0d3d9; background: #fff; cursor: pointer; }
+      ul { padding-left: 18px; }
+      li { white-space: pre-wrap; font-size: 13px; margin-bottom: 8px; }
+      @media (prefers-color-scheme: dark) { body { background: #111214; color: #e6e6e6; } .comment, button { background: #18191b; border-color: #2a2c30; color: inherit; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav><a href="./index.html">Core</a> · <strong>React</strong></nav>
+      <div id="app"></div>
+    </main>
+    <script type="module" src="./react.tsx"></script>
+  </body>
+</html>

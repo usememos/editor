@@ -1,0 +1,15 @@
+{
+  "name": "@editor/core",
+  "version": "0.0.0",
+  "description": "Framework-agnostic block editor for CommonMark + GFM Markdown. Zero runtime dependencies.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "license": "MIT",
+  "sideEffects": false,
+  "imports": {
+    "#entities": {
+      "browser": "./src/markdown/entities.dom.ts",
+      "default": "./src/markdown/entities.ts"
+    }
+  }
+}
