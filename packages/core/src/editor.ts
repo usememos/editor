@@ -647,7 +647,9 @@ export class Editor {
       if (key === 'e' && !e.shiftKey) return handled(() => this.toggleMark('code'));
       if (key === 'x' && e.shiftKey) return handled(() => this.toggleMark('strike'));
       if (key === 'k' && !e.shiftKey) return handled(() => this.openLinkPopover());
-      if (e.key === '/' && !e.shiftKey) return handled(() => this.openBlockMenu(this.state.selection.focus.blockId));
+      if (e.key === '/' && !e.shiftKey && this.hasBlockMenu(this.state.selection.focus.blockId)) {
+        return handled(() => this.openBlockMenu(this.state.selection.focus.blockId));
+      }
       if (key === 'v' && e.shiftKey) {
         // The paste event that follows inserts plain text.
         this.plainPasteNext = true;
@@ -898,8 +900,17 @@ export class Editor {
     return cmd.isBlockTypeActive({ ...this.state, selection: caret(block.id, 0) }, spec);
   }
 
+  /**
+   * Only large blocks get the handle and block menu: tables and code blocks.
+   * Other blocks change type through the slash menu or the toolbar.
+   */
+  hasBlockMenu(blockId: string): boolean {
+    const block = this.state.doc.blocks.find((b) => b.id === blockId);
+    return block?.type === 'table' || block?.type === 'code';
+  }
+
   openBlockMenu(blockId: string, anchor?: DOMRect): void {
-    if (this.readOnly) return;
+    if (this.readOnly || !this.hasBlockMenu(blockId)) return;
     this.closeSlash();
     this.toolbar?.hide();
     // Keep the caret in the table cell for table actions; otherwise move it into the block.
@@ -1027,7 +1038,8 @@ export class Editor {
     }
     // On touch devices there is no hover, so the handle follows the caret.
     if (focused && !this.readOnly && typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) {
-      this.handle.showFor(pos.blockId);
+      if (this.hasBlockMenu(pos.blockId)) this.handle.showFor(pos.blockId);
+      else this.handle.hide();
     }
     if (!focused && this.blockMenu.isOpen && !this.root.ownerDocument.activeElement?.closest?.('.mbe-ui')) this.blockMenu.hide();
     this.syncActiveDescendant();

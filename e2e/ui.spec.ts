@@ -118,35 +118,41 @@ test('link: pasting a URL over selected text', async ({ page }) => {
   expect(await md(page)).toBe('click [here](https://x.dev)\n');
 });
 
-test('block handle: hover shows it, the menu duplicates and deletes', async ({ page }) => {
-  await page.keyboard.type('first');
+test('block handle: only tables and code blocks have it; the menu duplicates and deletes', async ({ page }) => {
+  await page.keyboard.type('intro');
   await page.keyboard.press('Enter');
-  await page.keyboard.type('second');
-  await page.locator('#editor p').first().hover();
+  await page.keyboard.type('```js ');
+  await page.keyboard.type('let a = 1;');
   const handle = page.locator('.mbe-handle');
+  await page.locator('#editor p').first().hover();
+  await page.waitForTimeout(400); // past the handle's hide delay
+  await expect(handle).toBeHidden();
+  await page.locator('#editor .mbe-code pre').hover();
   await expect(handle).toBeVisible();
   await handle.click();
   const menu = page.locator('.mbe-block-menu');
-  await expect(menu).toBeVisible();
+  await expect(menu.locator('.mbe-menu-item')).toHaveText([/Duplicate/, /Delete/]);
   await menu.locator('.mbe-menu-item', { hasText: 'Duplicate' }).click();
-  expect(await blocks(page)).toEqual(['p:first', 'p:first', 'p:second']);
-  await page.locator('#editor p').last().hover();
+  expect(await blocks(page)).toEqual(['p:intro', 'code(js):let a = 1;', 'code(js):let a = 1;']);
+  await page.locator('#editor .mbe-code pre').last().hover();
   await handle.click();
   await menu.locator('.mbe-menu-item', { hasText: 'Delete' }).click();
-  expect(await blocks(page)).toEqual(['p:first', 'p:first']);
+  expect(await blocks(page)).toEqual(['p:intro', 'code(js):let a = 1;']);
 });
 
-test('block menu with Ctrl+/: keyboard only, no Turn into section', async ({ page }) => {
+test('block menu with Ctrl+/: opens in a table cell, not in a paragraph', async ({ page }) => {
   await page.keyboard.type('item');
-  await page.keyboard.press('Enter');
-  await page.keyboard.type('next');
   await page.keyboard.press('Control+/');
   const menu = page.locator('.mbe-block-menu');
-  await expect(menu).toBeVisible();
-  await expect(menu.locator('.mbe-menu-item')).toHaveText([/Duplicate/, /Delete/]);
-  await page.keyboard.press('ArrowDown');
+  await expect(menu).toBeHidden();
   await page.keyboard.press('Enter');
-  expect(await blocks(page)).toEqual(['p:item']);
+  await page.keyboard.type('/table');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('A');
+  await page.keyboard.press('Control+/');
+  await expect(menu).toBeVisible();
+  await menu.locator('.mbe-menu-item', { hasText: 'Add column right' }).click();
+  expect(await blocks(page)).toEqual(['p:item', 'table:A|||/|||/|||']);
   await expect(menu).toBeHidden();
 });
 

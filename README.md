@@ -3,7 +3,7 @@
 A block editor for standard Markdown. "editor" is a working name.
 
 - Markdown in, Markdown out: CommonMark plus GFM tables, task lists and strikethrough.
-- Block editing: slash menu, block handles, a formatting toolbar, and Markdown shortcuts.
+- Block editing: slash menu, a formatting toolbar, Markdown shortcuts, and a block handle on tables and code blocks.
 - `@editor/core` has zero runtime dependencies and works without a framework. `@editor/react` is a thin React wrapper.
 
 Status: v0 in development. The spec is the source of truth for scope; see [docs/architecture.md](docs/architecture.md) for how it works.
@@ -67,7 +67,7 @@ Every color, font and size is a CSS custom property (`--mbe-text`, `--mbe-accent
 | `/` | Slash menu |
 | Mod+B, Mod+I, Mod+E, Mod+Shift+X | Bold, italic, code, strikethrough |
 | Mod+K | Link |
-| Mod+/ | Block menu |
+| Mod+/ | Block menu, in a table or code block |
 | Mod+Z, Mod+Shift+Z (Ctrl+Y) | Undo, redo |
 | Shift+Enter | Line break inside a block |
 | Tab, Shift+Tab | Indent and outdent list items; next and previous table cell |

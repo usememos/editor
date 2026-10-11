@@ -67,7 +67,7 @@ Each history entry is a snapshot of `{ doc, selection }` from before a change. T
 
 - **Popups** are appended to `document.body` with `position: fixed`, so a parent with `overflow: hidden` (a chat input, a modal) does not clip them. They copy the editor's theme variables and flip above the anchor when there is no room below.
 - **Slash menu** opens on `/` (or the full-width `／` from Japanese IMEs) at the start of a block or after a space. Typing filters it. It closes when the query passes three characters with no match. The menu is a listbox wired to the editor with `aria-activedescendant`. It rebuilds only when the query changes, so a late `selectionchange` does not reset the highlighted item.
-- **Block handle** appears on hover, and follows the caret on touch devices. It opens the block menu: table row/column/alignment actions (in a table), Duplicate and Delete. Changing a block's type is done from the toolbar's Turn into dropdown or the slash menu. Mod+/ opens the same menu from the keyboard.
+- **Block handle** appears on hover next to tables and code blocks only, and follows the caret into them on touch devices. It opens the block menu: Duplicate, Delete and, with the caret in a table cell, row, column and alignment actions. Mod+/ opens the same menu from the keyboard inside those blocks. Other blocks have no handle; they change type through the slash menu or the toolbar's Turn into dropdown.
 - **Formatting toolbar** appears over a non-empty selection: a Turn into dropdown, bold, italic, strikethrough, code and link. Buttons show their state with `aria-pressed`. On touch devices it sits below the selection, away from the native selection menu.
 
 ## Clipboard

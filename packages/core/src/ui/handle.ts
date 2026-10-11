@@ -1,5 +1,6 @@
-// The block handle shown to the left of the hovered block. Clicking it opens
-// the block menu. On touch devices it follows the block with the caret.
+// The block handle shown to the left of the hovered table or code block.
+// Clicking it opens the block menu. On touch devices it follows the block
+// with the caret. Other blocks have no handle.
 
 import type { Editor } from '../editor';
 import { BLOCK_ATTR } from '../view/dom';
@@ -46,7 +47,9 @@ export class BlockHandle {
     let node: Element | null = target;
     while (node && node.parentElement !== this.editor.root) node = node.parentElement;
     if (!node || !node.hasAttribute(BLOCK_ATTR)) return;
-    this.showFor(node.getAttribute(BLOCK_ATTR)!);
+    const blockId = node.getAttribute(BLOCK_ATTR)!;
+    if (this.editor.hasBlockMenu(blockId)) this.showFor(blockId);
+    else if (this.blockId !== null) this.scheduleHide();
   }
 
   /** Shows the handle next to a block. */
