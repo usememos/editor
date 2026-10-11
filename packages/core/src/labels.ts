@@ -13,7 +13,6 @@ export const DEFAULT_LABELS = {
   table: 'Table',
   divider: 'Divider',
   noResults: 'No results',
-  turnInto: 'Turn into',
   duplicate: 'Duplicate',
   delete: 'Delete',
   bold: 'Bold',

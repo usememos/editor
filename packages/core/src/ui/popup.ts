@@ -94,7 +94,6 @@ export interface MenuItem {
   icon?: string;
   /** Extra words that match when filtering. */
   aliases?: string[];
-  active?: boolean;
   danger?: boolean;
   run: () => void;
 }
@@ -154,7 +153,6 @@ export class Menu {
         row.className = 'mbe-menu-item';
         row.id = `${this.id}-${i}`;
         row.setAttribute('role', this.el.getAttribute('role') === 'menu' ? 'menuitem' : 'option');
-        if (item.active) row.classList.add('mbe-active');
         if (item.danger) row.classList.add('mbe-danger');
         const icon = doc.createElement('span');
         icon.className = 'mbe-menu-icon';

@@ -2,7 +2,7 @@
 
 import type { Editor } from '../editor';
 import type { Mark } from '../model';
-import { Menu, Popup, isMac, isTouch } from './popup';
+import { Popup, isMac, isTouch } from './popup';
 
 const mod = (key: string) => (isMac ? `⌘${key}` : `Ctrl+${key}`);
 
@@ -20,12 +20,10 @@ const MARK_BUTTONS: MarkButton[] = [
   { mark: 'code', label: 'inlineCode', text: '</>', shortcut: mod('E') },
 ];
 
-export class BlockToolbar {
+export class FormatToolbar {
   private readonly popup: Popup;
-  private readonly typeButton: HTMLButtonElement;
   private readonly markButtons = new Map<Mark, HTMLButtonElement>();
   private readonly linkButton: HTMLButtonElement;
-  private readonly typeMenu: Menu;
 
   constructor(private readonly editor: Editor) {
     const doc = editor.root.ownerDocument;
@@ -46,9 +44,6 @@ export class BlockToolbar {
     };
 
     const labels = editor.labels;
-    this.typeButton = button('', labels.turnInto, 'mbe-tool-type', () => this.toggleTypeMenu());
-    this.typeButton.setAttribute('aria-haspopup', 'menu');
-    el.appendChild(separator(doc));
     for (const b of MARK_BUTTONS) {
       const btn = button(b.text, `${labels[b.label]} (${b.shortcut})`, `mbe-tool-${b.mark}`, () => {
         editor.toggleMark(b.mark);
@@ -59,12 +54,6 @@ export class BlockToolbar {
     }
     el.appendChild(separator(doc));
     this.linkButton = button(labels.link, `${labels.link} (${mod('K')})`, 'mbe-tool-link', () => editor.openLinkPopover());
-
-    this.typeMenu = new Menu(editor.root, 'mbe-type-menu', 'menu');
-    this.typeMenu.onPicked = () => {
-      this.typeMenu.hide();
-      this.update();
-    };
   }
 
   get isOpen(): boolean {
@@ -77,33 +66,23 @@ export class BlockToolbar {
     this.update();
     // On touch devices the system text menu sits above the selection.
     this.popup.show(rect, isTouch() ? 'below' : 'above', 8);
-    if (this.typeMenu.isOpen) this.typeMenu.popup.show(this.typeButton.getBoundingClientRect(), 'below');
   }
 
   hide(): void {
     this.popup.hide();
-    this.typeMenu.hide();
   }
 
   destroy(): void {
     this.popup.destroy();
-    this.typeMenu.destroy();
   }
 
   private update(): void {
-    this.typeButton.textContent = `${this.editor.currentTypeLabel()} ▾`;
     for (const [mark, btn] of this.markButtons) {
       const on = this.editor.isMarkActive(mark);
       btn.classList.toggle('mbe-active', on);
       btn.setAttribute('aria-pressed', String(on));
     }
     this.linkButton.classList.toggle('mbe-active', this.editor.activeLinkHref() !== null);
-  }
-
-  private toggleTypeMenu(): void {
-    if (this.typeMenu.isOpen) return this.typeMenu.hide();
-    this.typeMenu.setSections([{ items: this.editor.turnIntoItems() }]);
-    this.typeMenu.popup.show(this.typeButton.getBoundingClientRect(), 'below');
   }
 }
 

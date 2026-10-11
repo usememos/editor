@@ -36,7 +36,7 @@ import {
   samePosition,
   startOf,
 } from './model';
-import { BlockToolbar, LinkPopover } from './ui/toolbar';
+import { FormatToolbar, LinkPopover } from './ui/toolbar';
 import { BlockHandle } from './ui/handle';
 import { Menu, type MenuItem, type MenuSection, isMac, isTouch, matches } from './ui/popup';
 import { BlockRenderer, contentElement, domText, domToPosition, positionToDom, safeHref } from './view/dom';
@@ -84,7 +84,7 @@ interface BlockItem {
   spec: cmd.BlockTypeSpec;
 }
 
-/** Block types for the slash menu and the toolbar's Turn into dropdown. Each label is `labels[id]`. */
+/** Block types for the slash menu. Each label is `labels[id]`. */
 const BLOCK_ITEMS: readonly BlockItem[] = [
   { id: 'text', icon: 'T', aliases: ['paragraph', 'plain'], spec: { type: 'paragraph' } },
   { id: 'heading1', icon: 'H1', aliases: ['h1', 'title'], spec: { type: 'heading', level: 1 } },
@@ -133,7 +133,7 @@ export class Editor {
   private readonly slashMenu: Menu;
   private slash: { blockId: string; from: number; query?: string } | null = null;
   private readonly blockMenu: Menu;
-  private readonly toolbar: BlockToolbar | null;
+  private readonly toolbar: FormatToolbar | null;
   private readonly linkPopover: LinkPopover;
   private readonly handle: BlockHandle;
   private hintEl: HTMLElement | null = null;
@@ -159,7 +159,7 @@ export class Editor {
     this.blockMenu = new Menu(root, 'mbe-block-menu', 'menu');
     this.blockMenu.onPicked = () => this.blockMenu.hide();
     this.linkPopover = new LinkPopover(this);
-    this.toolbar = options.toolbar === false ? null : new BlockToolbar(this);
+    this.toolbar = options.toolbar === false ? null : new FormatToolbar(this);
     this.handle = new BlockHandle(this);
 
     this.listen(root, 'beforeinput', (e) => this.onBeforeInput(e as InputEvent));
@@ -842,13 +842,17 @@ export class Editor {
     return ids
       .map((id) => BLOCK_ITEMS.find((b) => b.id === id))
       .filter((b): b is BlockItem => !!b)
-      .map<MenuItem>((b) => ({ ...this.blockItem(b), aliases: b.aliases, run: () => this.pickSlashItem(b.spec) }))
+      .map<MenuItem>((b) => ({
+        id: b.id,
+        label: this.labels[b.id],
+        icon: b.icon,
+        aliases: b.aliases,
+        run: () => this.pickSlashItem(b.spec),
+      }))
       .filter((item) => matches(item, query));
   }
 
-  private blockItem(b: BlockItem): Pick<MenuItem, 'id' | 'label' | 'icon'> {
-    return { id: b.id, label: this.labels[b.id], icon: b.icon };
-  }
+
 
   private pickSlashItem(spec: cmd.BlockTypeSpec): void {
     const slash = this.slash;
@@ -890,7 +894,7 @@ export class Editor {
 
   /**
    * Only large blocks get the handle and block menu: tables and code blocks.
-   * Other blocks change type through the slash menu or the toolbar.
+   * Other blocks change type through the slash menu or Markdown shortcuts.
    */
   hasBlockMenu(blockId: string): boolean {
     const block = this.state.doc.blocks.find((b) => b.id === blockId);
@@ -921,23 +925,6 @@ export class Editor {
 
   // -------------------------------------------------------------------------
   // Toolbar and link popover (see ui/toolbar.ts)
-
-  /** Turn into items for the toolbar's dropdown. */
-  turnIntoItems(): MenuItem[] {
-    const block = getBlock(this.state.doc, this.state.selection.focus.blockId);
-    return BLOCK_ITEMS.filter((b) => b.spec.type !== 'table' && b.spec.type !== 'divider').map((b) => ({
-      ...this.blockItem(b),
-      active: cmd.isBlockType(block, b.spec),
-      run: () => this.run((s) => cmd.setBlockType(s, b.spec)),
-    }));
-  }
-
-  /** Label of the current block type, for the toolbar's dropdown button. */
-  currentTypeLabel(): string {
-    const block = getBlock(this.state.doc, this.state.selection.focus.blockId);
-    const item = BLOCK_ITEMS.find((b) => cmd.isBlockType(block, b.spec));
-    return this.labels[item?.id ?? 'text'];
-  }
 
   isMarkActive(mark: Mark): boolean {
     return cmd.isMarkActive(this.state, mark);

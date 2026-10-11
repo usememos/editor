@@ -237,7 +237,6 @@
   color: var(--mbe-muted);
 }
 .mbe-menu-label { flex: 1; }
-.mbe-menu-item.mbe-active .mbe-menu-label::after { content: ' ✓'; color: var(--mbe-accent); }
 .mbe-menu-empty { padding: 6px 8px; color: var(--mbe-muted); }
 
 .mbe-toolbar { display: flex; align-items: center; gap: 2px; padding: 3px; }

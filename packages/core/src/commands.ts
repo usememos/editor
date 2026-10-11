@@ -474,13 +474,6 @@ function convert(block: TextBlock, spec: BlockTypeSpec): TextBlock {
   }
 }
 
-/** True if the block has this type (and heading level or list type). Used for active states in menus. */
-export function isBlockType(block: Block, spec: BlockTypeSpec): boolean {
-  if (block.type === 'heading') return spec.type === 'heading' && block.level === spec.level;
-  if (block.type === 'listItem') return spec.type === 'listItem' && block.listType === spec.listType;
-  return block.type === spec.type;
-}
-
 /**
  * Changes the type of every text block touched by the selection. Text and IDs
  * are kept. Tables and dividers are inserted instead (see insertBlock).

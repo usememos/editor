@@ -83,12 +83,11 @@ test('formatting toolbar: appears on selection and applies marks', async ({ page
   await expect(toolbar).toBeHidden();
 });
 
-test('formatting toolbar: Turn into changes the block type', async ({ page }) => {
-  await page.keyboard.type('quote me');
+test('formatting toolbar: has only mark and link buttons', async ({ page }) => {
+  await page.keyboard.type('format me');
   await page.keyboard.press('Shift+Home');
-  await page.locator('.mbe-toolbar .mbe-tool-type').click();
-  await page.locator('.mbe-type-menu .mbe-menu-item', { hasText: 'Quote' }).click();
-  expect(await blocks(page)).toEqual(['quote:quote me']);
+  const labels = await page.locator('.mbe-toolbar button').evaluateAll((els) => els.map((el) => el.textContent));
+  expect(labels).toEqual(['B', 'I', 'S', '</>', 'Link']);
 });
 
 test('link: Ctrl+K on a selection, then edit and remove', async ({ page }) => {
