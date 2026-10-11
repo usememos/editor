@@ -101,16 +101,6 @@ test('Ctrl+Backspace deletes a word', async ({ page }) => {
   expect(await page.evaluate(() => (window as any).editor.getDoc().blocks[0].content[0].text)).toBe('hello brave ');
 });
 
-test('Alt+ArrowUp moves a block up', async ({ page }) => {
-  await page.keyboard.type('a');
-  await page.keyboard.press('Enter');
-  await page.keyboard.type('b');
-  await page.keyboard.press('Alt+ArrowUp');
-  expect(await md(page)).toBe('b\n\na\n');
-  await page.keyboard.type('!');
-  expect(await md(page)).toBe('b!\n\na\n');
-});
-
 test('pasting Markdown inserts blocks', async ({ page }) => {
   await page.keyboard.type('ab');
   await page.keyboard.press('ArrowLeft');

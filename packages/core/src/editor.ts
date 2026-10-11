@@ -370,9 +370,6 @@ export class Editor {
       if (key === 'e') return handled(() => this.toggleMark('code'));
       if (key === 'x' && e.shiftKey) return handled(() => this.toggleMark('strike'));
     }
-    if (e.altKey && !mod && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
-      return handled(() => this.run((s) => cmd.moveBlocks(s, e.key === 'ArrowUp' ? -1 : 1)));
-    }
     if (e.key === 'Tab') {
       // Reserved for list indentation. Keep focus in the editor.
       e.preventDefault();

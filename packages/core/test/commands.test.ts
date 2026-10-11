@@ -116,13 +116,6 @@ describe('input rules', () => {
   });
 });
 
-describe('moveBlocks', () => {
-  it('moves the current block down', () => {
-    const s = cmd.moveBlocks(at(state('a\n\nb\n\nc'), 0, 0), 1);
-    expect(md(s)).toBe('b\n\na\n\nc\n');
-  });
-});
-
 describe('insertBlocks (paste)', () => {
   it('merges a single pasted paragraph inline', () => {
     const s = cmd.insertBlocks(at(state('ab'), 0, 1), parseMarkdown('**X**').blocks);

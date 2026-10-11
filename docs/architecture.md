@@ -40,7 +40,7 @@ editor.destroy();
 - A caret position is `{ blockId, offset }`, where `offset` counts UTF-16 code units in the block's plain text.
 - Every edit returns new objects for the blocks it touches and reuses the rest. The view and history both depend on this.
 
-Why the model is flat: block editors move, convert and select whole blocks. A flat list makes those operations simple array edits, and gives every block a stable ID for the block handle menu and keyboard moves.
+Why the model is flat: block editors move, convert and select whole blocks. A flat list makes those operations simple array edits, and gives every block a stable ID for the block handle menu.
 
 How the remaining v0 blocks will map onto the flat model (planned for step 3):
 
@@ -65,7 +65,7 @@ The root's children are block elements (`<p>`, `<h1>`…) marked with `data-bloc
 1. **`beforeinput`, cancelled.** `insertText`, `insertParagraph`, all `delete*` types, `historyUndo`/`historyRedo` and `format*` are mapped to model commands. For word and line deletes, the editor uses the browser's `getTargetRanges()`, so it follows the platform's own word boundaries.
 2. **IME composition, not cancelled.** Browsers do not allow cancelling composition. While a composition is in progress, the editor does not touch the DOM. On `compositionend`, it compares each block's DOM text with the model text, turns the difference into one delete and one insert, and re-renders. If the selection spans blocks when composition starts, the selection is deleted first so the composition always happens inside one block.
 3. **Fallback.** Any `input` event the editor did not cancel (some Android keyboards) goes through the same DOM read-back as composition.
-4. **Keyboard shortcuts** are handled in `keydown`: undo/redo, Mod+B/I/E, Mod+Shift+X, and Alt+↑/↓ to move blocks.
+4. **Keyboard shortcuts** are handled in `keydown`: undo/redo, Mod+B/I/E and Mod+Shift+X.
 5. **Markdown shortcuts.** Typing `#`…`######` and a space at the start of a paragraph turns it into a heading. Undo restores the typed characters. Shortcuts for lists, quotes, code and dividers follow in step 3.
 
 Selection: on `selectionchange`, the DOM selection is read into the model. After each change, the model selection is written back to the DOM. Mapping uses text offsets within a block element.
@@ -100,7 +100,7 @@ Normalization on save (accepted, per the agreed scope):
 
 ## What the prototype proved
 
-Run `npm test` (34 unit tests) and `npm run test:e2e` (13 browser tests in Chromium). All pass.
+Run `npm test` (33 unit tests) and `npm run test:e2e` (12 browser tests in Chromium). All pass.
 
 Browser tests drive the real editor with keyboard events and cover:
 
@@ -109,7 +109,6 @@ Browser tests drive the real editor with keyboard events and cover:
 - Ctrl+B for the next typed text and for a selection
 - typing over a selection that spans three blocks
 - Ctrl+Backspace word deletion through `getTargetRanges()`
-- Alt+↑ block moves
 - pasting multi-block Markdown
 - IME composition (Japanese and Korean, simulated through the Chrome DevTools Protocol), inside bold text, and over a cross-block selection
 - Backspace on an emoji with a skin-tone modifier removes the whole emoji

@@ -189,19 +189,6 @@ export function setBlockType(state: EditorState, spec: BlockTypeSpec | 'paragrap
   return { ...state, doc: { blocks: replaceBlocks(state, start, updated.length, ...updated) } };
 }
 
-/** Alt+Up / Alt+Down. Moves the selected blocks one position; the selection moves with them. */
-export function moveBlocks(state: EditorState, direction: -1 | 1): EditorState {
-  const { from, to } = orderedRange(state.doc, state.selection);
-  const start = blockIndex(state.doc, from.blockId);
-  const end = blockIndex(state.doc, to.blockId);
-  if (direction === -1 && start === 0) return state;
-  if (direction === 1 && end === state.doc.blocks.length - 1) return state;
-  const blocks = state.doc.blocks.slice();
-  const moved = blocks.splice(start, end - start + 1);
-  blocks.splice(start + direction, 0, ...moved);
-  return { ...state, doc: { blocks } };
-}
-
 /**
  * Markdown shortcuts typed at the start of a paragraph, e.g. "## " turns the
  * paragraph into a level 2 heading. Runs after a space is typed.
