@@ -1,0 +1,91 @@
+// The block handle shown to the left of the hovered block. Clicking it opens
+// the block menu. On touch devices it follows the block with the caret.
+
+import type { Editor } from '../editor';
+import { BLOCK_ATTR } from '../view/dom';
+
+export class BlockHandle {
+  private readonly el: HTMLButtonElement;
+  private blockId: string | null = null;
+  private hideTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly cleanup: (() => void)[] = [];
+
+  constructor(
+    private readonly editor: Editor,
+    private readonly onOpen: (blockId: string, rect: DOMRect) => void,
+  ) {
+    const root = editor.root;
+    const doc = root.ownerDocument;
+    this.el = doc.createElement('button');
+    this.el.type = 'button';
+    this.el.className = 'mbe-ui mbe-handle';
+    this.el.textContent = '⋮⋮';
+    this.el.setAttribute('aria-label', editor.labels.blockHandle);
+    this.el.setAttribute('aria-haspopup', 'menu');
+    this.el.tabIndex = -1;
+    this.el.hidden = true;
+
+    const on = <K extends keyof HTMLElementEventMap>(target: HTMLElement, type: K, fn: (e: HTMLElementEventMap[K]) => void) => {
+      target.addEventListener(type, fn);
+      this.cleanup.push(() => target.removeEventListener(type, fn));
+    };
+    on(root, 'mousemove', (e) => this.onMove(e));
+    on(root, 'mouseleave', () => this.scheduleHide());
+    on(this.el, 'mouseenter', () => this.cancelHide());
+    on(this.el, 'mouseleave', () => this.scheduleHide());
+    // Keep focus and the selection in the editor.
+    on(this.el, 'mousedown', (e) => e.preventDefault());
+    on(this.el, 'click', () => {
+      if (this.blockId) this.onOpen(this.blockId, this.el.getBoundingClientRect());
+    });
+  }
+
+  private onMove(e: MouseEvent): void {
+    if (this.editor.isReadOnly()) return;
+    const target = e.target as Element | null;
+    let node: Element | null = target;
+    while (node && node.parentElement !== this.editor.root) node = node.parentElement;
+    if (!node || !node.hasAttribute(BLOCK_ATTR)) return;
+    this.showFor(node.getAttribute(BLOCK_ATTR)!);
+  }
+
+  /** Shows the handle next to a block. */
+  showFor(blockId: string): void {
+    this.cancelHide();
+    const blockEl = this.editor.blockElement(blockId);
+    if (!blockEl) return this.hide();
+    const doc = this.editor.root.ownerDocument;
+    if (!this.el.isConnected) doc.body.appendChild(this.el);
+    this.blockId = blockId;
+    this.el.hidden = false;
+    const rect = blockEl.getBoundingClientRect();
+    // Center on the first line of the block.
+    const lineHeight = parseFloat(doc.defaultView!.getComputedStyle(blockEl).lineHeight) || 24;
+    const firstLine = Math.min(rect.height, lineHeight);
+    const size = this.el.offsetHeight || 22;
+    this.el.style.left = `${Math.round(rect.left - (this.el.offsetWidth || 20) - 6)}px`;
+    this.el.style.top = `${Math.round(rect.top + firstLine / 2 - size / 2)}px`;
+  }
+
+  hide(): void {
+    this.cancelHide();
+    this.el.hidden = true;
+    this.blockId = null;
+  }
+
+  private scheduleHide(): void {
+    this.cancelHide();
+    this.hideTimer = setTimeout(() => this.hide(), 250);
+  }
+
+  private cancelHide(): void {
+    if (this.hideTimer !== null) clearTimeout(this.hideTimer);
+    this.hideTimer = null;
+  }
+
+  destroy(): void {
+    this.cancelHide();
+    for (const fn of this.cleanup) fn();
+    this.el.remove();
+  }
+}

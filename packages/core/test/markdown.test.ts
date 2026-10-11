@@ -49,12 +49,12 @@ describe('parseMarkdown', () => {
   it('parses headings and paragraphs', () => {
     const doc = parseMarkdown('# Title\n\nPara one\ncontinues\n\nSetext\n---\n');
     expect(doc.blocks.map((b) => (b.type === 'heading' ? `h${b.level}` : 'p'))).toEqual(['h1', 'p', 'h2']);
-    expect(doc.blocks[1]!.content).toEqual([t('Para one continues')]);
+    expect(doc.blocks[1]).toMatchObject({ type: 'paragraph', content: [t('Para one continues')] });
   });
 
   it('strips an ATX closing sequence', () => {
     const [h] = parseMarkdown('## Title ##').blocks;
-    expect(h!.content).toEqual([t('Title')]);
+    expect(h).toMatchObject({ type: 'heading', level: 2, content: [t('Title')] });
   });
 });
 
@@ -97,5 +97,50 @@ describe('round trip', () => {
     const once = serializeMarkdown(doc);
     expect(serializeMarkdown(parseMarkdown(once))).toBe(once);
     expect(once).toBe('Some *text* with **strong** and *em* across lines.\n\n# Title\n');
+  });
+});
+
+describe('performance', () => {
+  it('parses 100 KB of Markdown in well under 100 ms', () => {
+    const chunk = [
+      '# Heading with *emphasis* and `code`',
+      '',
+      'A paragraph with **bold**, _italic_, ~~strike~~, a [link](https://example.com "title"), an ![image](a.png),',
+      'a [reference][ref], <span>inline html</span>, &amp; entities and a hard break\\',
+      'on the next line.',
+      '',
+      '- item one',
+      '- item **two**',
+      '  - nested [ ] text',
+      '  - [x] task',
+      '1. first',
+      '2. second',
+      '',
+      '> quoted *text*',
+      '> continues',
+      '',
+      '```js',
+      'const answer = 42;',
+      '```',
+      '',
+      '| a | b |',
+      '| :- | -: |',
+      '| `c` | **d** |',
+      '',
+      '[ref]: https://example.com/ref',
+      '',
+      '',
+    ].join('\n');
+    const src = chunk.repeat(Math.ceil(100_000 / chunk.length));
+    expect(src.length).toBeGreaterThanOrEqual(100_000);
+    // Warm up the JIT, then take the best of a few runs.
+    for (let i = 0; i < 3; i++) parseMarkdown(src);
+    let best = Infinity;
+    for (let i = 0; i < 5; i++) {
+      const start = performance.now();
+      parseMarkdown(src);
+      best = Math.min(best, performance.now() - start);
+    }
+    expect(best).toBeLessThan(100);
   });
 });

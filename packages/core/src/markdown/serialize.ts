@@ -1,127 +1,696 @@
-// Markdown serializer. Output is normalized, not a copy of the original
-// source: `*` for italic, `**` for bold, `~~` for strikethrough, ATX headings,
-// one blank line between blocks, and empty paragraphs dropped.
+// Markdown serializer: document model → Markdown.
+//
+// Output is normalized, not a copy of the original source:
+//
+// - `**bold**`, `*italic*`, `~~strike~~`, code spans with a fence longer than
+//   any backtick run inside, `[text](url)`, `<url>` autolinks, `![alt](src)`.
+// - ATX headings, `-` bullets, ordered items numbered from the list's start,
+//   `- [ ]` / `- [x]` tasks, nested items indented to the parent's content
+//   column, backtick-fenced code, `---` dividers, GFM tables.
+// - One blank line between blocks, except between list items (tight lists)
+//   and between adjacent quote blocks (one blockquote, a `>` line between
+//   paragraphs).
+// - Hard line breaks are a backslash at the end of the line. Where Markdown
+//   has no line breaks (headings, table cells), "\n" is written as `&#10;`.
+// - Empty paragraphs and quotes are dropped.
+//
+// Text is escaped so that it reads back as the same content, escaping only
+// what could change meaning. The invariant, checked by the tests for every
+// spec example, is save stability: serialize(parse(md)) is a fixed point.
 
-import { type Block, type Doc, type Inline, type Mark, MARK_ORDER, normalizeInline, sortMarks } from '../model';
+import {
+  type Block,
+  type Doc,
+  type Inline,
+  type ListItemBlock,
+  type Mark,
+  MARK_ORDER,
+  type Span,
+  inlineText,
+  normalizeInline,
+  sameMarks,
+  setMarkInRange,
+} from '../model';
+import { isUnicodePunctuation, isUnicodeWhitespace, parseInline } from './inline';
 
 export function serializeMarkdown(doc: Doc): string {
-  const parts = doc.blocks.map(serializeBlock).filter((s) => s !== '');
-  return parts.length ? parts.join('\n\n') + '\n' : '';
-}
-
-function serializeBlock(block: Block): string {
-  switch (block.type) {
-    case 'paragraph':
-      return escapeLineStart(serializeInline(block.content));
-    case 'heading': {
-      let text = serializeInline(block.content);
-      // A trailing "#" run would be read as the closing sequence.
-      text = text.replace(/(^|\s)(#+)$/, (_m, sp: string, hashes: string) => `${sp}\\${hashes}`);
-      return `${'#'.repeat(block.level)}${text ? ' ' + text : ''}`;
-    }
-  }
-}
-
-/** Escapes characters at the start of a paragraph that would start another block. */
-function escapeLineStart(text: string): string {
-  if (/^(#{1,6})(\s|$)/.test(text) || /^[>=]/.test(text) || /^[-+](\s|$)/.test(text) || /^-{3,}\s*$/.test(text)) {
-    return '\\' + text;
-  }
-  return text.replace(/^(\d{1,9})([.)])(\s|$)/, '$1\\$2$3');
-}
-
-const DELIMS: Record<Exclude<Mark, 'code'>, string> = { bold: '**', italic: '*', strike: '~~' };
-
-export function serializeInline(inline: Inline): string {
-  const spans = moveWhitespaceOutOfMarks(inline);
   let out = '';
-  const open: { mark: Mark; delim: string }[] = [];
+  let prev: Block | null = null;
+  const lists = new ListState();
 
-  spans.forEach((span, index) => {
-    const target: Mark[] = span.marks.filter((m) => m !== 'code');
-    // Close marks that end here. Closing an outer mark closes everything inside it.
-    let keep = 0;
-    while (keep < open.length && target.includes(open[keep]!.mark)) keep++;
-    const closedAt = out.length;
-    for (let k = open.length - 1; k >= keep; k--) out += open[k]!.delim;
-    const justClosedStar = out.length > closedAt && out.endsWith('*');
-    open.length = keep;
-
-    // Open new marks, the one that stays open longest first, so it is outermost.
-    const toOpen = target.filter((m) => !open.some((o) => o.mark === m));
-    toOpen.sort((a, b) => runEnd(spans, index, b) - runEnd(spans, index, a) || MARK_ORDER.indexOf(a) - MARK_ORDER.indexOf(b));
-    for (const m of toOpen) {
-      // "*" right after a closing "*" would merge into one delimiter run.
-      const delim = m === 'italic' && justClosedStar ? '_' : DELIMS[m as keyof typeof DELIMS];
-      out += delim;
-      open.push({ mark: m, delim });
+  for (const block of doc.blocks) {
+    // Markdown cannot represent empty paragraphs and quotes.
+    if ((block.type === 'paragraph' || block.type === 'quote') && block.content.length === 0) continue;
+    if (block.type !== 'listItem') lists.reset();
+    let text: string;
+    let separator = '\n\n';
+    switch (block.type) {
+      case 'paragraph':
+        text = serializeInline(block.content);
+        break;
+      case 'quote': {
+        text = prefixLines(serializeInline(block.content), '> ', '>');
+        // Adjacent quotes are paragraphs of one blockquote.
+        if (prev?.type === 'quote') separator = '\n>\n';
+        break;
+      }
+      case 'heading':
+        text = serializeHeading(block.level, block.content);
+        break;
+      case 'listItem': {
+        const item = lists.next(block, prev?.type === 'listItem' ? prev : null);
+        text = item.text;
+        if (prev?.type === 'listItem' && !item.blankLineBefore) separator = '\n';
+        break;
+      }
+      case 'code':
+        text = serializeCode(block.language, inlineText(block.content));
+        break;
+      case 'html':
+        text = inlineText(block.content);
+        break;
+      case 'table':
+        text = serializeTable(block.align, block.rows);
+        break;
+      case 'divider':
+        text = '---';
+        break;
     }
-
-    const prevChar = out[out.length - 1];
-    const nextSpan = spans[index + 1];
-    out += span.marks.includes('code') ? codeSpan(span.text) : escapeText(span.text, prevChar, nextSpan?.text[0]);
-  });
-  for (let k = open.length - 1; k >= 0; k--) out += open[k]!.delim;
-  return out;
+    if (out) out += separator;
+    out += text;
+    prev = block;
+  }
+  return out ? out + '\n' : '';
 }
 
-function runEnd(spans: Inline, from: number, mark: Mark): number {
-  let i = from;
-  while (i < spans.length && spans[i]!.marks.includes(mark)) i++;
-  return i;
+function prefixLines(text: string, prefix: string, emptyPrefix: string): string {
+  return text
+    .split('\n')
+    .map((line) => (line ? prefix + line : emptyPrefix))
+    .join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Blocks
+
+function serializeHeading(level: number, content: Inline): string {
+  let text = inlineToMarkdown(content, HEADING);
+  // A trailing run of "#" would be read as the closing sequence.
+  text = text.replace(/(^|[ \t])(#+)$/, (_m, sp: string, hashes: string) => `${sp}\\${hashes}`);
+  return '#'.repeat(level) + (text ? ' ' + text : '');
+}
+
+function longestRun(text: string, ch: string): number {
+  let longest = 0;
+  let run = 0;
+  for (const c of text) {
+    run = c === ch ? run + 1 : 0;
+    if (run > longest) longest = run;
+  }
+  return longest;
+}
+
+function serializeCode(language: string, text: string): string {
+  // A backtick fence cannot have backticks in its info string; use tildes then.
+  const ch = language.includes('`') ? '~' : '`';
+  const fence = ch.repeat(Math.max(3, longestRun(text, ch) + 1));
+  const info = language.replace(/\\(?=[!-/:-@[-`{-~]|$)/g, '\\\\').replace(/&(?=#?[A-Za-z0-9]+;)/g, '\\&');
+  return `${fence}${info}\n${text ? text + '\n' : ''}${fence}`;
+}
+
+function serializeTable(align: readonly (string | null)[], rows: readonly (readonly Inline[])[]): string {
+  // Pipes are escaped everywhere in a row, even in code spans: GFM splits
+  // cells before parsing inlines and turns `\|` back into `|`.
+  const row = (cells: readonly Inline[]) =>
+    '| ' + cells.map((cell) => inlineToMarkdown(cell, CELL).replace(/\|/g, '\\|')).join(' | ') + ' |';
+  const delimiter =
+    '| ' +
+    align.map((a) => (a === 'left' ? ':--' : a === 'center' ? ':-:' : a === 'right' ? '--:' : '---')).join(' | ') +
+    ' |';
+  const [header, ...body] = rows;
+  return [row(header ?? align.map(() => [])), delimiter, ...body.map(row)].join('\n');
 }
 
 /**
- * "**foo **bar" does not parse as bold, because a closing delimiter cannot
- * follow whitespace. Leading and trailing whitespace of a marked run is moved
- * outside the mark.
+ * Numbers and indents list items. Items at the same indent form one list
+ * until a shallower item or a different kind of list (bullet or ordered)
+ * comes. Tasks are bullets.
  */
-function moveWhitespaceOutOfMarks(inline: Inline): Inline {
-  const chars: { ch: string; marks: Set<Mark> }[] = [];
-  for (const span of inline) for (const ch of span.text) chars.push({ ch, marks: new Set(span.marks) });
-  for (const mark of ['bold', 'italic', 'strike'] as const) {
-    let i = 0;
-    while (i < chars.length) {
-      if (!chars[i]!.marks.has(mark)) {
-        i++;
-        continue;
-      }
-      let j = i;
-      while (j < chars.length && chars[j]!.marks.has(mark)) j++;
-      for (let k = i; k < j && /\s/.test(chars[k]!.ch); k++) chars[k]!.marks.delete(mark);
-      for (let k = j - 1; k >= i && /\s/.test(chars[k]!.ch); k--) chars[k]!.marks.delete(mark);
-      i = j;
-    }
+class ListState {
+  /** Per open nesting level: content column, list kind and last number. */
+  private levels: { column: number; ordered: boolean; number: number }[] = [];
+
+  reset(): void {
+    this.levels = [];
   }
-  return normalizeInline(chars.map((c) => ({ text: c.ch, marks: sortMarks(c.marks) })));
+
+  next(item: ListItemBlock, prev: ListItemBlock | null): { text: string; blankLineBefore: boolean } {
+    if (!prev) this.reset();
+    const prevLevel = this.levels.length - 1;
+    // An item cannot be nested more than one level below the previous one.
+    const level = Math.min(item.indent, this.levels.length);
+    const ordered = item.listType === 'ordered';
+    const indent = level === 0 ? 0 : this.levels[level - 1]!.column;
+    const same = this.levels[level];
+    const number = ordered && same?.ordered ? same.number + 1 : (item.start ?? 1);
+
+    const marker = ordered ? `${number}.` : '-';
+    const column = indent + marker.length + 1;
+    this.levels.length = level;
+    this.levels.push({ column, ordered, number });
+
+    let head = ' '.repeat(indent) + marker;
+    if (item.listType === 'task') head += item.checked ? ' [x]' : ' [ ]';
+    const lines = inlineToMarkdown(item.content, PARAGRAPH).split('\n');
+    const first = lines.shift()!;
+    if (first) head += ' ' + first;
+    const text = [head, ...lines.map((line) => (line ? ' '.repeat(column) + line : line))].join('\n');
+
+    // A nested list right after the parent's text must be able to interrupt
+    // that paragraph. Ordered lists not starting at 1 and empty items cannot,
+    // so they get a blank line before them (which only makes the list loose).
+    const prevHasText = prev !== null && (prev.content.length > 0 || prev.listType === 'task');
+    const cannotInterrupt = (ordered && number !== 1) || (item.content.length === 0 && item.listType !== 'task');
+    const blankLineBefore = level > prevLevel && prevHasText && cannotInterrupt;
+    return { text, blankLineBefore };
+  }
 }
 
-function codeSpan(text: string): string {
-  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((r) => r.length));
-  const fence = '`'.repeat(longest + 1);
-  const pad = text.startsWith('`') || text.endsWith('`') || (text.startsWith(' ') && text.endsWith(' ') && text.trim() !== '');
-  return pad ? `${fence} ${text} ${fence}` : `${fence}${text}${fence}`;
+// ---------------------------------------------------------------------------
+// Inline content
+
+interface InlineContext {
+  /** Escape block syntax at the start of each line (paragraph-like blocks). */
+  readonly lineStart: boolean;
+  /** How "\n" is written: a hard line break, or `&#10;` where lines cannot break. */
+  readonly newline: 'break' | 'entity';
+}
+
+const PARAGRAPH: InlineContext = { lineStart: true, newline: 'break' };
+const HEADING: InlineContext = { lineStart: false, newline: 'entity' };
+const CELL: InlineContext = { lineStart: false, newline: 'entity' };
+
+/** Serializes inline content as it appears in a paragraph. */
+export function serializeInline(inline: Inline): string {
+  return inlineToMarkdown(inline, PARAGRAPH);
+}
+
+type EmphasisMark = 'bold' | 'italic' | 'strike';
+const EMPHASIS: readonly EmphasisMark[] = ['bold', 'italic', 'strike'];
+
+function inlineToMarkdown(inline: Inline, ctx: InlineContext): string {
+  const spans = representableInline(inline);
+  const first = render(spans, ctx, STRATEGIES[0]!);
+  // Emphasis is the one place where the simple rules can fail: a delimiter
+  // that can both open and close may pair with the wrong partner when marks
+  // overlap. Check by parsing the output back, and if it does not give the
+  // same content, try the other strategies.
+  if (!spans.some((s) => s.marks.some((m) => m === 'bold' || m === 'italic' || m === 'strike'))) return first;
+  if (sameInline(parseInline(first), spans)) return first;
+  for (const strategy of STRATEGIES.slice(1)) {
+    const out = render(spans, ctx, strategy);
+    if (sameInline(parseInline(out), spans)) return out;
+  }
+  return first;
+}
+
+interface Strategy {
+  /** Delimiter for italic. With "_", bold and italic delimiters can never pair with each other. */
+  readonly italic: '*' | '_';
+  /** Write every word character next to a delimiter run as an entity. */
+  readonly encodeAll: boolean;
+}
+
+const STRATEGIES: readonly Strategy[] = [
+  { italic: '*', encodeAll: false },
+  { italic: '_', encodeAll: false },
+  { italic: '_', encodeAll: true },
+  { italic: '*', encodeAll: true },
+];
+
+function sameInline(a: Inline, b: Inline): boolean {
+  return (
+    a.length === b.length &&
+    a.every((s, i) => {
+      const t = b[i]!;
+      return (
+        s.text === t.text &&
+        s.link === t.link &&
+        sameMarks(s.marks, t.marks) &&
+        s.image?.src === t.image?.src &&
+        s.image?.alt === t.image?.alt &&
+        s.image?.title === t.image?.title
+      );
+    })
+  );
+}
+
+const reSpecWhitespace = /^[\t\n\f\r\p{Zs}]+|[\t\n\f\r\p{Zs}]+$/gu;
+
+/**
+ * The inline content as Markdown can represent it, which is what parsing the
+ * serialized output gives back:
+ * - Whitespace at the edges of a bold, italic or strike run moves outside it,
+ *   because `**foo **` is not valid emphasis.
+ * - A "\n" in a code span is a hard break outside the code span.
+ */
+export function representableInline(inline: Inline): Span[] {
+  let spans = normalizeInline(
+    inline.flatMap((s): Span[] => {
+      if (!s.marks.includes('code') || !s.text.includes('\n')) return [s];
+      const marks = s.marks.filter((m) => m !== 'code');
+      return s.text.split(/(\n)/).map((text) => (text === '\n' ? { ...s, text, marks } : { ...s, text }));
+    }),
+  );
+  for (const mark of EMPHASIS) {
+    const removals: [number, number][] = [];
+    let pos = 0;
+    let runStart = -1;
+    let runText = '';
+    const endRun = () => {
+      if (runStart < 0) return;
+      runText.replace(reSpecWhitespace, (ws: string, offset: number) => {
+        removals.push([runStart + offset, runStart + offset + ws.length]);
+        return ws;
+      });
+      runStart = -1;
+      runText = '';
+    };
+    for (const span of spans) {
+      if (span.marks.includes(mark)) {
+        if (runStart < 0) runStart = pos;
+        runText += span.text;
+      } else {
+        endRun();
+      }
+      pos += span.text.length;
+    }
+    endRun();
+    for (const [from, to] of removals) spans = setMarkInRange(spans, from, to, mark, false);
+  }
+  return spans;
+}
+
+// -- Tokens -----------------------------------------------------------------
+
+type Token =
+  | { kind: 'text'; text: string; encodeFirst: boolean; encodeLast: boolean }
+  | { kind: 'delim'; ch: string; count: number; open: boolean }
+  /** Output that is final: code spans, raw HTML, images, link syntax. */
+  | { kind: 'raw'; text: string };
+
+interface OpenMark {
+  mark: EmphasisMark;
+  ch: string;
+  count: number;
+}
+
+function emphasisMarks(span: Span): EmphasisMark[] {
+  return span.marks.filter((m): m is EmphasisMark => m === 'bold' || m === 'italic' || m === 'strike');
+}
+
+/** Builds the token list: text, delimiters for marks, and raw syntax. */
+function tokenize(spans: readonly Span[], ctx: InlineContext, italic: '*' | '_'): Token[] {
+  const tokens: Token[] = [];
+  const stack: OpenMark[] = [];
+
+  const closeTo = (depth: number) => {
+    for (let k = stack.length - 1; k >= depth; k--) {
+      tokens.push({ kind: 'delim', ch: stack[k]!.ch, count: stack[k]!.count, open: false });
+    }
+    stack.length = depth;
+  };
+
+  const runEnd = (mark: Mark, from: number, limit: number) => {
+    let i = from;
+    while (i < limit && spans[i]!.marks.includes(mark)) i++;
+    return i;
+  };
+
+  const openMarks = (marks: readonly EmphasisMark[], index: number, limit: number) => {
+    const toOpen = marks.filter((m) => !stack.some((o) => o.mark === m));
+    // The mark that stays open longest goes outermost.
+    toOpen.sort(
+      (a, b) => runEnd(b, index, limit) - runEnd(a, index, limit) || MARK_ORDER.indexOf(a) - MARK_ORDER.indexOf(b),
+    );
+    for (const mark of toOpen) {
+      let ch = mark === 'strike' ? '~' : mark === 'italic' ? italic : '*';
+      // An opener right after a closer of the same character would merge
+      // with it into one delimiter run; switch between "*" and "_".
+      const last = tokens[tokens.length - 1];
+      if (ch !== '~' && last?.kind === 'delim' && !last.open && last.ch === ch) ch = ch === '*' ? '_' : '*';
+      const count = mark === 'italic' ? 1 : 2;
+      tokens.push({ kind: 'delim', ch, count, open: true });
+      stack.push({ mark, ch, count });
+    }
+  };
+
+  /** Closes marks the span does not have (above `base`) and opens the ones it adds. */
+  const emitSpan = (span: Span, base: number, index: number, limit: number) => {
+    const target = emphasisMarks(span);
+    let keep = base;
+    while (keep < stack.length && target.includes(stack[keep]!.mark)) keep++;
+    closeTo(keep);
+    openMarks(target, index, limit);
+    if (span.image) {
+      tokens.push({ kind: 'raw', text: imageMarkdown(span.image, ctx) });
+    } else if (span.marks.includes('html')) {
+      tokens.push({ kind: 'raw', text: span.text });
+    } else if (span.marks.includes('code')) {
+      tokens.push({ kind: 'raw', text: codeSpan(span.text) });
+    } else {
+      tokens.push({ kind: 'text', text: span.text, encodeFirst: false, encodeLast: false });
+    }
+  };
+
+  let i = 0;
+  while (i < spans.length) {
+    const span = spans[i]!;
+    if (span.link === undefined) {
+      emitSpan(span, 0, i, spans.length);
+      i++;
+      continue;
+    }
+    // A link: emphasis inside link text is separate from emphasis outside,
+    // so only marks covering the whole link stay open across it.
+    let j = i;
+    while (j < spans.length && spans[j]!.link === span.link) j++;
+    const common = EMPHASIS.filter((m) => spans.slice(i, j).every((s) => s.marks.includes(m)));
+    let keep = 0;
+    while (keep < stack.length && common.includes(stack[keep]!.mark)) keep++;
+    closeTo(keep);
+    openMarks(common, i, spans.length);
+
+    const auto = j === i + 1 ? autolink(span) : null;
+    if (auto) {
+      tokens.push({ kind: 'raw', text: auto });
+    } else {
+      tokens.push({ kind: 'raw', text: '[' });
+      const base = stack.length;
+      for (let k = i; k < j; k++) emitSpan(spans[k]!, base, k, j);
+      closeTo(base);
+      tokens.push({ kind: 'raw', text: `](${linkDestination(span.link)})` });
+    }
+    i = j;
+  }
+  closeTo(0);
+  return tokens;
+}
+
+// -- Delimiter flanking -----------------------------------------------------
+
+type CharClass = 'space' | 'punct' | 'other';
+
+function classify(ch: string | undefined): CharClass {
+  if (ch === undefined || isUnicodeWhitespace(ch)) return 'space';
+  return isUnicodePunctuation(ch) ? 'punct' : 'other';
+}
+
+function firstChar(s: string): string {
+  return String.fromCodePoint(s.codePointAt(0)!);
+}
+
+function lastChar(s: string): string {
+  const c = s.charCodeAt(s.length - 1);
+  return c >= 0xdc00 && c <= 0xdfff && s.length > 1 ? s.slice(-2) : s.slice(-1);
+}
+
+/** The character a token starts (or ends) with in the output. */
+function edgeChar(token: Token | undefined, end: 'first' | 'last'): string | undefined {
+  if (!token) return undefined;
+  if (token.kind === 'delim') return token.ch;
+  if (token.kind === 'raw') return end === 'first' ? token.text[0] : token.text[token.text.length - 1];
+  // Text: an entity-encoded character starts with "&" and ends with ";".
+  if (end === 'first') return token.encodeFirst ? '&' : firstChar(token.text);
+  return token.encodeLast ? ';' : lastChar(token.text);
+}
+
+/**
+ * Checks every delimiter run against the CommonMark flanking rules and, where
+ * a delimiter could not open or close, writes the neighbouring word character
+ * as an entity: `a**"b"**c` becomes `&#97;**"b"**&#99;`, which parses as
+ * intended because an entity counts as punctuation. Whitespace on the inner
+ * side of a delimiter is encoded the same way. With `all`, every word
+ * character next to a delimiter run is encoded, which also defeats the
+ * "rule of three" (runs that can both open and close).
+ */
+function fixFlanking(tokens: Token[], all: boolean): void {
+  let i = 0;
+  while (i < tokens.length) {
+    const tok = tokens[i]!;
+    if (tok.kind !== 'delim') {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < tokens.length) {
+      const t = tokens[j]!;
+      if (t.kind !== 'delim' || t.ch !== tok.ch) break;
+      j++;
+    }
+    const before = tokens[i - 1];
+    const after = tokens[j];
+    const hasOpener = tokens.slice(i, j).some((t) => t.kind === 'delim' && t.open);
+    const hasCloser = tokens.slice(i, j).some((t) => t.kind === 'delim' && !t.open);
+
+    // A mark can be split into several delimiter pairs when it overlaps
+    // other marks, so a delimiter may still sit next to whitespace inside its
+    // run. Written as an entity, that whitespace counts as punctuation.
+    if (hasOpener && after?.kind === 'text' && classify(edgeChar(after, 'first')) === 'space') after.encodeFirst = true;
+    if (hasCloser && before?.kind === 'text' && classify(edgeChar(before, 'last')) === 'space') before.encodeLast = true;
+
+    if (all) {
+      if (before?.kind === 'text' && classify(edgeChar(before, 'last')) === 'other') before.encodeLast = true;
+      if (after?.kind === 'text' && classify(edgeChar(after, 'first')) === 'other') after.encodeFirst = true;
+    } else {
+      let flank = flanking(tok.ch, edgeChar(before, 'last'), edgeChar(after, 'first'));
+      if (hasOpener && !flank.canOpen && before?.kind === 'text') {
+        before.encodeLast = true;
+        flank = flanking(tok.ch, edgeChar(before, 'last'), edgeChar(after, 'first'));
+      }
+      if (hasCloser && !flank.canClose && after?.kind === 'text') after.encodeFirst = true;
+    }
+    i = j;
+  }
+}
+
+function flanking(ch: string, before: string | undefined, after: string | undefined) {
+  const b = classify(before);
+  const a = classify(after);
+  const left = a !== 'space' && (a !== 'punct' || b !== 'other');
+  const right = b !== 'space' && (b !== 'punct' || a !== 'other');
+  if (ch === '_') return { canOpen: left && (!right || b === 'punct'), canClose: right && (!left || a === 'punct') };
+  return { canOpen: left, canClose: right };
+}
+
+// -- Rendering --------------------------------------------------------------
+
+function render(spans: readonly Span[], ctx: InlineContext, strategy: Strategy): string {
+  const tokens = tokenize(spans, ctx, strategy.italic);
+  fixFlanking(tokens, strategy.encodeAll);
+  let out = '';
+  tokens.forEach((tok, i) => {
+    if (tok.kind === 'delim') out += tok.ch.repeat(tok.count);
+    else if (tok.kind === 'raw') out += tok.text;
+    else {
+      out += escapeText(tok, ctx, {
+        before: out ? out[out.length - 1] : undefined,
+        after: edgeChar(tokens[i + 1], 'first'),
+        lineStart: out === '' || out.endsWith('\n'),
+        atEnd: i === tokens.length - 1,
+      });
+    }
+  });
+  return out;
 }
 
 const ALNUM = /[\p{L}\p{N}]/u;
+const ASCII_PUNCT = /[!-/:-@[-`{-~]/;
+const ENTITY_LIKE = /^&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});/;
 
-function escapeText(text: string, prevChar: string | undefined, nextChar: string | undefined): string {
+function entity(ch: string): string {
+  return `&#${ch.codePointAt(0)!};`;
+}
+
+/**
+ * Escapes a text token. `before` and `after` are the neighbouring output
+ * characters; `lineStart` and `atEnd` tell whether the text starts a line
+ * and ends the inline content.
+ */
+function escapeText(
+  tok: { text: string; encodeFirst: boolean; encodeLast: boolean },
+  ctx: InlineContext,
+  edges: { before: string | undefined; after: string | undefined; lineStart: boolean; atEnd: boolean },
+): string {
+  const lines = tok.text.split('\n');
+  // What each "\n" becomes. A hard break cannot end a paragraph, so a final
+  // "\n" is an entity; so is a "\n" next to a delimiter that needs one.
+  const last = lines.length - 1;
+  const breaks = lines.map((line, li) => {
+    if (li === 0) return '';
+    const entity =
+      ctx.newline === 'entity' ||
+      (li === last && line === '' && (edges.atEnd || tok.encodeLast)) ||
+      (li === 1 && lines[0] === '' && tok.encodeFirst);
+    return entity ? '&#10;' : '\\\n';
+  });
   let out = '';
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]!;
-    const before = i > 0 ? text[i - 1] : prevChar;
-    const after = i < text.length - 1 ? text[i + 1] : nextChar;
-    if ('\\`*~[]<'.includes(ch)) {
+  lines.forEach((line, li) => {
+    const isFirst = li === 0;
+    const isLast = li === lines.length - 1;
+    out += breaks[li];
+    const startsLine = !isFirst || edges.lineStart;
+    const endsLine = !isLast || edges.atEnd;
+    out += escapeLine(line, {
+      before: isFirst ? edges.before : undefined,
+      after: isLast ? edges.after : breaks[li + 1]![0],
+      encodeFirst: isFirst && tok.encodeFirst,
+      encodeLast: isLast && tok.encodeLast,
+      startsLine,
+      endsLine,
+      blockSyntax: ctx.lineStart && startsLine,
+    });
+  });
+  return out;
+}
+
+function escapeLine(
+  line: string,
+  o: {
+    before: string | undefined;
+    after: string | undefined;
+    encodeFirst: boolean;
+    encodeLast: boolean;
+    startsLine: boolean;
+    endsLine: boolean;
+    blockSyntax: boolean;
+  },
+): string {
+  if (line === '') return '';
+  // Characters written as entities: word characters next to delimiters, and
+  // spaces or tabs at the start or end of a line (which Markdown strips).
+  const lastIndex = line.length - lastChar(line).length;
+  const encodeAt = new Set<number>();
+  if (o.encodeFirst || (o.startsLine && (line[0] === ' ' || line[0] === '\t'))) encodeAt.add(0);
+  if (o.encodeLast || (o.endsLine && (line[lastIndex] === ' ' || line[lastIndex] === '\t'))) encodeAt.add(lastIndex);
+  const blockEscape = o.blockSyntax && !encodeAt.has(0) ? blockSyntaxEscapeIndex(line) : -1;
+
+  let out = '';
+  for (let i = 0; i < line.length; i++) {
+    if (encodeAt.has(i)) {
+      const ch = i === lastIndex ? lastChar(line) : firstChar(line.slice(i));
+      out += entity(ch);
+      i += ch.length - 1;
+      continue;
+    }
+    const ch = line[i]!;
+    // Neighbours as written: an encoded character starts with "&" and ends with ";".
+    const prev = i > 0 ? (encodeAt.has(i - 1) ? ';' : line[i - 1]) : o.before;
+    const next = i < line.length - 1 ? (encodeAt.has(i + 1) ? '&' : line[i + 1]) : o.after;
+    if (i === blockEscape) {
       out += '\\' + ch;
-    } else if (ch === '_') {
-      // Intraword underscores (snake_case) cannot open or close emphasis.
-      const intraword = before !== undefined && after !== undefined && ALNUM.test(before) && ALNUM.test(after);
-      out += intraword ? ch : '\\_';
-    } else if (ch === '&' && /^&(#\d+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/.test(text.slice(i))) {
-      out += '\\&';
-    } else {
-      out += ch;
+      continue;
+    }
+    switch (ch) {
+      case '\\':
+        out += next === undefined || next === '\n' || ASCII_PUNCT.test(next) ? '\\\\' : ch;
+        break;
+      case '`':
+      case '*':
+      case '~':
+      case '[':
+      case ']':
+        out += '\\' + ch;
+        break;
+      case '_': {
+        // Intraword underscores (snake_case) cannot open or close emphasis.
+        const intraword = prev !== undefined && next !== undefined && ALNUM.test(prev) && ALNUM.test(next);
+        out += intraword ? ch : '\\_';
+        break;
+      }
+      case '<':
+        // Only "<" that could start a tag or an autolink.
+        out += next === undefined || /[A-Za-z/!?]/.test(next) ? '\\<' : ch;
+        break;
+      case '&':
+        out += ENTITY_LIKE.test(line.slice(i, i + 40)) ? '\\&' : ch;
+        break;
+      case '!':
+        // "!" before a link would make it an image.
+        out += next === '[' ? '\\!' : ch;
+        break;
+      default:
+        out += ch;
     }
   }
   return out;
+}
+
+/**
+ * Index of the character to backslash-escape so that a line does not start
+ * a block (heading, quote, list item, thematic break, setext underline,
+ * table delimiter row), or -1. Code fences, HTML and indented code are
+ * already covered by the regular escapes and the leading-space entity.
+ */
+function blockSyntaxEscapeIndex(line: string): number {
+  if (/^#{1,6}(?:[ \t]|$)/.test(line) || line[0] === '>') return 0;
+  if (/^[-+](?:[ \t]|$)/.test(line) || /^-+[ \t]*$/.test(line) || /^(?:-[ \t]*){3,}$/.test(line)) return 0;
+  if (/^=+[ \t]*$/.test(line)) return 0;
+  const ordered = /^(\d{1,9})[.)](?:[ \t]|$)/.exec(line);
+  if (ordered) return ordered[1]!.length;
+  if (/^[|:\- \t]+$/.test(line) && line.includes('|') && line.includes('-')) return line.indexOf('-');
+  return -1;
+}
+
+function codeSpan(text: string): string {
+  const fence = '`'.repeat(longestRun(text, '`') + 1);
+  // One space is stripped from each side when both are spaces, and a
+  // backtick at the edge would merge with the fence: pad with a space.
+  const pad = text.startsWith('`') || text.endsWith('`') || (text.startsWith(' ') && text.endsWith(' ') && /[^ ]/.test(text));
+  return pad ? `${fence} ${text} ${fence}` : `${fence}${text}${fence}`;
+}
+
+// -- Links and images -------------------------------------------------------
+
+const reAutolinkUri = /^[A-Za-z][A-Za-z0-9.+-]{1,31}:[^<>\x00-\x20]*$/;
+const reEmail =
+  /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+
+/** `<url>` when a link's text is its own URL (or e-mail address), else null. */
+function autolink(span: Span): string | null {
+  if (span.image || span.marks.includes('code') || span.marks.includes('html') || span.link === undefined) return null;
+  if (span.text === span.link && reAutolinkUri.test(span.link)) return `<${span.link}>`;
+  if (span.link === 'mailto:' + span.text && reEmail.test(span.text)) return `<${span.text}>`;
+  return null;
+}
+
+function escapeEntities(s: string): string {
+  return s.replace(/&(?=#?[A-Za-z0-9]+;)/g, '\\&');
+}
+
+function linkDestination(url: string): string {
+  if (url === '') return '<>';
+  const balanced = (() => {
+    let depth = 0;
+    for (const c of url) {
+      if (c === '(') depth++;
+      else if (c === ')' && --depth < 0) return false;
+    }
+    return depth === 0;
+  })();
+  if (/[\x00-\x20<>\x7f]/.test(url) || !balanced) {
+    return '<' + escapeEntities(url.replace(/[\\<>]/g, '\\$&')).replace(/\n/g, '%0A') + '>';
+  }
+  return escapeEntities(url.replace(/\\/g, '\\\\'));
+}
+
+function imageMarkdown(image: { src: string; alt: string; title?: string }, ctx: InlineContext): string {
+  const alt = escapeText({ text: image.alt, encodeFirst: false, encodeLast: false }, ctx, {
+    before: '[',
+    after: ']',
+    lineStart: false,
+    atEnd: false,
+  });
+  const title = image.title ? ` "${escapeEntities(image.title.replace(/["\\]/g, '\\$&'))}"` : '';
+  return `![${alt}](${linkDestination(image.src)}${title})`;
 }

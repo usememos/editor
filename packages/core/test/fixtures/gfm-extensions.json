@@ -1,0 +1,110 @@
+[
+ {
+  "markdown": "| foo | bar |\n| --- | --- |\n| baz | bim |\n",
+  "html": "<table>\n<thead>\n<tr>\n<th>foo</th>\n<th>bar</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>baz</td>\n<td>bim</td>\n</tr>\n</tbody>\n</table>\n",
+  "example": 198,
+  "start_line": 3326,
+  "end_line": 3345,
+  "section": "Tables (extension)",
+  "extension": "table"
+ },
+ {
+  "markdown": "| abc | defghi |\n:-: | -----------:\nbar | baz\n",
+  "html": "<table>\n<thead>\n<tr>\n<th align=\"center\">abc</th>\n<th align=\"right\">defghi</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td align=\"center\">bar</td>\n<td align=\"right\">baz</td>\n</tr>\n</tbody>\n</table>\n",
+  "example": 199,
+  "start_line": 3350,
+  "end_line": 3369,
+  "section": "Tables (extension)",
+  "extension": "table"
+ },
+ {
+  "markdown": "| f\\|oo  |\n| ------ |\n| b `\\|` az |\n| b **\\|** im |\n",
+  "html": "<table>\n<thead>\n<tr>\n<th>f|oo</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>b <code>|</code> az</td>\n</tr>\n<tr>\n<td>b <strong>|</strong> im</td>\n</tr>\n</tbody>\n</table>\n",
+  "example": 200,
+  "start_line": 3374,
+  "end_line": 3395,
+  "section": "Tables (extension)",
+  "extension": "table"
+ },
+ {
+  "markdown": "| abc | def |\n| --- | --- |\n| bar | baz |\n> bar\n",
+  "html": "<table>\n<thead>\n<tr>\n<th>abc</th>\n<th>def</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>bar</td>\n<td>baz</td>\n</tr>\n</tbody>\n</table>\n<blockquote>\n<p>bar</p>\n</blockquote>\n",
+  "example": 201,
+  "start_line": 3400,
+  "end_line": 3423,
+  "section": "Tables (extension)",
+  "extension": "table"
+ },
+ {
+  "markdown": "| abc | def |\n| --- | --- |\n| bar | baz |\nbar\n\nbar\n",
+  "html": "<table>\n<thead>\n<tr>\n<th>abc</th>\n<th>def</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>bar</td>\n<td>baz</td>\n</tr>\n<tr>\n<td>bar</td>\n<td></td>\n</tr>\n</tbody>\n</table>\n<p>bar</p>\n",
+  "example": 202,
+  "start_line": 3425,
+  "end_line": 3452,
+  "section": "Tables (extension)",
+  "extension": "table"
+ },
+ {
+  "markdown": "| abc | def |\n| --- |\n| bar |\n",
+  "html": "<p>| abc | def |\n| --- |\n| bar |</p>\n",
+  "example": 203,
+  "start_line": 3457,
+  "end_line": 3465,
+  "section": "Tables (extension)",
+  "extension": "table"
+ },
+ {
+  "markdown": "| abc | def |\n| --- | --- |\n| bar |\n| bar | baz | boo |\n",
+  "html": "<table>\n<thead>\n<tr>\n<th>abc</th>\n<th>def</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>bar</td>\n<td></td>\n</tr>\n<tr>\n<td>bar</td>\n<td>baz</td>\n</tr>\n</tbody>\n</table>\n",
+  "example": 204,
+  "start_line": 3471,
+  "end_line": 3495,
+  "section": "Tables (extension)",
+  "extension": "table"
+ },
+ {
+  "markdown": "| abc | def |\n| --- | --- |\n",
+  "html": "<table>\n<thead>\n<tr>\n<th>abc</th>\n<th>def</th>\n</tr>\n</thead>\n</table>\n",
+  "example": 205,
+  "start_line": 3499,
+  "end_line": 3511,
+  "section": "Tables (extension)",
+  "extension": "table"
+ },
+ {
+  "markdown": "- [ ] foo\n- [x] bar\n",
+  "html": "<ul>\n<li><input disabled=\"\" type=\"checkbox\"> foo</li>\n<li><input checked=\"\" disabled=\"\" type=\"checkbox\"> bar</li>\n</ul>\n",
+  "example": 279,
+  "start_line": 5108,
+  "end_line": 5116,
+  "section": "Task list items (extension)",
+  "extension": "tasklist"
+ },
+ {
+  "markdown": "- [x] foo\n  - [ ] bar\n  - [x] baz\n- [ ] bim\n",
+  "html": "<ul>\n<li><input checked=\"\" disabled=\"\" type=\"checkbox\"> foo\n<ul>\n<li><input disabled=\"\" type=\"checkbox\"> bar</li>\n<li><input checked=\"\" disabled=\"\" type=\"checkbox\"> baz</li>\n</ul>\n</li>\n<li><input disabled=\"\" type=\"checkbox\"> bim</li>\n</ul>\n",
+  "example": 280,
+  "start_line": 5120,
+  "end_line": 5135,
+  "section": "Task list items (extension)",
+  "extension": "tasklist"
+ },
+ {
+  "markdown": "~~Hi~~ Hello, world!\n",
+  "html": "<p><del>Hi</del> Hello, world!</p>\n",
+  "example": 491,
+  "start_line": 7714,
+  "end_line": 7718,
+  "section": "Strikethrough (extension)",
+  "extension": "strikethrough"
+ },
+ {
+  "markdown": "This ~~has a\n\nnew paragraph~~.\n",
+  "html": "<p>This ~~has a</p>\n<p>new paragraph~~.</p>\n",
+  "example": 492,
+  "start_line": 7723,
+  "end_line": 7730,
+  "section": "Strikethrough (extension)",
+  "extension": "strikethrough"
+ }
+]

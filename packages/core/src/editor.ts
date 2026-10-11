@@ -10,10 +10,14 @@
 //    reconciled the same way as composition.
 
 import * as cmd from './commands';
+import { docToHtml } from './clipboard/toHtml';
+import { htmlToDoc } from './clipboard/fromHtml';
 import { type ChangeKind, History } from './history';
+import { DEFAULT_LABELS, type Labels } from './labels';
 import { parseMarkdown } from './markdown/parse';
 import { serializeMarkdown } from './markdown/serialize';
 import {
+  type Block,
   type Doc,
   type EditorState,
   type Mark,
@@ -21,59 +25,155 @@ import {
   type Selection,
   blockIndex,
   caret,
+  containerContent,
   createState,
   getBlock,
+  inlineLength,
   inlineText,
   isCollapsed,
+  isPlainTextBlock,
+  isTextBlock,
+  paragraph,
+  plain,
+  samePosition,
+  startOf,
 } from './model';
-import { BlockRenderer, domText, domToPosition, positionToDom } from './view/dom';
+import { BlockToolbar, LinkPopover } from './ui/toolbar';
+import { BlockHandle } from './ui/handle';
+import { Menu, type MenuItem, type MenuSection, matches } from './ui/popup';
+import { BlockRenderer, contentElement, domText, domToPosition, positionToDom, safeHref } from './view/dom';
 
 export interface EditorOptions {
   /** Initial Markdown. */
   value?: string;
-  /** Called with the new Markdown after every change to the document. */
+  /** Called with the new Markdown after document changes, at most once per animation frame. */
   onChange?: (markdown: string, editor: Editor) => void;
-  /** Shown in an empty first block. */
+  /** Shown when the document is empty. */
   placeholder?: string;
+  readOnly?: boolean;
+  autoFocus?: boolean;
+  /** Shows the formatting toolbar on selection. Default true. */
+  toolbar?: boolean;
+  /** Called on Mod+Enter with the current Markdown. */
+  onSubmit?: (markdown: string, editor: Editor) => void;
+  onFocus?: (editor: Editor) => void;
+  onBlur?: (editor: Editor) => void;
+  /** IDs of built-in slash menu items to show, in order. See SLASH_ITEM_IDS. */
+  slashItems?: readonly SlashItemId[];
+  /** Overrides UI strings. */
+  labels?: Partial<Labels>;
 }
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iP(hone|ad|od)/.test(navigator.platform);
 
+interface BlockItem {
+  id: SlashItemId;
+  label: keyof Labels;
+  icon: string;
+  aliases: string[];
+  spec: cmd.BlockTypeSpec;
+}
+
+const BLOCK_ITEMS: BlockItem[] = [
+  { id: 'text', label: 'text', icon: 'T', aliases: ['paragraph', 'plain'], spec: { type: 'paragraph' } },
+  { id: 'heading1', label: 'heading1', icon: 'H1', aliases: ['h1', 'title'], spec: { type: 'heading', level: 1 } },
+  { id: 'heading2', label: 'heading2', icon: 'H2', aliases: ['h2', 'subtitle'], spec: { type: 'heading', level: 2 } },
+  { id: 'heading3', label: 'heading3', icon: 'H3', aliases: ['h3'], spec: { type: 'heading', level: 3 } },
+  { id: 'bulletList', label: 'bulletList', icon: '•', aliases: ['ul', 'unordered', 'bullet'], spec: { type: 'listItem', listType: 'bullet' } },
+  { id: 'numberedList', label: 'numberedList', icon: '1.', aliases: ['ol', 'ordered'], spec: { type: 'listItem', listType: 'ordered' } },
+  { id: 'todoList', label: 'todoList', icon: '☐', aliases: ['task', 'checkbox', 'checklist'], spec: { type: 'listItem', listType: 'task' } },
+  { id: 'quote', label: 'quote', icon: '❝', aliases: ['blockquote', 'citation'], spec: { type: 'quote' } },
+  { id: 'code', label: 'code', icon: '</>', aliases: ['pre', 'snippet', 'fence'], spec: { type: 'code' } },
+  { id: 'table', label: 'table', icon: '⊞', aliases: ['grid'], spec: { type: 'table' } },
+  { id: 'divider', label: 'divider', icon: '—', aliases: ['hr', 'separator', 'line', 'rule'], spec: { type: 'divider' } },
+];
+
+export const SLASH_ITEM_IDS = [
+  'text',
+  'heading1',
+  'heading2',
+  'heading3',
+  'bulletList',
+  'numberedList',
+  'todoList',
+  'quote',
+  'code',
+  'table',
+  'divider',
+] as const;
+export type SlashItemId = (typeof SLASH_ITEM_IDS)[number];
+
+const SLASH_CHARS = ['/', '／'];
+
 export class Editor {
   readonly root: HTMLElement;
+  readonly labels: Labels;
   private state: EditorState;
   private readonly history = new History();
   private readonly renderer: BlockRenderer;
   private composing = false;
+  private readOnly: boolean;
+  private wasReadOnly = false;
   private readonly options: EditorOptions;
   private readonly cleanup: (() => void)[] = [];
+  private changeFrame: number | null = null;
+  private plainPasteNext = false;
+  private destroyed = false;
+
+  private readonly slashMenu: Menu;
+  private slash: { blockId: string; from: number; query?: string } | null = null;
+  private readonly blockMenu: Menu;
+  private readonly toolbar: BlockToolbar | null;
+  private readonly linkPopover: LinkPopover;
+  private readonly handle: BlockHandle;
+  private hintEl: HTMLElement | null = null;
 
   constructor(root: HTMLElement, options: EditorOptions = {}) {
     this.root = root;
     this.options = options;
+    this.labels = { ...DEFAULT_LABELS, ...options.labels };
+    this.readOnly = options.readOnly ?? false;
     this.state = createState(parseMarkdown(options.value ?? ''));
     this.renderer = new BlockRenderer(root);
 
-    root.contentEditable = 'true';
-    root.spellcheck = true;
     root.classList.add('mbe-root');
     root.setAttribute('role', 'textbox');
     root.setAttribute('aria-multiline', 'true');
+    root.spellcheck = true;
+    root.translate = false;
     if (options.placeholder) root.style.setProperty('--mbe-placeholder', JSON.stringify(options.placeholder));
+    root.style.setProperty('--mbe-slash-hint', JSON.stringify(this.labels.slashHint));
+
+    this.slashMenu = new Menu(root, 'mbe-slash-menu', 'listbox');
+    this.slashMenu.onPicked = () => this.closeSlash();
+    this.blockMenu = new Menu(root, 'mbe-block-menu', 'menu');
+    this.blockMenu.onPicked = () => this.blockMenu.hide();
+    this.linkPopover = new LinkPopover(this);
+    this.toolbar = options.toolbar === false ? null : new BlockToolbar(this);
+    this.handle = new BlockHandle(this, (blockId, rect) => this.openBlockMenu(blockId, rect));
 
     this.listen(root, 'beforeinput', (e) => this.onBeforeInput(e as InputEvent));
     this.listen(root, 'input', (e) => this.onInput(e as InputEvent));
-    this.listen(root, 'compositionstart', () => this.onCompositionStart());
-    this.listen(root, 'compositionend', () => this.onCompositionEnd());
+    this.listen(root, 'compositionstart', (e) => this.onCompositionStart(e));
+    this.listen(root, 'compositionend', (e) => this.onCompositionEnd(e));
     this.listen(root, 'keydown', (e) => this.onKeyDown(e as KeyboardEvent));
     this.listen(root, 'copy', (e) => this.onCopy(e as ClipboardEvent, false));
     this.listen(root, 'cut', (e) => this.onCopy(e as ClipboardEvent, true));
     this.listen(root, 'paste', (e) => this.onPaste(e as ClipboardEvent));
     this.listen(root, 'dragstart', (e) => e.preventDefault());
     this.listen(root, 'drop', (e) => e.preventDefault());
+    this.listen(root, 'mousedown', (e) => this.onMouseDown(e as MouseEvent));
+    this.listen(root, 'click', (e) => this.onClick(e as MouseEvent));
+    this.listen(root, 'change', (e) => this.onControlChange(e));
+    this.listen(root, 'focusin', () => this.onFocusIn());
+    this.listen(root, 'focusout', (e) => this.onFocusOut(e as FocusEvent));
     this.listen(root.ownerDocument, 'selectionchange', () => this.onSelectionChange());
+    this.listen(root.ownerDocument, 'scroll', () => this.onScroll(), true);
 
-    this.renderer.render(this.state.doc);
+    this.renderer.render(this.state.doc, true, true);
+    this.applyReadOnly();
+    this.afterRender();
+    if (options.autoFocus) this.focus();
   }
 
   // -------------------------------------------------------------------------
@@ -85,8 +185,11 @@ export class Editor {
 
   /** Replaces the whole document. Clears undo history. */
   setMarkdown(markdown: string): void {
+    this.history.clear();
     this.state = createState(parseMarkdown(markdown));
-    this.renderer.render(this.state.doc, true);
+    this.renderer.render(this.state.doc, true, true);
+    this.applyReadOnly();
+    this.afterRender();
     this.syncDomSelection();
   }
 
@@ -98,13 +201,36 @@ export class Editor {
     return this.state.doc;
   }
 
+  isReadOnly(): boolean {
+    return this.readOnly;
+  }
+
+  setReadOnly(readOnly: boolean): void {
+    this.readOnly = readOnly;
+    this.applyReadOnly();
+    this.hideUi();
+  }
+
+  hasFocus(): boolean {
+    const active = this.root.ownerDocument.activeElement;
+    return !!active && this.root.contains(active) && !(active instanceof HTMLInputElement);
+  }
+
   focus(): void {
-    this.root.focus();
-    this.syncDomSelection();
+    const pos = this.state.selection.focus;
+    const el = this.renderer.elementFor(pos.blockId);
+    const host = pos.cell && el ? contentElement(el, pos.cell) : this.root;
+    (host ?? this.root).focus({ preventScroll: true });
+    this.syncDomSelection(true);
+  }
+
+  blur(): void {
+    (this.root.ownerDocument.activeElement as HTMLElement | null)?.blur();
   }
 
   /** Applies a command, records history, re-renders, and notifies onChange. */
   run(command: (state: EditorState) => EditorState | null, kind: ChangeKind = 'other'): boolean {
+    if (this.readOnly) return false;
     const next = command(this.state);
     if (!next || next === this.state) return false;
     this.apply(next, kind);
@@ -129,9 +255,36 @@ export class Editor {
     return true;
   }
 
+  /** Viewport rectangle of the selection, for positioning UI. */
+  selectionRect(): DOMRect | null {
+    const sel = this.root.ownerDocument.getSelection();
+    if (!sel || sel.rangeCount === 0) return null;
+    const range = sel.getRangeAt(0);
+    const rects = range.getClientRects();
+    const rect = rects.length ? (isCollapsed(this.state.selection) ? rects[rects.length - 1]! : range.getBoundingClientRect()) : null;
+    if (rect && (rect.width > 0 || rect.height > 0)) return rect;
+    // An empty block has no text to measure.
+    const el = this.renderer.elementFor(this.state.selection.focus.blockId);
+    const content = el ? contentElement(el, this.state.selection.focus.cell) : null;
+    return (content ?? el)?.getBoundingClientRect() ?? null;
+  }
+
+  /** The rendered element of a block. */
+  blockElement(id: string): HTMLElement | undefined {
+    return this.renderer.elementFor(id);
+  }
+
   destroy(): void {
+    this.destroyed = true;
+    if (this.changeFrame !== null) cancelAnimationFrame(this.changeFrame);
     for (const fn of this.cleanup) fn();
+    this.slashMenu.destroy();
+    this.blockMenu.destroy();
+    this.toolbar?.destroy();
+    this.linkPopover.destroy();
+    this.handle.destroy();
     this.root.contentEditable = 'false';
+    this.root.classList.remove('mbe-root');
     this.root.replaceChildren();
   }
 
@@ -145,15 +298,71 @@ export class Editor {
 
   private commit(next: EditorState): void {
     const docChanged = next.doc !== this.state.doc;
+    // Re-rendering a table replaces the focused cell, so remember focus first.
+    const hadFocus = this.hasFocus();
     this.state = next;
     this.renderer.render(next.doc);
-    this.syncDomSelection();
-    if (docChanged) this.options.onChange?.(this.getMarkdown(), this);
+    if (this.readOnly) this.applyReadOnly();
+    this.syncDomSelection(hadFocus);
+    this.afterRender();
+    if (docChanged) this.scheduleChange();
   }
 
-  private syncDomSelection(): void {
+  /** Emits a pending onChange now, so a submit or blur handler sees the latest Markdown. */
+  private flushChange(): void {
+    if (this.changeFrame === null) return;
+    cancelAnimationFrame(this.changeFrame);
+    this.changeFrame = null;
+    this.options.onChange?.(this.getMarkdown(), this);
+  }
+
+  private scheduleChange(): void {
+    if (!this.options.onChange || this.changeFrame !== null) return;
+    const flush = () => {
+      this.changeFrame = null;
+      if (!this.destroyed) this.options.onChange?.(this.getMarkdown(), this);
+    };
+    if (typeof requestAnimationFrame === 'function') this.changeFrame = requestAnimationFrame(flush);
+    else flush();
+  }
+
+  /**
+   * Applies read-only state to the root and to rendered cells and inputs.
+   * New elements render editable, so this only does work when read-only is on
+   * or has just changed.
+   */
+  private applyReadOnly(): void {
+    const editable = this.readOnly ? 'false' : 'true';
+    if (this.root.contentEditable !== editable) this.root.contentEditable = editable;
+    if (!this.readOnly && !this.wasReadOnly) return;
+    this.wasReadOnly = this.readOnly;
+    this.root.classList.toggle('mbe-readonly', this.readOnly);
+    this.root.setAttribute('aria-readonly', String(this.readOnly));
+    this.root.querySelectorAll<HTMLElement>('[data-row]').forEach((cell) => {
+      cell.contentEditable = this.readOnly ? 'false' : 'true';
+    });
+    this.root.querySelectorAll<HTMLInputElement>('input').forEach((input) => {
+      input.disabled = this.readOnly;
+    });
+  }
+
+  /** Hints for empty blocks, and the UI that follows the selection. */
+  private afterRender(): void {
+    for (const block of this.state.doc.blocks) {
+      const el = this.renderer.elementFor(block.id);
+      if (!el || !el.classList.contains('mbe-empty')) continue;
+      let hint = '';
+      if (block.type === 'heading') hint = this.labels[`heading${Math.min(block.level, 3)}` as 'heading1'];
+      else if (block.type === 'listItem') hint = this.labels.listHint;
+      else if (block.type === 'quote') hint = this.labels.quoteHint;
+      if (hint && el.dataset.hint !== hint) el.dataset.hint = hint;
+    }
+    this.updateUi();
+  }
+
+  private syncDomSelection(force = false): void {
     const sel = this.root.ownerDocument.getSelection();
-    if (!sel || this.root.ownerDocument.activeElement !== this.root) return;
+    if (!sel || (!force && !this.hasFocus())) return;
     const anchor = this.toDom(this.state.selection.anchor);
     const focus = this.toDom(this.state.selection.focus);
     if (!anchor || !focus) return;
@@ -165,12 +374,19 @@ export class Editor {
     ) {
       return;
     }
+    // A caret in a table cell needs that cell (its own editing host) focused.
+    if (this.state.selection.focus.cell) {
+      const host = (focus.node instanceof Element ? focus.node : focus.node.parentElement)?.closest<HTMLElement>('[data-row]');
+      if (host && this.root.ownerDocument.activeElement !== host) host.focus({ preventScroll: true });
+    } else if (this.root.ownerDocument.activeElement !== this.root && this.hasFocus()) {
+      this.root.focus({ preventScroll: true });
+    }
     sel.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset);
   }
 
   private toDom(pos: Position): { node: Node; offset: number } | null {
     const el = this.renderer.elementFor(pos.blockId);
-    return el ? positionToDom(el, pos.offset) : null;
+    return el ? positionToDom(el, pos) : null;
   }
 
   private readDomSelection(): Selection | null {
@@ -184,18 +400,20 @@ export class Editor {
   }
 
   private onSelectionChange(): void {
-    if (this.composing) return;
+    if (this.composing || this.destroyed) return;
     const selection = this.readDomSelection();
-    if (!selection) return;
+    if (!selection) {
+      if (!this.hasFocus()) this.updateUi();
+      return;
+    }
     const cur = this.state.selection;
-    const same =
-      selection.anchor.blockId === cur.anchor.blockId &&
-      selection.anchor.offset === cur.anchor.offset &&
-      selection.focus.blockId === cur.focus.blockId &&
-      selection.focus.offset === cur.focus.offset;
-    if (same) return;
+    if (samePosition(selection.anchor, cur.anchor) && samePosition(selection.focus, cur.focus)) {
+      this.updateUi();
+      return;
+    }
     this.state = { ...this.state, selection, storedMarks: null };
     this.history.breakGroup();
+    this.updateUi();
   }
 
   /** The browser selection is the source of truth when an event starts. */
@@ -204,10 +422,9 @@ export class Editor {
     if (selection) this.state = { ...this.state, selection };
   }
 
-  /** Sets the model selection to the range the browser says an input event affects. */
+  /** The range the browser says an input event affects. */
   private targetRange(e: InputEvent): Selection | null {
-    const ranges = e.getTargetRanges?.() ?? [];
-    const r = ranges[0];
+    const r = e.getTargetRanges?.()[0];
     if (!r) return null;
     const anchor = domToPosition(this.root, r.startContainer, r.startOffset);
     const focus = domToPosition(this.root, r.endContainer, r.endOffset);
@@ -217,20 +434,25 @@ export class Editor {
   // -------------------------------------------------------------------------
   // Input
 
+  /** Events from the code-language input and other form controls inside the root are not editor input. */
+  private fromControl(e: Event): boolean {
+    return e.target instanceof HTMLInputElement;
+  }
+
   private onBeforeInput(e: InputEvent): void {
+    if (this.fromControl(e)) return;
     if (this.composing || e.isComposing) return;
     const type = e.inputType;
     if (type === 'insertCompositionText' || type === 'deleteCompositionText' || type === 'insertFromComposition') return;
 
     e.preventDefault();
+    if (this.readOnly) return;
     this.refreshSelection();
 
     switch (type) {
       case 'insertText': {
         const text = e.data ?? '';
-        if (!text) return;
-        this.run((s) => cmd.insertText(s, text), 'typing');
-        if (text === ' ') this.run(cmd.applyInputRules);
+        if (text) this.typeText(text);
         return;
       }
       case 'insertReplacementText': {
@@ -240,9 +462,10 @@ export class Editor {
         return;
       }
       case 'insertParagraph':
-      case 'insertLineBreak':
-        // Hard line breaks inside a block are not in the model yet, so Shift+Enter also splits.
         this.run(cmd.splitBlock);
+        return;
+      case 'insertLineBreak':
+        this.run(cmd.insertLineBreak);
         return;
       case 'deleteContentBackward':
         this.run(cmd.deleteBackward);
@@ -262,7 +485,7 @@ export class Editor {
           return;
         }
         const range = this.targetRange(e);
-        if (range && !isCollapsed(range)) {
+        if (range && !isCollapsed(range) && range.anchor.blockId === range.focus.blockId) {
           this.run((s) => cmd.deleteSelection({ ...s, selection: range }));
         } else {
           this.run(type.endsWith('Backward') ? cmd.deleteBackward : cmd.deleteForward);
@@ -291,31 +514,49 @@ export class Editor {
     }
   }
 
-  private onCompositionStart(): void {
+  private typeText(text: string): void {
+    this.run((s) => cmd.insertText(s, text), 'typing');
+    // Shortcuts are separate undo steps, so undo restores the typed characters.
+    if (text === ' ' || text === '-') this.run((s) => cmd.applyBlockInputRules(s));
+    if (text.length === 1 && '*_`~'.includes(text)) this.run((s) => cmd.applyInlineInputRules(s));
+    if (SLASH_CHARS.includes(text)) this.maybeOpenSlash();
+  }
+
+  private onCompositionStart(e: Event): void {
+    if (this.fromControl(e)) return;
     this.refreshSelection();
     // Replace a non-collapsed selection before the browser starts composing,
     // so the composition always happens inside one block.
-    if (!isCollapsed(this.state.selection)) {
-      this.run(cmd.deleteSelection);
-    }
+    if (!isCollapsed(this.state.selection)) this.run(cmd.deleteSelection);
     this.composing = true;
+    this.toolbar?.hide();
   }
 
-  private onCompositionEnd(): void {
+  private onCompositionEnd(e: Event): void {
+    if (this.fromControl(e)) return;
     this.composing = false;
     // A committed composition is its own undo step.
+    const before = this.state;
     this.reconcileFromDom('other');
+    // A full-width slash typed with an IME opens the slash menu too.
+    if (this.state !== before) {
+      const pos = this.state.selection.focus;
+      const content = containerContent(getBlock(this.state.doc, pos.blockId), pos.cell);
+      const ch = content ? inlineText(content)[pos.offset - 1] : undefined;
+      if (ch && SLASH_CHARS.includes(ch)) this.maybeOpenSlash();
+    }
   }
 
   private onInput(e: InputEvent): void {
+    if (this.fromControl(e)) return;
     if (this.composing || e.isComposing) return;
     // Only reached when the browser changed the DOM despite beforeinput.
     this.reconcileFromDom('typing');
   }
 
   /**
-   * Reads block text back from the DOM and applies the difference to the
-   * model as one insert/delete per changed block.
+   * Reads text back from the DOM and applies the difference to the model as
+   * one delete and one insert per changed text container.
    */
   private reconcileFromDom(kind: ChangeKind): void {
     let state = this.state;
@@ -323,28 +564,39 @@ export class Editor {
     for (const block of state.doc.blocks) {
       const el = this.renderer.elementFor(block.id);
       if (!el || !el.isConnected) continue;
-      const oldText = inlineText(block.content);
-      const newText = domText(el);
-      if (oldText === newText) continue;
-
-      let start = 0;
-      while (start < oldText.length && start < newText.length && oldText[start] === newText[start]) start++;
-      let endOld = oldText.length;
-      let endNew = newText.length;
-      while (endOld > start && endNew > start && oldText[endOld - 1] === newText[endNew - 1]) {
-        endOld--;
-        endNew--;
+      const containers: { cell?: { row: number; col: number } }[] =
+        block.type === 'table'
+          ? block.rows.flatMap((row, r) => row.map((_, c) => ({ cell: { row: r, col: c } })))
+          : block.type === 'divider'
+            ? []
+            : [{}];
+      for (const { cell } of containers) {
+        const contentEl = contentElement(el, cell);
+        const content = containerContent(getBlock(state.doc, block.id), cell);
+        if (!contentEl || !content) continue;
+        const oldText = inlineText(content);
+        const newText = domText(contentEl);
+        if (oldText === newText) continue;
+        let start = 0;
+        while (start < oldText.length && start < newText.length && oldText[start] === newText[start]) start++;
+        let endOld = oldText.length;
+        let endNew = newText.length;
+        while (endOld > start && endNew > start && oldText[endOld - 1] === newText[endNew - 1]) {
+          endOld--;
+          endNew--;
+        }
+        const inserted = newText.slice(start, endNew);
+        const at: Position = cell ? { blockId: block.id, offset: start, cell } : { blockId: block.id, offset: start };
+        state = cmd.deleteRange(state, at, { ...at, offset: endOld });
+        if (inserted) state = cmd.insertText({ ...state, storedMarks: this.state.storedMarks }, inserted);
+        changed = true;
       }
-      const inserted = newText.slice(start, endNew);
-      const at = { blockId: block.id, offset: start };
-      state = cmd.deleteRange(state, at, { blockId: block.id, offset: endOld });
-      if (inserted) state = cmd.insertText({ ...state, storedMarks: this.state.storedMarks }, inserted);
-      this.renderer.invalidate(block.id);
-      changed = true;
+      if (changed) this.renderer.invalidate(block.id);
     }
     if (!changed) {
       // Text is unchanged but the browser may have altered structure.
       this.renderer.render(this.state.doc, true);
+      this.applyReadOnly();
       this.syncDomSelection();
       return;
     }
@@ -353,6 +605,7 @@ export class Editor {
   }
 
   private onKeyDown(e: KeyboardEvent): void {
+    if (this.fromControl(e)) return;
     if (e.isComposing || e.keyCode === 229) return;
     const mod = isMac ? e.metaKey : e.ctrlKey;
     const key = e.key.toLowerCase();
@@ -362,53 +615,465 @@ export class Editor {
       fn();
     };
 
+    // Open menus take the navigation keys.
+    const menu = this.slashMenu.isOpen ? this.slashMenu : this.blockMenu.isOpen ? this.blockMenu : null;
+    if (menu) {
+      if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) return handled(() => this.moveMenu(menu, 1));
+      if (e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey)) return handled(() => this.moveMenu(menu, -1));
+      if (e.key === 'Enter') {
+        if (menu.count > 0) return handled(() => menu.pick());
+        if (menu === this.slashMenu) this.closeSlash();
+      }
+      if (e.key === 'Escape') return handled(() => (menu === this.slashMenu ? this.closeSlash() : this.closeBlockMenu()));
+    }
+
+    if (e.key === 'Escape') {
+      this.toolbar?.hide();
+      return;
+    }
+    if (this.readOnly) return;
+
+    if (mod && e.key === 'Enter' && this.options.onSubmit) {
+      return handled(() => {
+        this.flushChange();
+        this.options.onSubmit?.(this.getMarkdown(), this);
+      });
+    }
     if (mod && !e.altKey) {
       if (key === 'z' && !e.shiftKey) return handled(() => this.undo());
       if ((key === 'z' && e.shiftKey) || (key === 'y' && !isMac)) return handled(() => this.redo());
-      if (key === 'b') return handled(() => this.toggleMark('bold'));
-      if (key === 'i') return handled(() => this.toggleMark('italic'));
-      if (key === 'e') return handled(() => this.toggleMark('code'));
+      if (key === 'b' && !e.shiftKey) return handled(() => this.toggleMark('bold'));
+      if (key === 'i' && !e.shiftKey) return handled(() => this.toggleMark('italic'));
+      if (key === 'e' && !e.shiftKey) return handled(() => this.toggleMark('code'));
       if (key === 'x' && e.shiftKey) return handled(() => this.toggleMark('strike'));
+      if (key === 'k' && !e.shiftKey) return handled(() => this.openLinkPopover());
+      if (e.key === '/' && !e.shiftKey) return handled(() => this.openBlockMenu(this.state.selection.focus.blockId));
+      if (key === 'v' && e.shiftKey) {
+        // The paste event that follows inserts plain text.
+        this.plainPasteNext = true;
+        return;
+      }
     }
-    if (e.key === 'Tab') {
-      // Reserved for list indentation. Keep focus in the editor.
+    if (e.key === 'Tab' && !mod && !e.altKey) {
+      return handled(() => {
+        const block = getBlock(this.state.doc, this.state.selection.focus.blockId);
+        if (block.type === 'table') this.run((s) => cmd.moveCell(s, e.shiftKey ? -1 : 1));
+        else this.run((s) => cmd.indentListItems(s, e.shiftKey ? -1 : 1));
+      });
+    }
+  }
+
+  private moveMenu(menu: Menu, delta: number): void {
+    menu.move(delta);
+    this.syncActiveDescendant();
+  }
+
+  private onMouseDown(e: MouseEvent): void {
+    const target = e.target as HTMLElement;
+    if (target.classList?.contains('mbe-checkbox')) {
+      // Toggle in the model; keep the caret where it is.
+      e.preventDefault();
+      const blockEl = target.closest<HTMLElement>('[data-block-id]');
+      if (blockEl && !this.readOnly) this.run((s) => cmd.toggleTask(s, blockEl.dataset.blockId!));
+    }
+  }
+
+  private onClick(e: MouseEvent): void {
+    const target = e.target as HTMLElement;
+    if (target.classList?.contains('mbe-checkbox')) {
+      e.preventDefault();
+      return;
+    }
+    const link = target.closest?.<HTMLAnchorElement>('a.mbe-link');
+    if (!link) return;
+    const mod = isMac ? e.metaKey : e.ctrlKey;
+    if (this.readOnly || mod) {
+      e.preventDefault();
+      const href = safeHref(link.dataset.href ?? '');
+      if (href) this.root.ownerDocument.defaultView?.open(href, '_blank', 'noopener,noreferrer');
+    } else {
       e.preventDefault();
     }
   }
 
+  /** The code block language input. */
+  private onControlChange(e: Event): void {
+    const input = e.target;
+    if (!(input instanceof HTMLInputElement) || !input.classList.contains('mbe-code-lang')) return;
+    const blockEl = input.closest<HTMLElement>('[data-block-id]');
+    if (!blockEl) return;
+    const id = blockEl.dataset.blockId!;
+    const language = input.value.trim();
+    this.run((s) => {
+      const block = getBlock(s.doc, id);
+      if (block.type !== 'code' || block.language === language) return s;
+      const index = blockIndex(s.doc, id);
+      const blocks = s.doc.blocks.slice();
+      blocks[index] = { ...block, language };
+      return { ...s, doc: { blocks } };
+    });
+  }
+
+  private focused = false;
+
+  private onFocusIn(): void {
+    if (this.focused || !this.hasFocus()) return;
+    this.focused = true;
+    this.root.classList.add('mbe-focused');
+    this.options.onFocus?.(this);
+    this.updateUi();
+  }
+
+  private onFocusOut(e: FocusEvent): void {
+    const next = e.relatedTarget as Node | null;
+    if (next && (this.root.contains(next) || this.linkPopover.contains(next))) return;
+    // Focus may move between table cells and the root; check after it settles.
+    queueMicrotask(() => {
+      if (this.hasFocus() || this.linkPopover.isOpen) return;
+      if (!this.focused) return;
+      this.focused = false;
+      this.root.classList.remove('mbe-focused');
+      this.hideUi();
+      this.flushChange();
+      this.options.onBlur?.(this);
+    });
+  }
+
+  private onScroll(): void {
+    this.handle.hide();
+    if (this.slashMenu.isOpen || this.toolbar?.isOpen || this.blockMenu.isOpen) this.updateUi();
+  }
+
+  // -------------------------------------------------------------------------
+  // Clipboard
+
   private onCopy(e: ClipboardEvent, cut: boolean): void {
+    if (this.fromControl(e)) return;
     this.refreshSelection();
     if (isCollapsed(this.state.selection) || !e.clipboardData) return;
     e.preventDefault();
-    const markdown = serializeMarkdown({ blocks: cmd.selectedBlocks(this.state) });
-    e.clipboardData.setData('text/plain', markdown.replace(/\n$/, ''));
-    if (cut) this.run(cmd.deleteSelection);
+    const doc: Doc = { blocks: cmd.selectedBlocks(this.state) };
+    const markdown = serializeMarkdown(doc).replace(/\n$/, '');
+    e.clipboardData.setData('text/plain', markdown);
+    e.clipboardData.setData('text/html', `<meta charset="utf-8"><div data-mbe-markdown="${encodeURIComponent(markdown)}">${docToHtml(doc)}</div>`);
+    if (cut && !this.readOnly) this.run(cmd.deleteSelection);
   }
 
   private onPaste(e: ClipboardEvent): void {
+    if (this.fromControl(e)) return;
     e.preventDefault();
+    if (this.readOnly) return;
     this.refreshSelection();
-    const text = e.clipboardData?.getData('text/plain') ?? '';
-    if (!text) return;
-    const fragment = parseMarkdown(text).blocks;
+    const data = e.clipboardData;
+    if (!data) return;
+    const text = data.getData('text/plain');
+    const html = data.getData('text/html');
+    const plainOnly = this.plainPasteNext;
+    this.plainPasteNext = false;
+
+    const block = getBlock(this.state.doc, this.state.selection.focus.blockId);
+    if (isPlainTextBlock(block)) {
+      this.run((s) => cmd.insertText(s, text));
+      return;
+    }
+    if (plainOnly) {
+      // Mod+Shift+V: the text as typed, one paragraph per line.
+      const lines = text.replace(/\r\n?/g, '\n').split('\n');
+      this.run((s) => cmd.insertBlocks(s, lines.map((l) => paragraph(plain(l)))));
+      return;
+    }
+    // A URL pasted over selected text makes it a link.
+    const url = text.trim();
+    if (!isCollapsed(this.state.selection) && /^(https?:\/\/|mailto:)\S+$/i.test(url)) {
+      this.run((s) => cmd.setLink(s, url));
+      return;
+    }
+
+    let fragment: readonly Block[];
+    const internal = /data-mbe-markdown="([^"]*)"/.exec(html);
+    if (internal) fragment = parseMarkdown(decodeURIComponent(internal[1]!)).blocks;
+    else if (html) fragment = htmlToDoc(html).blocks;
+    else fragment = parseMarkdown(text).blocks;
+    if (fragment.length === 0 && text) fragment = parseMarkdown(text).blocks;
     this.run((s) => cmd.insertBlocks(s, fragment));
   }
 
-  private listen(target: EventTarget, type: string, fn: (e: Event) => void): void {
-    target.addEventListener(type, fn);
-    this.cleanup.push(() => target.removeEventListener(type, fn));
+  // -------------------------------------------------------------------------
+  // Slash menu
+
+  private maybeOpenSlash(): void {
+    const pos = this.state.selection.focus;
+    const block = getBlock(this.state.doc, pos.blockId);
+    if (!isTextBlock(block) || isPlainTextBlock(block) || pos.cell) return;
+    const text = inlineText(block.content);
+    const before = text[pos.offset - 2];
+    // Only at the start of a block or after a space, so URLs and paths do not open it.
+    if (before !== undefined && !/\s/.test(before)) return;
+    this.slash = { blockId: block.id, from: pos.offset - 1 };
+    this.updateUi();
+  }
+
+  private closeSlash(): void {
+    this.slash = null;
+    this.slashMenu.hide();
+    this.root.removeAttribute('aria-activedescendant');
+    this.root.removeAttribute('aria-controls');
+  }
+
+  /** The text typed after "/", or null when the slash menu should close. */
+  private slashQuery(): string | null {
+    const slash = this.slash;
+    if (!slash || !isCollapsed(this.state.selection)) return null;
+    const pos = this.state.selection.focus;
+    if (pos.blockId !== slash.blockId || pos.offset <= slash.from) return null;
+    const block = this.state.doc.blocks.find((b) => b.id === slash.blockId);
+    if (!block || !isTextBlock(block)) return null;
+    const text = inlineText(block.content);
+    if (!SLASH_CHARS.includes(text[slash.from] ?? '')) return null;
+    const query = text.slice(slash.from + 1, pos.offset);
+    if (query.includes('\n') || /\s\s/.test(query) || query.length > 30) return null;
+    return query;
+  }
+
+  private slashItems(query: string): MenuItem[] {
+    const ids = this.options.slashItems ?? SLASH_ITEM_IDS;
+    const items = ids
+      .map((id) => BLOCK_ITEMS.find((b) => b.id === id))
+      .filter((b): b is BlockItem => !!b)
+      .map<MenuItem>((b) => ({
+        id: b.id,
+        label: this.labels[b.label],
+        icon: b.icon,
+        aliases: b.aliases,
+        run: () => this.pickSlashItem(b.spec),
+      }));
+    return items.filter((item) => matches(item, query));
+  }
+
+  private pickSlashItem(spec: cmd.BlockTypeSpec): void {
+    const slash = this.slash;
+    if (!slash) return;
+    const end = this.state.selection.focus.offset;
+    this.closeSlash();
+    // Remove "/query", then convert or insert, as one undo step.
+    this.run((s) => {
+      const removed = cmd.deleteRange(s, { blockId: slash.blockId, offset: slash.from }, { blockId: slash.blockId, offset: end });
+      return cmd.insertBlock(removed, spec);
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Block menu
+
+  private blockMenuSections(blockId: string): MenuSection[] {
+    const block = getBlock(this.state.doc, blockId);
+    const sections: MenuSection[] = [];
+    if (isTextBlock(block) && block.type !== 'html') {
+      sections.push({
+        title: this.labels.turnInto,
+        items: BLOCK_ITEMS.filter((b) => b.spec.type !== 'table' && b.spec.type !== 'divider').map((b) => ({
+          id: b.id,
+          label: this.labels[b.label],
+          icon: b.icon,
+          active: this.isType(block, b.spec),
+          run: () => this.run((s) => cmd.turnBlockInto(s, blockId, b.spec)),
+        })),
+      });
+    }
+    if (block.type === 'table' && this.state.selection.focus.blockId === blockId && this.state.selection.focus.cell) {
+      const t = (kind: cmd.TableAction) => () => this.run((s) => cmd.tableAction(s, kind));
+      sections.push({
+        title: this.labels.tableSection,
+        items: [
+          { id: 'addRowAbove', label: this.labels.addRowAbove, icon: '↑', run: t({ kind: 'addRowAbove' }) },
+          { id: 'addRowBelow', label: this.labels.addRowBelow, icon: '↓', run: t({ kind: 'addRowBelow' }) },
+          { id: 'addColumnLeft', label: this.labels.addColumnLeft, icon: '←', run: t({ kind: 'addColumnLeft' }) },
+          { id: 'addColumnRight', label: this.labels.addColumnRight, icon: '→', run: t({ kind: 'addColumnRight' }) },
+          { id: 'alignLeft', label: this.labels.alignLeft, icon: '⇤', run: t({ kind: 'align', align: 'left' }) },
+          { id: 'alignCenter', label: this.labels.alignCenter, icon: '↔', run: t({ kind: 'align', align: 'center' }) },
+          { id: 'alignRight', label: this.labels.alignRight, icon: '⇥', run: t({ kind: 'align', align: 'right' }) },
+          { id: 'deleteRow', label: this.labels.deleteRow, icon: '✕', run: t({ kind: 'deleteRow' }) },
+          { id: 'deleteColumn', label: this.labels.deleteColumn, icon: '✕', run: t({ kind: 'deleteColumn' }) },
+        ],
+      });
+    }
+    sections.push({
+      items: [
+        { id: 'duplicate', label: this.labels.duplicate, icon: '⧉', run: () => this.run((s) => cmd.duplicateBlock(s, blockId)) },
+        { id: 'delete', label: this.labels.delete, icon: '🗑', danger: true, run: () => this.run((s) => cmd.deleteBlock(s, blockId)) },
+      ],
+    });
+    return sections;
+  }
+
+  private isType(block: Block, spec: cmd.BlockTypeSpec): boolean {
+    return cmd.isBlockTypeActive({ ...this.state, selection: caret(block.id, 0) }, spec);
+  }
+
+  openBlockMenu(blockId: string, anchor?: DOMRect): void {
+    if (this.readOnly) return;
+    this.closeSlash();
+    this.toolbar?.hide();
+    // Keep the caret in the table cell for table actions; otherwise move it into the block.
+    if (this.state.selection.focus.blockId !== blockId) {
+      const block = getBlock(this.state.doc, blockId);
+      const start = startOf(block);
+      this.state = { ...this.state, selection: { anchor: start, focus: start } };
+      this.focus();
+    }
+    this.blockMenu.setSections(this.blockMenuSections(blockId));
+    const rect = anchor ?? this.blockElement(blockId)?.getBoundingClientRect();
+    if (rect) this.blockMenu.popup.show(rect, 'below');
+    this.syncActiveDescendant();
+  }
+
+  private closeBlockMenu(): void {
+    this.blockMenu.hide();
+    this.syncActiveDescendant();
+  }
+
+  // -------------------------------------------------------------------------
+  // Toolbar and link popover (see ui/toolbar.ts)
+
+  /** Turn into items for the toolbar's dropdown. */
+  turnIntoItems(): MenuItem[] {
+    const block = getBlock(this.state.doc, this.state.selection.focus.blockId);
+    return BLOCK_ITEMS.filter((b) => b.spec.type !== 'table' && b.spec.type !== 'divider').map((b) => ({
+      id: b.id,
+      label: this.labels[b.label],
+      icon: b.icon,
+      active: this.isType(block, b.spec),
+      run: () => this.run((s) => cmd.setBlockType(s, b.spec)),
+    }));
+  }
+
+  /** Label of the current block type, for the toolbar's dropdown button. */
+  currentTypeLabel(): string {
+    const block = getBlock(this.state.doc, this.state.selection.focus.blockId);
+    const item = BLOCK_ITEMS.find((b) => this.isType(block, b.spec));
+    return item ? this.labels[item.label] : this.labels.text;
+  }
+
+  isMarkActive(mark: Mark): boolean {
+    return cmd.isMarkActive(this.state, mark);
+  }
+
+  activeLinkHref(): string | null {
+    return cmd.activeLink(this.state)?.href ?? null;
+  }
+
+  openLinkPopover(): void {
+    if (this.readOnly) return;
+    const block = getBlock(this.state.doc, this.state.selection.focus.blockId);
+    if (isPlainTextBlock(block)) return;
+    if (isCollapsed(this.state.selection) && !cmd.activeLink(this.state)) return;
+    const rect = this.selectionRect();
+    if (!rect) return;
+    this.toolbar?.hide();
+    const saved = this.state.selection;
+    this.linkPopover.open(rect, this.activeLinkHref() ?? '', (href) => {
+      this.state = { ...this.state, selection: saved };
+      if (href !== null) this.run((s) => cmd.setLink(s, href === '' ? null : href));
+      this.focus();
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // UI that follows the selection
+
+  private updateUi(): void {
+    if (this.destroyed) return;
+    const focused = this.hasFocus();
+
+    // Hint in an empty focused paragraph.
+    const pos = this.state.selection.focus;
+    const el = focused && isCollapsed(this.state.selection) ? this.renderer.elementFor(pos.blockId) : undefined;
+    // The placeholder of an empty document takes precedence over the slash hint.
+    const placeholderShown = !!this.options.placeholder && this.state.doc.blocks.length === 1;
+    const showHint =
+      el && el.classList.contains('mbe-paragraph') && el.classList.contains('mbe-empty') && !this.readOnly && !placeholderShown;
+    const nextHint = showHint ? el : null;
+    if (this.hintEl !== nextHint) {
+      this.hintEl?.classList.remove('mbe-show-hint');
+      nextHint?.classList.add('mbe-show-hint');
+      this.hintEl = nextHint;
+    }
+
+    // Slash menu.
+    const query = focused && !this.composing ? this.slashQuery() : null;
+    if (query === null) {
+      if (this.slash) this.closeSlash();
+    } else {
+      const items = this.slashItems(query);
+      // Close after a few characters that match nothing, so typing continues normally.
+      if (items.length === 0 && query.length > 3) {
+        this.closeSlash();
+      } else {
+        // Rebuild only when the query changed, so a late selectionchange does
+        // not reset the item the user just moved to with the arrow keys.
+        if (!this.slashMenu.isOpen || this.slash!.query !== query) {
+          this.slashMenu.setSections([{ items }], this.labels.noResults);
+          this.slash!.query = query;
+        }
+        const rect = this.selectionRect();
+        if (rect) this.slashMenu.popup.show(rect, 'below');
+        this.root.setAttribute('aria-controls', this.slashMenu.el.id);
+      }
+    }
+
+    // Formatting toolbar.
+    if (this.toolbar) {
+      const block = this.state.doc.blocks.find((b) => b.id === pos.blockId);
+      const show =
+        focused &&
+        !this.readOnly &&
+        !this.composing &&
+        !isCollapsed(this.state.selection) &&
+        !this.slash &&
+        !this.blockMenu.isOpen &&
+        !!block &&
+        !isPlainTextBlock(block) &&
+        block.type !== 'divider';
+      if (show) this.toolbar.show();
+      else this.toolbar.hide();
+    }
+    // On touch devices there is no hover, so the handle follows the caret.
+    if (focused && !this.readOnly && typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) {
+      this.handle.showFor(pos.blockId);
+    }
+    if (!focused && this.blockMenu.isOpen && !this.root.ownerDocument.activeElement?.closest?.('.mbe-ui')) this.blockMenu.hide();
+    this.syncActiveDescendant();
+  }
+
+  private syncActiveDescendant(): void {
+    const menu = this.slashMenu.isOpen ? this.slashMenu : this.blockMenu.isOpen ? this.blockMenu : null;
+    const id = menu?.activeDescendant;
+    if (id) this.root.setAttribute('aria-activedescendant', id);
+    else this.root.removeAttribute('aria-activedescendant');
+  }
+
+  private hideUi(): void {
+    this.closeSlash();
+    this.blockMenu.hide();
+    this.toolbar?.hide();
+    this.handle.hide();
+    this.hintEl?.classList.remove('mbe-show-hint');
+    this.hintEl = null;
+  }
+
+  private listen(target: EventTarget, type: string, fn: (e: Event) => void, capture = false): void {
+    target.addEventListener(type, fn, capture);
+    this.cleanup.push(() => target.removeEventListener(type, fn, capture));
   }
 }
 
 function clampSelection(doc: Doc, sel: Selection): Selection {
   const clamp = (p: Position): Position => {
-    if (blockIndex(doc, p.blockId) < 0) {
-      const first = doc.blocks[0]!;
-      return caret(first.id, 0).anchor;
-    }
-    const len = inlineText(getBlock(doc, p.blockId).content).length;
-    return { blockId: p.blockId, offset: Math.min(p.offset, len) };
+    const index = blockIndex(doc, p.blockId);
+    if (index < 0) return startOf(doc.blocks[0]!);
+    const block = doc.blocks[index]!;
+    const content = containerContent(block, p.cell);
+    return { ...p, offset: Math.min(p.offset, content ? inlineLength(content) : 0) };
   };
   return { anchor: clamp(sel.anchor), focus: clamp(sel.focus) };
 }
-

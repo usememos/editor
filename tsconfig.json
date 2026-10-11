@@ -3,13 +3,31 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "isolatedModules": true,
     "skipLibCheck": true,
-    "types": []
+    "types": [],
+    "jsx": "react-jsx",
+    "paths": {
+      "@editor/core": [
+        "./packages/core/src/index.ts"
+      ]
+    }
   },
-  "include": ["packages/*/src", "packages/*/test", "playground"]
+  "include": [
+    "packages/*/src",
+    "packages/*/test",
+    "playground"
+  ],
+  "exclude": [
+    "playground/vite.config.ts",
+    "vitest.config.ts"
+  ]
 }

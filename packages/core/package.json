@@ -5,5 +5,11 @@
   "type": "module",
   "main": "./src/index.ts",
   "license": "MIT",
-  "sideEffects": false
+  "sideEffects": false,
+  "imports": {
+    "#entities": {
+      "browser": "./src/markdown/entities.dom.ts",
+      "default": "./src/markdown/entities.ts"
+    }
+  }
 }

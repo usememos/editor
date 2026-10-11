@@ -1,0 +1,13 @@
+{
+  "name": "@editor/react",
+  "version": "0.0.0",
+  "description": "React component for the editor: a block editor for CommonMark + GFM Markdown.",
+  "type": "module",
+  "main": "./src/index.tsx",
+  "license": "MIT",
+  "sideEffects": false,
+  "peerDependencies": {
+    "@editor/core": "0.0.0",
+    "react": ">=18"
+  }
+}

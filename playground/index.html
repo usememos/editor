@@ -5,21 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>editor playground</title>
     <style>
+      :root { color-scheme: light dark; }
       body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background: #f7f7f8; color: #1f2328; }
-      main { max-width: 720px; margin: 48px auto; padding: 0 16px; }
-      .card { background: #fff; border: 1px solid #e3e4e8; border-radius: 10px; padding: 14px 16px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
-      .card:focus-within { border-color: #c7c9d1; }
-      #editor { min-height: 120px; }
+      main { max-width: 760px; margin: 40px auto; padding: 0 16px 40px; }
+      nav { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; font-size: 13px; color: #8b919a; }
+      nav a { color: inherit; }
+      .card { background: #fff; border: 1px solid #e3e4e8; border-radius: 10px; padding: 16px 20px 16px 40px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+      #editor { min-height: 160px; }
       h2.label { font-size: 12px; font-weight: 600; color: #8b919a; text-transform: uppercase; letter-spacing: .04em; margin: 24px 0 8px; }
-      pre { background: #fff; border: 1px solid #e3e4e8; border-radius: 10px; padding: 12px 16px; font-size: 13px; white-space: pre-wrap; margin: 0; }
+      pre#output { background: #fff; border: 1px solid #e3e4e8; border-radius: 10px; padding: 12px 16px; font-size: 13px; white-space: pre-wrap; margin: 0; }
       @media (prefers-color-scheme: dark) {
         body { background: #111214; color: #e6e6e6; }
-        .card, pre { background: #18191b; border-color: #2a2c30; }
+        .card, pre#output { background: #18191b; border-color: #2a2c30; }
       }
     </style>
   </head>
   <body>
     <main>
+      <nav><strong>Core</strong> · <a href="./react.html">React</a> · <a href="?empty">Empty</a></nav>
       <div class="card"><div id="editor"></div></div>
       <h2 class="label">Markdown output</h2>
       <pre id="output"></pre>

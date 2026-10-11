@@ -1,129 +1,439 @@
 import { describe, expect, it } from 'vitest';
+import * as cmd from '../src/commands';
 import {
+  type Block,
   type EditorState,
+  type Inline,
+  type Selection,
   caret,
-  commands as cmd,
+  codeBlock,
   createState,
+  divider,
+  heading,
   inlineText,
-  parseMarkdown,
-  serializeMarkdown,
-} from '../src/index';
+  listItem,
+  paragraph,
+  quote,
+  table,
+} from '../src/model';
 
-function state(md: string): EditorState {
-  return createState(parseMarkdown(md));
+// Compact text form of a document, for readable assertions:
+// "p:hello", "h2:Title", "ul0:item", "ol1:item", "task0[x]:done", "quote:text", "code(js):x", "hr", "table:a|b/c|d".
+function show(s: EditorState): string[] {
+  return s.doc.blocks.map(describeBlock);
+}
+function describeBlock(b: Block): string {
+  switch (b.type) {
+    case 'paragraph':
+      return `p:${fmt(b.content)}`;
+    case 'heading':
+      return `h${b.level}:${fmt(b.content)}`;
+    case 'listItem': {
+      const kind = b.listType === 'bullet' ? 'ul' : b.listType === 'ordered' ? 'ol' : 'task';
+      return `${kind}${b.indent}${b.listType === 'task' ? (b.checked ? '[x]' : '[ ]') : ''}:${fmt(b.content)}`;
+    }
+    case 'quote':
+      return `quote:${fmt(b.content)}`;
+    case 'code':
+      return `code(${b.language}):${inlineText(b.content)}`;
+    case 'html':
+      return `html:${inlineText(b.content)}`;
+    case 'divider':
+      return 'hr';
+    case 'table':
+      return `table:${b.rows.map((r) => r.map(fmt).join('|')).join('/')}`;
+  }
+}
+/** Text with marks shown as <b>, <i>, <s>, <c> and links as [text](href). */
+function fmt(inline: Inline): string {
+  return inline
+    .map((s) => {
+      let t = s.text;
+      if (s.marks.includes('code')) t = `<c>${t}</c>`;
+      if (s.marks.includes('strike')) t = `<s>${t}</s>`;
+      if (s.marks.includes('italic')) t = `<i>${t}</i>`;
+      if (s.marks.includes('bold')) t = `<b>${t}</b>`;
+      if (s.link) t = `[${t}](${s.link})`;
+      return t;
+    })
+    .join('');
+}
+
+const txt = (text: string) => [{ text, marks: [] as const }];
+const bold = (text: string) => [{ text, marks: ['bold'] as const }];
+
+function state(...blocks: Block[]): EditorState {
+  return createState({ blocks });
 }
 function at(s: EditorState, blockIndex: number, offset: number): EditorState {
   return { ...s, selection: caret(s.doc.blocks[blockIndex]!.id, offset) };
 }
 function range(s: EditorState, a: [number, number], b: [number, number]): EditorState {
-  return {
-    ...s,
-    selection: {
-      anchor: { blockId: s.doc.blocks[a[0]]!.id, offset: a[1] },
-      focus: { blockId: s.doc.blocks[b[0]]!.id, offset: b[1] },
-    },
+  const sel: Selection = {
+    anchor: { blockId: s.doc.blocks[a[0]]!.id, offset: a[1] },
+    focus: { blockId: s.doc.blocks[b[0]]!.id, offset: b[1] },
   };
+  return { ...s, selection: sel };
 }
-const md = (s: EditorState) => serializeMarkdown(s.doc);
+function inCell(s: EditorState, blockIndex: number, row: number, col: number, offset: number): EditorState {
+  return { ...s, selection: caret(s.doc.blocks[blockIndex]!.id, offset, { row, col }) };
+}
+const type = (s: EditorState, text: string) => [...text].reduce((acc, ch) => cmd.insertText(acc, ch), s);
 
 describe('insertText', () => {
   it('inherits marks from the character before the caret', () => {
-    const s = cmd.insertText(at(state('**bold** text'), 0, 4), 'er');
-    expect(md(s)).toBe('**bolder** text\n');
+    const s = cmd.insertText(at(state(paragraph([...bold('bold'), ...txt(' text')])), 0, 4), 'er');
+    expect(show(s)).toEqual(['p:<b>bolder</b> text']);
   });
 
   it('uses stored marks after toggling on a collapsed selection', () => {
-    let s = at(state('plain'), 0, 5);
+    let s = at(state(paragraph(txt('plain'))), 0, 5);
     s = cmd.toggleMark(s, 'italic');
     s = cmd.insertText(s, '!');
-    expect(md(s)).toBe('plain*!*\n');
+    expect(show(s)).toEqual(['p:plain<i>!</i>']);
   });
 
   it('replaces a selection across blocks', () => {
-    const s = cmd.insertText(range(state('one\n\ntwo\n\nthree'), [0, 1], [2, 2]), 'X');
-    expect(md(s)).toBe('oXree\n');
+    const s = cmd.insertText(range(state(paragraph(txt('one')), paragraph(txt('two')), paragraph(txt('three'))), [0, 1], [2, 2]), 'X');
+    expect(show(s)).toEqual(['p:oXree']);
+  });
+
+  it('does not extend a link when typing at its end, but does inside it', () => {
+    const linked = paragraph([{ text: 'site', marks: [], link: 'https://a.b' }]);
+    expect(show(cmd.insertText(at(state(linked), 0, 4), 'x'))).toEqual(['p:[site](https://a.b)x']);
+    expect(show(cmd.insertText(at(state(linked), 0, 2), 'x'))).toEqual(['p:[sixte](https://a.b)']);
+  });
+
+  it('inserts plain text in a code block', () => {
+    let s = at(state(codeBlock('js', 'ab')), 0, 1);
+    s = cmd.toggleMark(s, 'bold');
+    s = cmd.insertText(s, 'X');
+    expect(show(s)).toEqual(['code(js):aXb']);
+  });
+
+  it('types into a table cell', () => {
+    const s = cmd.insertText(inCell(state(table([null, null], [[txt('a'), txt('b')], [[], []]])), 0, 1, 1, 0), 'z');
+    expect(show(s)).toEqual(['table:a|b/|z']);
   });
 });
 
 describe('splitBlock (Enter)', () => {
   it('splits a paragraph and moves the caret to the new block', () => {
-    const s = cmd.splitBlock(at(state('hello world'), 0, 5));
-    expect(s.doc.blocks.map((b) => inlineText(b.content))).toEqual(['hello', ' world']);
+    const s = cmd.splitBlock(at(state(paragraph(txt('hello world'))), 0, 5));
+    expect(show(s)).toEqual(['p:hello', 'p: world']);
     expect(s.selection.focus).toEqual({ blockId: s.doc.blocks[1]!.id, offset: 0 });
   });
 
   it('creates a paragraph after a heading when pressed at the end', () => {
-    const s = cmd.splitBlock(at(state('# Title'), 0, 5));
-    expect(s.doc.blocks.map((b) => b.type)).toEqual(['heading', 'paragraph']);
+    expect(show(cmd.splitBlock(at(state(heading(1, txt('Title'))), 0, 5)))).toEqual(['h1:Title', 'p:']);
   });
 
-  it('inserts an empty paragraph above when pressed at the start, keeping the block id', () => {
-    const before = state('# Title');
+  it('inserts an empty block above when pressed at the start, keeping the block id', () => {
+    const before = state(heading(1, txt('Title')));
     const s = cmd.splitBlock(at(before, 0, 0));
-    expect(s.doc.blocks.map((b) => b.type)).toEqual(['paragraph', 'heading']);
+    expect(show(s)).toEqual(['p:', 'h1:Title']);
     expect(s.doc.blocks[1]!.id).toBe(before.doc.blocks[0]!.id);
+  });
+
+  it('continues a list with the same type and indent', () => {
+    const s = cmd.splitBlock(at(state(listItem('task', txt('ab'), { indent: 1, checked: true })), 0, 2));
+    expect(show(s)).toEqual(['task1[x]:ab', 'task1[ ]:']);
+  });
+
+  it('outdents, then ends, a list on Enter in an empty item', () => {
+    let s = at(state(listItem('bullet', [], { indent: 1 })), 0, 0);
+    s = cmd.splitBlock(s);
+    expect(show(s)).toEqual(['ul0:']);
+    s = cmd.splitBlock(s);
+    expect(show(s)).toEqual(['p:']);
+  });
+
+  it('inserts a newline in a code block, and leaves it after two empty lines', () => {
+    let s = at(state(codeBlock('', 'x')), 0, 1);
+    s = cmd.splitBlock(s);
+    s = cmd.splitBlock(s);
+    expect(show(s)).toEqual(['code():x\n\n']);
+    s = cmd.splitBlock(s);
+    expect(show(s)).toEqual(['code():x', 'p:']);
+  });
+
+  it('turns "```ts" + Enter into a code block', () => {
+    const s = cmd.splitBlock(at(state(paragraph(txt('```ts'))), 0, 5));
+    expect(show(s)).toEqual(['code(ts):']);
+  });
+
+  it('moves down a table, adding a row at the bottom', () => {
+    const s = cmd.splitBlock(inCell(state(table([null], [[txt('h')], [txt('a')]])), 0, 1, 0, 1));
+    expect(show(s)).toEqual(['table:h/a/']);
+    expect(s.selection.focus.cell).toEqual({ row: 2, col: 0 });
+  });
+});
+
+describe('insertLineBreak (Shift+Enter)', () => {
+  it('inserts a hard break with the current marks', () => {
+    const s = cmd.insertLineBreak(at(state(paragraph(bold('ab'))), 0, 1));
+    expect(show(s)).toEqual(['p:<b>a\nb</b>']);
+  });
+
+  it('does nothing in a table cell', () => {
+    const s0 = inCell(state(table([null], [[txt('h')]])), 0, 0, 0, 1);
+    expect(cmd.insertLineBreak(s0)).toBe(s0);
   });
 });
 
 describe('deleteBackward (Backspace)', () => {
   it('removes a whole emoji', () => {
-    const s = cmd.deleteBackward(at(state('hi 👍🏽'), 0, 7));
-    expect(inlineText(s.doc.blocks[0]!.content)).toBe('hi ');
+    const s = cmd.deleteBackward(at(state(paragraph(txt('hi 👍🏽'))), 0, 7));
+    expect(show(s)).toEqual(['p:hi ']);
   });
 
   it('turns a heading into a paragraph at offset 0', () => {
-    const s = cmd.deleteBackward(at(state('# Title'), 0, 0));
-    expect(md(s)).toBe('Title\n');
+    expect(show(cmd.deleteBackward(at(state(heading(2, txt('Title'))), 0, 0)))).toEqual(['p:Title']);
+  });
+
+  it('outdents a nested list item, then turns it into a paragraph', () => {
+    let s = at(state(listItem('ordered', txt('x'), { indent: 1 })), 0, 0);
+    s = cmd.deleteBackward(s);
+    expect(show(s)).toEqual(['ol0:x']);
+    s = cmd.deleteBackward(s);
+    expect(show(s)).toEqual(['p:x']);
   });
 
   it('merges a paragraph into the previous block', () => {
-    const s = cmd.deleteBackward(at(state('# One\n\ntwo'), 1, 0));
-    expect(md(s)).toBe('# Onetwo\n');
+    const s = cmd.deleteBackward(at(state(heading(1, txt('One')), paragraph(txt('two'))), 1, 0));
+    expect(show(s)).toEqual(['h1:Onetwo']);
     expect(s.selection.focus.offset).toBe(3);
   });
 
+  it('removes a divider above', () => {
+    const s = cmd.deleteBackward(at(state(paragraph(txt('a')), divider(), paragraph(txt('b'))), 2, 0));
+    expect(show(s)).toEqual(['p:a', 'p:b']);
+  });
+
+  it('moves into the last cell of a table above instead of merging', () => {
+    const s = cmd.deleteBackward(at(state(table([null], [[txt('h')], [txt('cell')]]), paragraph(txt('x'))), 1, 0));
+    expect(show(s)).toEqual(['table:h/cell', 'p:x']);
+    expect(s.selection.focus).toMatchObject({ offset: 4, cell: { row: 1, col: 0 } });
+  });
+
   it('does nothing at the very start of the document', () => {
-    const s0 = at(state('text'), 0, 0);
+    const s0 = at(state(paragraph(txt('text'))), 0, 0);
     expect(cmd.deleteBackward(s0)).toBe(s0);
   });
 });
 
 describe('deleteForward', () => {
   it('merges the next block at the end of a block', () => {
-    const s = cmd.deleteForward(at(state('one\n\ntwo'), 0, 3));
-    expect(md(s)).toBe('onetwo\n');
+    expect(show(cmd.deleteForward(at(state(paragraph(txt('one')), paragraph(txt('two'))), 0, 3)))).toEqual(['p:onetwo']);
   });
 });
 
-describe('toggleMark', () => {
+describe('deleteRange across non-text blocks', () => {
+  it('removes a table that the selection runs into', () => {
+    let s = state(paragraph(txt('ab')), table([null], [[txt('h')]]), paragraph(txt('cd')));
+    s = { ...s, selection: { anchor: { blockId: s.doc.blocks[0]!.id, offset: 1 }, focus: { blockId: s.doc.blocks[1]!.id, offset: 0, cell: { row: 0, col: 0 } } } };
+    expect(show(cmd.deleteSelection(s))).toEqual(['p:a', 'p:cd']);
+  });
+});
+
+describe('marks and links', () => {
   it('adds a mark across blocks, then removes it', () => {
-    let s = range(state('one\n\ntwo'), [0, 1], [1, 2]);
+    let s = range(state(paragraph(txt('one')), paragraph(txt('two'))), [0, 1], [1, 2]);
     s = cmd.toggleMark(s, 'bold');
-    expect(md(s)).toBe('o**ne**\n\n**tw**o\n');
+    expect(show(s)).toEqual(['p:o<b>ne</b>', 'p:<b>tw</b>o']);
+    expect(cmd.isMarkActive(s, 'bold')).toBe(true);
     s = cmd.toggleMark(s, 'bold');
-    expect(md(s)).toBe('one\n\ntwo\n');
+    expect(show(s)).toEqual(['p:one', 'p:two']);
+  });
+
+  it('sets, edits and removes a link', () => {
+    let s = range(state(paragraph(txt('visit site now'))), [0, 6], [0, 10]);
+    s = cmd.setLink(s, 'https://x.y');
+    expect(show(s)).toEqual(['p:visit [site](https://x.y) now']);
+    // Collapsed inside the link: the whole link changes.
+    s = cmd.setLink(at(s, 0, 8), 'https://z.z');
+    expect(show(s)).toEqual(['p:visit [site](https://z.z) now']);
+    s = cmd.setLink(at(s, 0, 8), null);
+    expect(show(s)).toEqual(['p:visit site now']);
   });
 });
 
-describe('input rules', () => {
-  it('turns "## " into a level 2 heading', () => {
-    let s = at(state(''), 0, 0);
-    s = cmd.insertText(s, '##');
-    s = cmd.insertText(s, ' ');
-    s = cmd.applyInputRules(s)!;
-    s = cmd.insertText(s, 'Hi');
-    expect(md(s)).toBe('## Hi\n');
+describe('block types', () => {
+  it('converts a heading to a list item and back, keeping the id and text', () => {
+    const before = at(state(heading(1, txt('x'))), 0, 0);
+    const s = cmd.setBlockType(before, { type: 'listItem', listType: 'task' });
+    expect(show(s)).toEqual(['task0[ ]:x']);
+    expect(s.doc.blocks[0]!.id).toBe(before.doc.blocks[0]!.id);
+    expect(show(cmd.setBlockType(s, { type: 'paragraph' }))).toEqual(['p:x']);
+  });
+
+  it('drops formatting when converting to code', () => {
+    expect(show(cmd.setBlockType(at(state(paragraph(bold('x'))), 0, 0), { type: 'code' }))).toEqual(['code():x']);
+  });
+
+  it('inserts a table below a non-empty block, or replaces an empty one', () => {
+    expect(show(cmd.insertBlock(at(state(paragraph(txt('a'))), 0, 1), { type: 'table' }))).toEqual(['p:a', 'table:||/||/||']);
+    expect(show(cmd.insertBlock(at(state(paragraph()), 0, 0), { type: 'table' }))).toEqual(['table:||/||/||']);
+  });
+
+  it('inserts a divider and moves the caret to a paragraph after it', () => {
+    const s = cmd.insertBlock(at(state(paragraph()), 0, 0), { type: 'divider' });
+    expect(show(s)).toEqual(['hr', 'p:']);
+    expect(s.selection.focus.blockId).toBe(s.doc.blocks[1]!.id);
+  });
+});
+
+describe('lists', () => {
+  it('indents at most one level deeper than the item above', () => {
+    let s = state(listItem('bullet', txt('a')), listItem('bullet', txt('b')));
+    s = cmd.indentListItems(at(s, 1, 0), 1);
+    s = cmd.indentListItems(s, 1);
+    expect(show(s)).toEqual(['ul0:a', 'ul1:b']);
+    expect(show(cmd.indentListItems(s, -1))).toEqual(['ul0:a', 'ul0:b']);
+  });
+
+  it('does not indent the first item', () => {
+    const s0 = at(state(listItem('bullet', txt('a'))), 0, 0);
+    expect(cmd.indentListItems(s0, 1)).toBe(s0);
+  });
+
+  it('toggles a task', () => {
+    const s = state(listItem('task', txt('a')));
+    expect(show(cmd.toggleTask(s, s.doc.blocks[0]!.id))).toEqual(['task0[x]:a']);
+  });
+});
+
+describe('block menu', () => {
+  it('duplicates and deletes a block', () => {
+    let s = state(paragraph(txt('a')), quote(txt('b')));
+    s = cmd.duplicateBlock(s, s.doc.blocks[1]!.id);
+    expect(show(s)).toEqual(['p:a', 'quote:b', 'quote:b']);
+    expect(s.doc.blocks[1]!.id).not.toBe(s.doc.blocks[2]!.id);
+    s = cmd.deleteBlock(s, s.doc.blocks[0]!.id);
+    expect(show(s)).toEqual(['quote:b', 'quote:b']);
+  });
+
+  it('keeps one empty paragraph when the last block is deleted', () => {
+    const s = state(divider());
+    expect(show(cmd.deleteBlock(s, s.doc.blocks[0]!.id))).toEqual(['p:']);
+  });
+});
+
+describe('tables', () => {
+  const t = () => state(table([null, null], [[txt('a'), txt('b')], [txt('c'), txt('d')]]));
+
+  it('adds and deletes rows and columns', () => {
+    let s = cmd.tableAction(inCell(t(), 0, 1, 0, 0), { kind: 'addRowBelow' });
+    expect(show(s)).toEqual(['table:a|b/c|d/|']);
+    s = cmd.tableAction(s, { kind: 'addColumnRight' });
+    expect(show(s)).toEqual(['table:a||b/c||d/||']);
+    s = cmd.tableAction(s, { kind: 'deleteColumn' });
+    s = cmd.tableAction(s, { kind: 'deleteRow' });
+    expect(show(s)).toEqual(['table:a|b/c|d']);
+  });
+
+  it('keeps the header row first when adding a row above it', () => {
+    expect(show(cmd.tableAction(inCell(t(), 0, 0, 0, 0), { kind: 'addRowAbove' }))).toEqual(['table:a|b/|/c|d']);
+  });
+
+  it('sets column alignment', () => {
+    const s = cmd.tableAction(inCell(t(), 0, 0, 1, 0), { kind: 'align', align: 'center' });
+    expect((s.doc.blocks[0] as unknown as { align: unknown[] }).align).toEqual([null, 'center']);
+  });
+
+  it('Tab moves to the next cell and adds a row after the last one', () => {
+    let s = cmd.moveCell(inCell(t(), 0, 1, 1, 0), 1);
+    expect(show(s)).toEqual(['table:a|b/c|d/|']);
+    expect(s.selection.focus.cell).toEqual({ row: 2, col: 0 });
+    s = cmd.moveCell(s, -1);
+    expect(s.selection.focus.cell).toEqual({ row: 1, col: 1 });
+  });
+});
+
+describe('block shortcuts', () => {
+  const typed = (text: string) => {
+    let s = at(state(paragraph()), 0, 0);
+    for (const ch of text) {
+      s = cmd.insertText(s, ch);
+      if (ch === ' ' || ch === '-') s = cmd.applyBlockInputRules(s) ?? s;
+    }
+    return show(s);
+  };
+
+  it.each([
+    ['## Hi', ['h2:Hi']],
+    ['- item', ['ul0:item']],
+    ['* item', ['ul0:item']],
+    ['1. item', ['ol0:item']],
+    ['[ ] todo', ['task0[ ]:todo']],
+    ['[x] done', ['task0[x]:done']],
+    ['- [ ] todo', ['task0[ ]:todo']],
+    ['> quoted', ['quote:quoted']],
+    ['``` x', ['code():x']],
+    ['---', ['hr', 'p:']],
+  ])('%s', (input, expected) => {
+    expect(typed(input)).toEqual(expected);
+  });
+
+  it('keeps the start number of an ordered list', () => {
+    let s = at(state(paragraph()), 0, 0);
+    s = type(s, '3. ');
+    s = cmd.applyBlockInputRules(s)!;
+    expect((s.doc.blocks[0] as { start?: number }).start).toBe(3);
+  });
+
+  it('does not apply in the middle of text', () => {
+    const s = cmd.insertText(at(state(paragraph(txt('a#'))), 0, 2), ' ');
+    expect(cmd.applyBlockInputRules(s)).toBeNull();
+  });
+});
+
+describe('inline shortcuts', () => {
+  const typed = (text: string) => {
+    let s = at(state(paragraph()), 0, 0);
+    for (const ch of text) {
+      s = cmd.insertText(s, ch);
+      if ('*_`~'.includes(ch)) s = cmd.applyInlineInputRules(s) ?? s;
+    }
+    return show(s);
+  };
+
+  it.each([
+    ['a **bold** b', ['p:a <b>bold</b> b']],
+    ['a __bold__ b', ['p:a <b>bold</b> b']],
+    ['a *it* b', ['p:a <i>it</i> b']],
+    ['a _it_ b', ['p:a <i>it</i> b']],
+    ['a `code` b', ['p:a <c>code</c> b']],
+    ['a ~~gone~~ b', ['p:a <s>gone</s> b']],
+    ['snake_case_name', ['p:snake_case_name']],
+    ['2 * 3 * 4', ['p:2 * 3 * 4']],
+  ])('%s', (input, expected) => {
+    expect(typed(input)).toEqual(expected);
   });
 });
 
 describe('insertBlocks (paste)', () => {
   it('merges a single pasted paragraph inline', () => {
-    const s = cmd.insertBlocks(at(state('ab'), 0, 1), parseMarkdown('**X**').blocks);
-    expect(md(s)).toBe('a**X**b\n');
+    const s = cmd.insertBlocks(at(state(paragraph(txt('ab'))), 0, 1), [paragraph(bold('X'))]);
+    expect(show(s)).toEqual(['p:a<b>X</b>b']);
   });
 
   it('splits around several pasted blocks', () => {
-    const s = cmd.insertBlocks(at(state('ab'), 0, 1), parseMarkdown('one\n\n# two\n\nthree').blocks);
-    expect(md(s)).toBe('aone\n\n# two\n\nthreeb\n');
+    const s = cmd.insertBlocks(at(state(paragraph(txt('ab'))), 0, 1), [paragraph(txt('one')), heading(2, txt('two')), paragraph(txt('three'))]);
+    expect(show(s)).toEqual(['p:aone', 'h2:two', 'p:threeb']);
+  });
+
+  it('pastes a table between the two halves of a paragraph', () => {
+    const s = cmd.insertBlocks(at(state(paragraph(txt('ab'))), 0, 1), [table([null], [[txt('h')]])]);
+    expect(show(s)).toEqual(['p:a', 'table:h', 'p:b']);
+  });
+
+  it('pastes as plain text inside a code block', () => {
+    const s = cmd.insertBlocks(at(state(codeBlock('', '')), 0, 0), [paragraph(bold('x')), paragraph(txt('y'))]);
+    expect(show(s)).toEqual(['code():x\ny']);
+  });
+
+  it('replaces an empty block with the pasted block type', () => {
+    expect(show(cmd.insertBlocks(at(state(paragraph()), 0, 0), [heading(1, txt('T'))]))).toEqual(['h1:T']);
   });
 });

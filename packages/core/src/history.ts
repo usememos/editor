@@ -31,6 +31,12 @@ export class History {
     this.lastTime = now;
   }
 
+  clear(): void {
+    this.undoStack = [];
+    this.redoStack = [];
+    this.lastKind = null;
+  }
+
   /** Ends the current typing group, e.g. when the caret moves. */
   breakGroup(): void {
     this.lastKind = null;

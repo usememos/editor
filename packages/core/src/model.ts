@@ -5,20 +5,44 @@
 // rest. The view relies on this to re-render only blocks whose object
 // identity changed, and history relies on it to keep snapshots cheap.
 
-export type Mark = 'bold' | 'italic' | 'strike' | 'code';
+/** `html` marks raw inline HTML, which is shown as source and saved verbatim. */
+export type Mark = 'bold' | 'italic' | 'strike' | 'code' | 'html';
 
 /** Canonical mark order. Used for sorting and for nesting when rendering. */
-export const MARK_ORDER: readonly Mark[] = ['bold', 'italic', 'strike', 'code'];
+export const MARK_ORDER: readonly Mark[] = ['bold', 'italic', 'strike', 'code', 'html'];
 
-/** A run of text that shares one set of marks. */
+/** Character used as the text of an inline atom (an image). */
+export const ATOM_CHAR = '￼';
+
+export interface ImageAtom {
+  readonly src: string;
+  readonly alt: string;
+  readonly title?: string;
+}
+
+/** A run of text that shares one format. A hard line break is a "\n" in the text. */
 export interface Span {
   readonly text: string;
   /** Sorted by MARK_ORDER, no duplicates. */
   readonly marks: readonly Mark[];
+  readonly link?: string;
+  /** An image. Its `text` is a single ATOM_CHAR. */
+  readonly image?: ImageAtom;
 }
 
-/** Inline content: normalized spans (no empty spans, no adjacent equal marks). */
+/** Inline content: normalized spans (no empty spans, no adjacent spans with equal format). */
 export type Inline = readonly Span[];
+
+export interface Format {
+  readonly marks: readonly Mark[];
+  readonly link?: string;
+}
+
+export type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
+export type ListType = 'bullet' | 'ordered' | 'task';
+export type Align = 'left' | 'center' | 'right' | null;
+
+export const MAX_INDENT = 5;
 
 export interface ParagraphBlock {
   readonly id: string;
@@ -29,21 +53,78 @@ export interface ParagraphBlock {
 export interface HeadingBlock {
   readonly id: string;
   readonly type: 'heading';
-  readonly level: 1 | 2 | 3 | 4 | 5 | 6;
+  readonly level: HeadingLevel;
   readonly content: Inline;
 }
 
-/** Blocks covered by the prototype. Step 3 adds lists, quote, code, table, divider. */
-export type Block = ParagraphBlock | HeadingBlock;
+/** One list item. Adjacent items form a list; `indent` gives nesting (0 to MAX_INDENT). */
+export interface ListItemBlock {
+  readonly id: string;
+  readonly type: 'listItem';
+  readonly listType: ListType;
+  readonly indent: number;
+  /** Task items only. */
+  readonly checked: boolean;
+  /** Ordered items only: the number of the first item of a list. Ignored on later items. */
+  readonly start?: number;
+  readonly content: Inline;
+}
+
+export interface QuoteBlock {
+  readonly id: string;
+  readonly type: 'quote';
+  readonly content: Inline;
+}
+
+/** Code block. Content is plain text (no marks); lines are separated by "\n". */
+export interface CodeBlock {
+  readonly id: string;
+  readonly type: 'code';
+  readonly language: string;
+  readonly content: Inline;
+}
+
+/** Raw HTML block, kept and saved verbatim. Content is plain text. */
+export interface HtmlBlock {
+  readonly id: string;
+  readonly type: 'html';
+  readonly content: Inline;
+}
+
+/** GFM table. `rows[0]` is the header row. Every row has `align.length` cells. */
+export interface TableBlock {
+  readonly id: string;
+  readonly type: 'table';
+  readonly align: readonly Align[];
+  readonly rows: readonly (readonly Inline[])[];
+}
+
+export interface DividerBlock {
+  readonly id: string;
+  readonly type: 'divider';
+}
+
+export type TextBlock = ParagraphBlock | HeadingBlock | ListItemBlock | QuoteBlock | CodeBlock | HtmlBlock;
+export type Block = TextBlock | TableBlock | DividerBlock;
+export type BlockType = Block['type'];
 
 export interface Doc {
   readonly blocks: readonly Block[];
 }
 
-/** A caret position: a character offset into a block's plain text. */
+export interface Cell {
+  readonly row: number;
+  readonly col: number;
+}
+
+/**
+ * A caret position: a character offset into a block's text. Inside a table
+ * the position also names the cell. A divider only has offset 0.
+ */
 export interface Position {
   readonly blockId: string;
   readonly offset: number;
+  readonly cell?: Cell;
 }
 
 export interface Selection {
@@ -54,7 +135,7 @@ export interface Selection {
 export interface EditorState {
   readonly doc: Doc;
   readonly selection: Selection;
-  /** Marks to apply to the next typed text, set by toggling a mark on a collapsed selection. */
+  /** Format for the next typed text, set by toggling a mark on a collapsed selection. */
   readonly storedMarks: readonly Mark[] | null;
 }
 
@@ -76,16 +157,110 @@ export function paragraph(content: Inline = [], id = createId()): ParagraphBlock
   return { id, type: 'paragraph', content: normalizeInline(content) };
 }
 
-export function heading(level: HeadingBlock['level'], content: Inline = [], id = createId()): HeadingBlock {
+export function heading(level: HeadingLevel, content: Inline = [], id = createId()): HeadingBlock {
   return { id, type: 'heading', level, content: normalizeInline(content) };
 }
 
-export function withContent<B extends Block>(block: B, content: Inline): B {
-  return { ...block, content: normalizeInline(content) };
+export function listItem(
+  listType: ListType,
+  content: Inline = [],
+  opts: { indent?: number; checked?: boolean; start?: number; id?: string } = {},
+): ListItemBlock {
+  const block: ListItemBlock = {
+    id: opts.id ?? createId(),
+    type: 'listItem',
+    listType,
+    indent: Math.max(0, Math.min(MAX_INDENT, opts.indent ?? 0)),
+    checked: listType === 'task' ? (opts.checked ?? false) : false,
+    content: normalizeInline(content),
+  };
+  return listType === 'ordered' && opts.start !== undefined && opts.start !== 1 ? { ...block, start: opts.start } : block;
+}
+
+export function quote(content: Inline = [], id = createId()): QuoteBlock {
+  return { id, type: 'quote', content: normalizeInline(content) };
+}
+
+export function codeBlock(language = '', text = '', id = createId()): CodeBlock {
+  return { id, type: 'code', language, content: plain(text) };
+}
+
+export function htmlBlock(text = '', id = createId()): HtmlBlock {
+  return { id, type: 'html', content: plain(text) };
+}
+
+export function table(align: readonly Align[], rows: readonly (readonly Inline[])[], id = createId()): TableBlock {
+  return {
+    id,
+    type: 'table',
+    align,
+    rows: rows.map((row) => align.map((_, c) => normalizeInline(row[c] ?? []))),
+  };
+}
+
+export function emptyTable(rows = 3, cols = 3, id = createId()): TableBlock {
+  return table(
+    Array.from({ length: cols }, () => null),
+    Array.from({ length: rows }, () => Array.from({ length: cols }, () => [])),
+    id,
+  );
+}
+
+export function divider(id = createId()): DividerBlock {
+  return { id, type: 'divider' };
+}
+
+export function plain(text: string): Span[] {
+  return text ? [{ text, marks: [] }] : [];
 }
 
 // ---------------------------------------------------------------------------
-// Marks
+// Block kinds
+
+export function isTextBlock(block: Block): block is TextBlock {
+  return block.type !== 'table' && block.type !== 'divider';
+}
+
+/** Blocks whose content is plain text: no marks, links or images, and Enter inserts a newline. */
+export function isPlainTextBlock(block: Block): block is CodeBlock | HtmlBlock {
+  return block.type === 'code' || block.type === 'html';
+}
+
+/** Inline content at a position's container: the block's content, or a table cell. Null for dividers. */
+export function containerContent(block: Block, cell?: Cell): Inline | null {
+  if (block.type === 'table') {
+    if (!cell) return null;
+    return block.rows[cell.row]?.[cell.col] ?? null;
+  }
+  if (block.type === 'divider') return null;
+  return block.content;
+}
+
+/** Returns the block with new content at a container. */
+export function withContainerContent(block: Block, cell: Cell | undefined, content: Inline): Block {
+  if (block.type === 'table') {
+    if (!cell) return block;
+    const rows = block.rows.map((row, r) =>
+      r === cell.row ? row.map((c, i) => (i === cell.col ? normalizeInline(content) : c)) : row,
+    );
+    return { ...block, rows };
+  }
+  if (block.type === 'divider') return block;
+  return withContent(block, content);
+}
+
+export function withContent<B extends TextBlock>(block: B, content: Inline): B {
+  const normalized = isPlainTextBlock(block) ? toPlain(content) : normalizeInline(content);
+  return { ...block, content: normalized };
+}
+
+/** Drops all formatting. Images become their alt text. */
+export function toPlain(inline: Inline): Span[] {
+  return plain(inline.map((s) => (s.image ? s.image.alt : s.text)).join(''));
+}
+
+// ---------------------------------------------------------------------------
+// Marks and format
 
 export function sortMarks(marks: Iterable<Mark>): Mark[] {
   const set = new Set(marks);
@@ -94,6 +269,10 @@ export function sortMarks(marks: Iterable<Mark>): Mark[] {
 
 export function sameMarks(a: readonly Mark[], b: readonly Mark[]): boolean {
   return a.length === b.length && a.every((m, i) => m === b[i]);
+}
+
+function sameFormat(a: Span, b: Span): boolean {
+  return !a.image && !b.image && a.link === b.link && sameMarks(a.marks, b.marks);
 }
 
 // ---------------------------------------------------------------------------
@@ -114,8 +293,8 @@ export function normalizeInline(inline: Inline): Span[] {
   for (const span of inline) {
     if (span.text.length === 0) continue;
     const prev = out[out.length - 1];
-    if (prev && sameMarks(prev.marks, span.marks)) {
-      out[out.length - 1] = { text: prev.text + span.text, marks: prev.marks };
+    if (prev && sameFormat(prev, span)) {
+      out[out.length - 1] = { ...prev, text: prev.text + span.text };
     } else {
       out.push(span);
     }
@@ -130,7 +309,7 @@ export function sliceInline(inline: Inline, from: number, to = Infinity): Span[]
     const end = pos + span.text.length;
     const a = Math.max(from, pos);
     const b = Math.min(to, end);
-    if (a < b) out.push({ text: span.text.slice(a - pos, b - pos), marks: span.marks });
+    if (a < b) out.push(a === pos && b === end ? span : { ...span, text: span.text.slice(a - pos, b - pos) });
     pos = end;
   }
   return out;
@@ -140,38 +319,86 @@ export function concatInline(...parts: Inline[]): Span[] {
   return normalizeInline(parts.flat());
 }
 
-/** Marks a character typed at `offset` should get: those of the character before it, or after it at offset 0. */
-export function marksAt(inline: Inline, offset: number): readonly Mark[] {
+function spanAt(inline: Inline, offset: number): Span | undefined {
   let pos = 0;
   for (const span of inline) {
     const end = pos + span.text.length;
-    if (offset > pos && offset <= end) return span.marks;
-    if (offset === 0 && pos === 0) return span.marks;
+    if (offset >= pos && offset < end) return span;
     pos = end;
   }
-  return [];
+  return undefined;
 }
 
-export function insertInline(inline: Inline, offset: number, text: string, marks: readonly Mark[]): Span[] {
-  return concatInline(sliceInline(inline, 0, offset), [{ text, marks }], sliceInline(inline, offset));
+/** Marks of the character before `offset`, or after it at offset 0. */
+export function marksAt(inline: Inline, offset: number): readonly Mark[] {
+  const span = offset > 0 ? spanAt(inline, offset - 1) : spanAt(inline, 0);
+  return span && !span.image ? span.marks : [];
+}
+
+/**
+ * Format for text typed at `offset`. Marks come from the character before.
+ * A link is continued only when the caret is inside it, not at its edge.
+ */
+export function formatAt(inline: Inline, offset: number): Format {
+  const marks = marksAt(inline, offset);
+  const before = offset > 0 ? spanAt(inline, offset - 1) : undefined;
+  const after = spanAt(inline, offset);
+  const link = before?.link && before.link === after?.link ? before.link : undefined;
+  return link ? { marks, link } : { marks };
+}
+
+export function insertInline(inline: Inline, offset: number, text: string, format: Format | readonly Mark[]): Span[] {
+  const f: Format = Array.isArray(format) ? { marks: format as readonly Mark[] } : (format as Format);
+  const span: Span = f.link ? { text, marks: f.marks, link: f.link } : { text, marks: f.marks };
+  return concatInline(sliceInline(inline, 0, offset), [span], sliceInline(inline, offset));
 }
 
 export function deleteInline(inline: Inline, from: number, to: number): Span[] {
   return concatInline(sliceInline(inline, 0, from), sliceInline(inline, to));
 }
 
-/** True if every character in [from, to) carries `mark`. */
+/** True if every non-atom character in [from, to) carries `mark`. */
 export function rangeHasMark(inline: Inline, from: number, to: number, mark: Mark): boolean {
-  const slice = sliceInline(inline, from, to);
+  const slice = sliceInline(inline, from, to).filter((s) => !s.image);
   return slice.length > 0 && slice.every((s) => s.marks.includes(mark));
 }
 
 export function setMarkInRange(inline: Inline, from: number, to: number, mark: Mark, on: boolean): Span[] {
-  const middle = sliceInline(inline, from, to).map((s) => ({
-    text: s.text,
-    marks: on ? sortMarks([...s.marks, mark]) : s.marks.filter((m) => m !== mark),
-  }));
+  const middle = sliceInline(inline, from, to).map((s) =>
+    s.image ? s : { ...s, marks: on ? sortMarks([...s.marks, mark]) : s.marks.filter((m) => m !== mark) },
+  );
   return concatInline(sliceInline(inline, 0, from), middle, sliceInline(inline, to));
+}
+
+/** Sets (or with `href` null, removes) a link on [from, to). */
+export function setLinkInRange(inline: Inline, from: number, to: number, href: string | null): Span[] {
+  const middle = sliceInline(inline, from, to).map((s) => {
+    if (s.image) return s;
+    const { link: _old, ...rest } = s;
+    return href ? { ...rest, link: href } : rest;
+  });
+  return concatInline(sliceInline(inline, 0, from), middle, sliceInline(inline, to));
+}
+
+/** The link at an offset (the character after it, or before it at the end), if any. */
+export function linkAt(inline: Inline, offset: number): { href: string; from: number; to: number } | null {
+  const span = spanAt(inline, offset) ?? (offset > 0 ? spanAt(inline, offset - 1) : undefined);
+  if (!span?.link) return null;
+  const href = span.link;
+  // The contiguous run of spans with this link around the offset.
+  let pos = 0;
+  const runs: { from: number; to: number }[] = [];
+  for (const s of inline) {
+    const end = pos + s.text.length;
+    if (s.link === href) {
+      const last = runs[runs.length - 1];
+      if (last && last.to === pos) last.to = end;
+      else runs.push({ from: pos, to: end });
+    }
+    pos = end;
+  }
+  const run = runs.find((r) => offset >= r.from && offset <= r.to);
+  return run ? { href, from: run.from, to: run.to } : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -187,14 +414,25 @@ export function getBlock(doc: Doc, id: string): Block {
   return block;
 }
 
+export function sameCell(a?: Cell, b?: Cell): boolean {
+  return a?.row === b?.row && a?.col === b?.col;
+}
+
+export function samePosition(a: Position, b: Position): boolean {
+  return a.blockId === b.blockId && a.offset === b.offset && sameCell(a.cell, b.cell);
+}
+
 /** Negative if a is before b in document order, 0 if equal, positive if after. */
 export function comparePositions(doc: Doc, a: Position, b: Position): number {
-  if (a.blockId === b.blockId) return a.offset - b.offset;
-  return blockIndex(doc, a.blockId) - blockIndex(doc, b.blockId);
+  if (a.blockId !== b.blockId) return blockIndex(doc, a.blockId) - blockIndex(doc, b.blockId);
+  if (a.cell && b.cell && !sameCell(a.cell, b.cell)) {
+    return a.cell.row - b.cell.row || a.cell.col - b.cell.col;
+  }
+  return a.offset - b.offset;
 }
 
 export function isCollapsed(sel: Selection): boolean {
-  return sel.anchor.blockId === sel.focus.blockId && sel.anchor.offset === sel.focus.offset;
+  return samePosition(sel.anchor, sel.focus);
 }
 
 /** Selection endpoints in document order. */
@@ -204,13 +442,30 @@ export function orderedRange(doc: Doc, sel: Selection): { from: Position; to: Po
     : { from: sel.focus, to: sel.anchor };
 }
 
-export function caret(blockId: string, offset: number): Selection {
-  const p = { blockId, offset };
+export function caret(blockId: string, offset: number, cell?: Cell): Selection {
+  const p: Position = cell ? { blockId, offset, cell } : { blockId, offset };
   return { anchor: p, focus: p };
+}
+
+/** The first caret position inside a block. */
+export function startOf(block: Block): Position {
+  return block.type === 'table' ? { blockId: block.id, offset: 0, cell: { row: 0, col: 0 } } : { blockId: block.id, offset: 0 };
+}
+
+/** The last caret position inside a block. */
+export function endOf(block: Block): Position {
+  if (block.type === 'table') {
+    const row = block.rows.length - 1;
+    const col = block.align.length - 1;
+    return { blockId: block.id, offset: inlineLength(block.rows[row]![col]!), cell: { row, col } };
+  }
+  if (block.type === 'divider') return { blockId: block.id, offset: 0 };
+  return { blockId: block.id, offset: inlineLength(block.content) };
 }
 
 export function createState(doc: Doc): EditorState {
   const blocks = doc.blocks.length > 0 ? doc.blocks : [paragraph()];
-  const first = blocks[0]!;
-  return { doc: { blocks }, selection: caret(first.id, 0), storedMarks: null };
+  const first = blocks.find(isTextBlock) ?? blocks[0]!;
+  const start = startOf(first);
+  return { doc: { blocks }, selection: { anchor: start, focus: start }, storedMarks: null };
 }
