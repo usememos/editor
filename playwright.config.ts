@@ -18,6 +18,10 @@ export default defineConfig({
       // theme.spec sets its own themes.
       testIgnore: /(perf|theme)\.spec\.ts/,
     },
+    // Only the IME tests run in Firefox and WebKit so far: composition by
+    // events, in each engine's DOM. CI installs both browsers.
+    { name: 'firefox', use: { browserName: 'firefox' }, testMatch: /ime\.spec\.ts/ },
+    { name: 'webkit', use: { browserName: 'webkit' }, testMatch: /ime\.spec\.ts/ },
     // Timing gates. Run alone (npm run test:perf) so other tests do not skew them.
     { name: 'perf', use: { browserName: 'chromium' }, testMatch: /perf\.spec\.ts/ },
   ],

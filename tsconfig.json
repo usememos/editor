@@ -16,8 +16,14 @@
     "types": [],
     "jsx": "react-jsx",
     "paths": {
-      "@editor/core": [
-        "./packages/core/src/index.ts"
+      "@usememos/editor": [
+        "./packages/editor/src/index.ts"
+      ],
+      "@usememos/editor/react": [
+        "./packages/editor/src/react/index.tsx"
+      ],
+      "#entities": [
+        "./packages/editor/src/markdown/entities.ts"
       ]
     }
   },

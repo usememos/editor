@@ -324,7 +324,7 @@ A claim that needs a source[^1].
 3. **Autocomplete**: with the `suggestion` option, typing `#` or `@` opens a suggestion menu.
 
 ```ts
-import { mentions, tags } from '@editor/core';
+import { mentions, tags } from '@usememos/editor';
 
 const extensions = [
   tags({

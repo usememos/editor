@@ -1,7 +1,7 @@
-import { Editor, type EditorOptions } from '@editor/core';
+import { Editor, type EditorOptions } from '@usememos/editor';
 import { type CSSProperties, type ForwardedRef, forwardRef, useEffect, useRef, useState } from 'react';
 
-export type { Editor } from '@editor/core';
+export type { Editor } from '@usememos/editor';
 
 /** Constructor options that the React components take as props. */
 type EditorProps = Pick<

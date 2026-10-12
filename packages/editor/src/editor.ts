@@ -4,10 +4,12 @@
 // 1. Most edits arrive as `beforeinput` events. We cancel them, apply the
 //    matching command to the model, and re-render the changed blocks.
 // 2. IME composition cannot be cancelled. During composition the browser
-//    edits the DOM itself and we do not touch it. On `compositionend` we read
-//    the changed text back from the DOM and apply it to the model.
-// 3. Any other `input` that slipped through (e.g. some Android keyboards) is
-//    reconciled the same way as composition.
+//    edits the DOM itself and we do not touch it. On each `input` we read the
+//    composed block's text back into the model without re-rendering it, so
+//    `change` and `getMarkdown` keep up (on Android every word is a
+//    composition). On `compositionend` the block is rendered from the model.
+// 3. Any other `input` that slipped through (input that cannot be cancelled,
+//    e.g. from some Android keyboards) is read back the same way.
 
 import * as cmd from './commands';
 import { docToHtml } from './clipboard/toHtml';
@@ -229,6 +231,9 @@ const TABLE_ITEMS: readonly { id: keyof Labels; icon: string; action: cmd.TableA
 
 const SLASH_CHARS = ['/', '／'];
 
+/** Input types of IME composition. The browser applies them; `input` reads them back. */
+const COMPOSITION_INPUT = new Set(['insertCompositionText', 'deleteCompositionText', 'insertFromComposition', 'deleteByComposition']);
+
 interface SlashItem extends SuggestionItem {
   readonly id: SlashItemId;
   readonly aliases: string[];
@@ -247,6 +252,14 @@ export class Editor {
   private readonly history = new History();
   private readonly renderer: BlockRenderer;
   private composing = false;
+  /**
+   * The current composition, kept until its block is rendered again: its
+   * block, the marks for composed text, and whether it has an undo step yet.
+   */
+  private composition: { blockId: string; marks: EditorState['storedMarks']; recorded: boolean } | null = null;
+  /** Blocks the browser edited during a composition that ended, rendered again on the next frame. */
+  private readonly unsettled = new Set<string>();
+  private settleFrame: number | null = null;
   private readOnly: boolean;
   private wasReadOnly = false;
   private readonly options: EditorOptions;
@@ -760,6 +773,7 @@ export class Editor {
   destroy(): void {
     this.destroyed = true;
     if (this.changeFrame !== null) cancelAnimationFrame(this.changeFrame);
+    if (this.settleFrame !== null) cancelAnimationFrame(this.settleFrame);
     for (const fn of this.cleanup) fn();
     for (const { menu } of this.suggestions) menu.destroy();
     for (const widget of [...this.widgets]) widget.remove();
@@ -946,11 +960,12 @@ export class Editor {
    */
   private paint(force = false, lazy = false, hadFocus = this.hasFocus()): void {
     const views = this.renderer.views;
-    if (views && !this.pointerDown) this.renderer.revealed = revealedViews(this.state, views, !this.readOnly && hadFocus);
+    if (views && !this.pointerDown && !this.composing) this.renderer.revealed = revealedViews(this.state, views, !this.readOnly && hadFocus);
     this.renderer.render(this.state.doc, force, lazy);
     this.applyReadOnly();
     this.paintBlockSelection();
-    this.syncDomSelection(hadFocus);
+    // Moving the browser selection would end the composition.
+    if (!this.composing) this.syncDomSelection(hadFocus);
   }
 
   /** Re-renders if the views that show their source changed: after the selection, focus or editability changes. */
@@ -1032,7 +1047,10 @@ export class Editor {
     if (this.fromControl(e)) return;
     if (this.composing || e.isComposing) return;
     const type = e.inputType;
-    if (type === 'insertCompositionText' || type === 'deleteCompositionText' || type === 'insertFromComposition') return;
+    if (COMPOSITION_INPUT.has(type)) return;
+    // Input that cannot be cancelled (from some Android keyboards) changes the
+    // DOM anyway, and `input` reads it back. Applying it here too would apply it twice.
+    if (!e.cancelable && this.browserApplies(e)) return;
 
     e.preventDefault();
     if (this.readOnly) return;
@@ -1048,7 +1066,12 @@ export class Editor {
     switch (type) {
       case 'insertText': {
         const text = e.data ?? '';
+        // Mobile autocorrect and word suggestions replace the word before the
+        // caret: the target range covers it while the selection is a caret.
+        const range = isCollapsed(this.state.selection) ? this.targetRange(e) : null;
+        if (range && !isCollapsed(range)) this.current = { ...this.state, selection: range };
         if (text) this.typeText(text);
+        else if (range && !isCollapsed(range)) this.run(cmd.deleteSelection, 'typing');
         return;
       }
       case 'insertReplacementText': {
@@ -1057,9 +1080,17 @@ export class Editor {
         this.run((s) => cmd.insertText(range ? { ...s, selection: range } : s, text));
         return;
       }
-      case 'insertParagraph':
+      case 'insertParagraph': {
+        // Android keyboards send Enter as keyCode 229, which keydown ignores,
+        // so an open suggestion menu takes it here.
+        const menu = this.openMenu();
+        if (menu && menu !== this.blockMenu && menu.count > 0) {
+          menu.pick();
+          return;
+        }
         this.run(cmd.splitBlock);
         return;
+      }
       case 'insertLineBreak':
         this.run(cmd.insertLineBreak);
         return;
@@ -1112,6 +1143,30 @@ export class Editor {
 
   private typeText(text: string): void {
     this.run((s) => cmd.insertText(s, text), 'typing');
+    this.afterTyping(text);
+  }
+
+  /**
+   * True for input the `input` handler can read back from the DOM: text typed
+   * or replaced, and deletions inside one text container. Other changes (a new
+   * block, a deletion that joins blocks) are applied to the model instead.
+   */
+  private browserApplies(e: InputEvent): boolean {
+    const type = e.inputType;
+    if (type === 'insertText' || type === 'insertReplacementText') return true;
+    if (!type.startsWith('delete')) return false;
+    const range = this.targetRange(e);
+    return (
+      !!range &&
+      !isCollapsed(range) &&
+      range.anchor.blockId === range.focus.blockId &&
+      range.anchor.cell?.row === range.focus.cell?.row &&
+      range.anchor.cell?.col === range.focus.cell?.col
+    );
+  }
+
+  /** Markdown shortcuts and suggestion menus that typing `text` triggers. */
+  private afterTyping(text: string): void {
     // Shortcuts are separate undo steps, so undo restores the typed characters.
     if (text === ' ' || text === '-') this.run((s) => cmd.applyBlockInputRules(s));
     if (text.length === 1 && '*_`~'.includes(text)) this.run((s) => cmd.applyInlineInputRules(s));
@@ -1128,29 +1183,86 @@ export class Editor {
     // so the composition always happens inside one block.
     if (!isCollapsed(this.state.selection)) this.run(cmd.deleteSelection);
     this.composing = true;
+    // Marks chosen before composing (Mod-B, then compose) apply to all of the composed text.
+    this.composition = { blockId: this.state.selection.focus.blockId, marks: this.state.storedMarks, recorded: false };
     this.toolbar?.hide();
   }
 
   private onCompositionEnd(e: Event): void {
     if (this.fromControl(e)) return;
-    this.composing = false;
-    // A committed composition is its own undo step.
-    const before = this.state;
-    this.reconcileFromDom('other');
-    // A full-width slash typed with an IME opens the slash menu too.
-    if (this.state !== before) {
-      const pos = this.state.selection.focus;
-      const content = containerContent(getBlock(this.state.doc, pos.blockId), pos.cell);
-      const ch = content ? inlineText(content)[pos.offset - 1] : undefined;
-      if (ch) this.maybeOpenSuggestion(ch);
+    if (!this.composition) {
+      // A composition that started before the editor did.
+      this.composing = false;
+      this.reconcileFromDom('other');
+      return;
     }
+    // Read the committed text while still composing, so nothing moves the browser selection yet.
+    this.syncComposition();
+    this.composing = false;
+    this.unsettled.add(this.composition.blockId);
+    // Render the block from the model once the browser is done with it: after
+    // input that follows in the same task (Firefox sends the last one after
+    // compositionend), and not during the next composition (the next Korean
+    // syllable starts in the same keystroke).
+    if (this.settleFrame === null) {
+      const settle = () => {
+        this.settleFrame = null;
+        this.settleComposition();
+      };
+      if (typeof requestAnimationFrame === 'function') this.settleFrame = requestAnimationFrame(settle);
+      else this.settleComposition();
+    }
+  }
+
+  private settleComposition(): void {
+    if (this.composing || this.destroyed) return;
+    const composed = this.composition?.recorded;
+    this.composition = null;
+    for (const id of this.unsettled) this.renderer.invalidate(id);
+    this.unsettled.clear();
+    this.paint();
+    this.afterRender();
+    if (!composed) return;
+    // A full-width slash typed with an IME opens the slash menu too.
+    const pos = this.state.selection.focus;
+    if (!isCollapsed(this.state.selection) || !this.state.doc.blocks.some((b) => b.id === pos.blockId)) return;
+    const content = containerContent(getBlock(this.state.doc, pos.blockId), pos.cell);
+    const ch = content ? inlineText(content)[pos.offset - 1] : undefined;
+    if (ch) this.maybeOpenSuggestion(ch);
   }
 
   private onInput(e: InputEvent): void {
     if (this.fromControl(e)) return;
-    if (this.composing || e.isComposing) return;
-    // Only reached when the browser changed the DOM despite beforeinput.
+    // Composition input, and the last of it when it arrives after compositionend.
+    if (this.composing || (this.composition && COMPOSITION_INPUT.has(e.inputType))) {
+      this.syncComposition();
+      return;
+    }
+    if (e.isComposing) return;
+    // Reached when the browser changed the DOM despite beforeinput, or for input that could not be cancelled.
+    const before = this.state;
     this.reconcileFromDom('typing');
+    if (e.inputType === 'insertText' && e.data && this.state !== before) this.afterTyping(e.data);
+  }
+
+  /**
+   * Reads the composed text into the model while composing. The browser's
+   * DOM for the block already shows it, so the block is not re-rendered.
+   */
+  private syncComposition(): void {
+    const composition = this.composition;
+    if (!composition || this.readOnly) return;
+    const before = this.state;
+    const read = this.readDom(before, composition.marks, composition.blockId);
+    if (!read) return;
+    if (!composition.recorded) {
+      this.history.record(before, 'other');
+      composition.recorded = true;
+    }
+    const block = read.doc.blocks.find((b) => b.id === composition.blockId);
+    if (block) this.renderer.adopt(block);
+    const selection = this.readDomSelection();
+    this.commit(selection ? { ...read, selection: clampSelection(read.doc, selection) } : read);
   }
 
   /**
@@ -1158,10 +1270,29 @@ export class Editor {
    * one delete and one insert per changed text container.
    */
   private reconcileFromDom(kind: ChangeKind): void {
-    let state = this.state;
+    const read = this.readDom(this.state, this.state.storedMarks);
+    if (!read) {
+      // Text is unchanged but the browser may have altered structure.
+      this.paint(true);
+      return;
+    }
+    for (const block of read.doc.blocks) {
+      if (block !== getBlock(this.state.doc, block.id)) this.renderer.invalidate(block.id);
+    }
+    const selection = this.readDomSelection() ?? read.selection;
+    this.apply({ ...read, selection: clampSelection(read.doc, selection) }, kind);
+  }
+
+  /**
+   * The model with the text the DOM shows: one delete and one insert per
+   * changed text container, inserted text getting `marks` when set. Only
+   * `blockId` when given. Null when the text is the same.
+   */
+  private readDom(from: EditorState, marks: EditorState['storedMarks'], blockId?: string): EditorState | null {
+    let state = from;
     let changed = false;
-    for (const block of state.doc.blocks) {
-      let blockChanged = false;
+    for (const block of from.doc.blocks) {
+      if (blockId !== undefined && block.id !== blockId) continue;
       const el = this.renderer.elementFor(block.id);
       if (!el || !el.isConnected) continue;
       const containers: { cell?: { row: number; col: number } }[] =
@@ -1188,21 +1319,11 @@ export class Editor {
         const inserted = newText.slice(start, endNew);
         const at: Position = cell ? { blockId: block.id, offset: start, cell } : { blockId: block.id, offset: start };
         state = cmd.deleteRange(state, at, { ...at, offset: endOld });
-        if (inserted) state = cmd.insertText({ ...state, storedMarks: this.state.storedMarks }, inserted);
-        blockChanged = true;
-      }
-      if (blockChanged) {
-        this.renderer.invalidate(block.id);
+        if (inserted) state = cmd.insertText({ ...state, storedMarks: marks }, inserted);
         changed = true;
       }
     }
-    if (!changed) {
-      // Text is unchanged but the browser may have altered structure.
-      this.paint(true);
-      return;
-    }
-    const selection = this.readDomSelection() ?? state.selection;
-    this.apply({ ...state, selection: clampSelection(state.doc, selection) }, kind);
+    return changed ? state : null;
   }
 
   private onKeyDown(e: KeyboardEvent): void {
@@ -1856,7 +1977,8 @@ export class Editor {
     }
 
     // Suggestion menu.
-    const query = focused && !this.composing ? this.suggestionQuery() : null;
+    // A menu stays open while composing and follows the composed text (Android composes every word).
+    const query = focused ? this.suggestionQuery() : null;
     if (query === null) {
       if (this.suggest) this.closeSuggestion();
     } else {

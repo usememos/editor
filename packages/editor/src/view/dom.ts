@@ -476,6 +476,18 @@ export class BlockRenderer {
     return this.rendered.get(id)?.el;
   }
 
+  /**
+   * Keeps a block's element for a new version of the block, when the browser
+   * has already edited the element to show it (during IME composition).
+   * Only the empty state is updated, so a placeholder does not cover the text.
+   */
+  adopt(block: Block): void {
+    const prev = this.rendered.get(block.id);
+    if (!prev) return;
+    this.rendered.set(block.id, { ...prev, block });
+    if ('content' in block) prev.el.classList.toggle('mbe-empty', inlineLength(block.content) === 0);
+  }
+
   /** Forget a block's element so the next render rebuilds it, e.g. after the browser edited it during IME composition. */
   invalidate(id: string): void {
     this.rendered.delete(id);

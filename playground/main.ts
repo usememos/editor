@@ -9,7 +9,7 @@
 
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
-import * as core from '@editor/core';
+import * as core from '@usememos/editor';
 import {
   Editor,
   type EditorOptions,
@@ -20,9 +20,9 @@ import {
   math,
   mentions,
   tags,
-} from '@editor/core';
-import style from '../packages/core/src/style.css?inline';
-import baseStyle from '../packages/core/src/base.css?inline';
+} from '@usememos/editor';
+import style from '../packages/editor/src/style.css?inline';
+import baseStyle from '../packages/editor/src/base.css?inline';
 import { SAMPLE } from './sample';
 
 const TAGS = ['work', 'work/meeting', 'work/planning', 'reading', 'ideas', 'journal', '日记'];

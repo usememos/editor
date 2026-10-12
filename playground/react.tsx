@@ -1,7 +1,7 @@
-import { EditorContent, MarkdownEditor, useEditor } from '@editor/react';
+import { EditorContent, MarkdownEditor, useEditor } from '@usememos/editor/react';
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import '../packages/core/src/style.css';
+import '../packages/editor/src/style.css';
 
 /** A comment box: the use case from the spec. Mod+Enter posts. */
 function CommentBox() {

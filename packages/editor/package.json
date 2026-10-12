@@ -1,0 +1,60 @@
+{
+  "name": "@usememos/editor",
+  "version": "0.0.0",
+  "description": "A block editor for standard Markdown. Zero runtime dependencies, with an optional React component.",
+  "keywords": [
+    "markdown",
+    "editor",
+    "block-editor",
+    "wysiwyg",
+    "commonmark",
+    "gfm",
+    "react"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/usememos/editor.git",
+    "directory": "packages/editor"
+  },
+  "type": "module",
+  "sideEffects": [
+    "*.css"
+  ],
+  "files": [
+    "dist"
+  ],
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./react": {
+      "types": "./dist/types/react/index.d.ts",
+      "default": "./dist/react.js"
+    },
+    "./style.css": "./dist/style.css",
+    "./base.css": "./dist/base.css",
+    "./theme.css": "./dist/theme.css",
+    "./package.json": "./package.json"
+  },
+  "imports": {
+    "#entities": {
+      "browser": "./dist/entities.dom.js",
+      "default": "./dist/entities.js"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prepack": "npm run build"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  }
+}

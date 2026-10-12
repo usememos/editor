@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 
-const coreSrc = fileURLToPath(new URL('../packages/core/src', import.meta.url));
+const coreSrc = fileURLToPath(new URL('../packages/editor/src', import.meta.url));
 
 // Browsers decode named entities with their own HTML parser (entities.dom.ts)
 // instead of the table that Node uses (entities.ts). Both must agree.

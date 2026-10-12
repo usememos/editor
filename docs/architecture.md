@@ -1,6 +1,6 @@
 # Architecture (v0)
 
-How the editor works, as built in step 3. The spec defines what it must do; this note explains how the code does it and where to find it. "editor" is a working name.
+How the editor works: the decisions behind it, how the code carries them out, and where to find it.
 
 ## Principles
 
@@ -18,10 +18,10 @@ Other products confirm the split behind rules 1 and 2. Editors that keep Markdow
 
 | Area | Decision |
 | --- | --- |
-| Packages | `@editor/core` (plain TypeScript, zero runtime dependencies) and `@editor/react` (thin wrapper, React 18 or later as a peer dependency). |
+| Package | One package, `@usememos/editor`: plain TypeScript with zero runtime dependencies. A thin React wrapper is the `@usememos/editor/react` subpath, with React 18 or later as an optional peer dependency. |
 | Document model | A flat list of immutable blocks. Each block has a stable ID. Inline content is a list of text spans with marks, a link or an image. |
 | Editing surface | One `contentEditable` root that the editor owns completely. Table cells are nested editing hosts. |
-| Input | Cancel `beforeinput` and apply a model command. IME composition is the one exception: the browser edits the DOM, and the editor reads the result back on `compositionend`. |
+| Input | Cancel `beforeinput` and apply a model command. IME composition is the one exception: the browser edits the DOM, and the editor reads the result back into the model on every `input`. |
 | Rendering | Keyed reconciliation. A block whose object did not change keeps its DOM element. |
 | Undo | Whole-document snapshots. They are cheap because unchanged blocks are shared. |
 | Markdown | Our own CommonMark 0.31.2 + GFM parser and a normalizing serializer. Saving is stable: `serialize(parse(md))` is a fixed point. |
@@ -32,22 +32,22 @@ Other products confirm the split behind rules 1 and 2. Editors that keep Markdow
 
 | Path | Contents |
 | --- | --- |
-| `packages/core/src/model.ts` | Block and span types, constructors, inline helpers, positions. |
-| `packages/core/src/commands.ts` | Every edit as a pure function `(state) => state`. |
-| `packages/core/src/history.ts` | Undo and redo. |
-| `packages/core/src/editor.ts` | The `Editor` class: events, selection sync, menus, clipboard, public API. |
-| `packages/core/src/keymap.ts` | Parsing key names such as `Mod-Shift-x` and matching them to key events. |
-| `packages/core/src/decorations.ts`, `packages/core/src/widgets.ts` | Text decorations, and app UI placed between blocks. |
-| `packages/core/src/view/dom.ts` | Rendering blocks to DOM, and mapping DOM points to model positions and back. |
-| `packages/core/src/view/reveal.ts` | Which rendered views show their source for a given selection. |
-| `packages/core/src/ui/` | `Popup` and `Menu`, the toolbar and link popover, the block handle. |
-| `packages/core/src/markdown/` | Parser (`blocks.ts`, `inline.ts`, `autolink.ts`, `lower.ts`), serializer (`serialize.ts`), source-preserving save (`source.ts`), dialect options and syntax extensions (`options.ts`), entity tables, and an HTML renderer used only by the spec tests (`html.ts`). |
-| `packages/core/src/clipboard/` | Document to HTML for copy (`toHtml.ts`), pasted HTML to document (`fromHtml.ts`). |
-| `packages/core/src/extension.ts`, `packages/core/src/extensions/` | The `Extension` interface, and the built-in extensions: `math()`, `footnotes()`, `tags()`, `mentions()`, `suggestion()`, `textDecorator()`, `fileHandler()` and `defaultKeymap()`. |
-| `packages/core/src/theme.ts` | The `theme` option's types, and merging class maps from extensions and the editor. |
-| `packages/core/src/base.css`, `theme.css`, `style.css` | Layout and block spacing; the default look; both together. |
-| `packages/core/src/labels.ts` | Every UI string, for localization. |
-| `packages/react/src/index.tsx` | `<MarkdownEditor>`, `useEditor` and `<EditorContent>`. |
+| `packages/editor/src/model.ts` | Block and span types, constructors, inline helpers, positions. |
+| `packages/editor/src/commands.ts` | Every edit as a pure function `(state) => state`. |
+| `packages/editor/src/history.ts` | Undo and redo. |
+| `packages/editor/src/editor.ts` | The `Editor` class: events, selection sync, menus, clipboard, public API. |
+| `packages/editor/src/keymap.ts` | Parsing key names such as `Mod-Shift-x` and matching them to key events. |
+| `packages/editor/src/decorations.ts`, `packages/editor/src/widgets.ts` | Text decorations, and app UI placed between blocks. |
+| `packages/editor/src/view/dom.ts` | Rendering blocks to DOM, and mapping DOM points to model positions and back. |
+| `packages/editor/src/view/reveal.ts` | Which rendered views show their source for a given selection. |
+| `packages/editor/src/ui/` | `Popup` and `Menu`, the toolbar and link popover, the block handle. |
+| `packages/editor/src/markdown/` | Parser (`blocks.ts`, `inline.ts`, `autolink.ts`, `lower.ts`), serializer (`serialize.ts`), source-preserving save (`source.ts`), dialect options and syntax extensions (`options.ts`), entity tables, and an HTML renderer used only by the spec tests (`html.ts`). |
+| `packages/editor/src/clipboard/` | Document to HTML for copy (`toHtml.ts`), pasted HTML to document (`fromHtml.ts`). |
+| `packages/editor/src/extension.ts`, `packages/editor/src/extensions/` | The `Extension` interface, and the built-in extensions: `math()`, `footnotes()`, `tags()`, `mentions()`, `suggestion()`, `textDecorator()`, `fileHandler()` and `defaultKeymap()`. |
+| `packages/editor/src/theme.ts` | The `theme` option's types, and merging class maps from extensions and the editor. |
+| `packages/editor/src/base.css`, `theme.css`, `style.css` | Layout and block spacing; the default look; both together. |
+| `packages/editor/src/labels.ts` | Every UI string, for localization. |
+| `packages/editor/src/react/index.tsx` | `<MarkdownEditor>`, `useEditor` and `<EditorContent>`. |
 
 ## Document model
 
@@ -70,9 +70,9 @@ One `contentEditable` root, not one per block, so native selection crosses block
 
 ## Input pipeline
 
-1. **`beforeinput`, cancelled.** `insertText`, `insertParagraph`, `insertLineBreak`, all `delete*` types, `historyUndo`/`historyRedo` and `format*` map to commands. Word and line deletes use the browser's `getTargetRanges()`, so they follow the platform's word boundaries.
-2. **IME composition, not cancelled.** While composing, the editor does not touch the DOM or move the selection, and hides the toolbar. On `compositionend` it compares each block's DOM text with the model, applies the difference as one delete and one insert, and re-renders. A cross-block selection is deleted when composition starts, so a composition always stays inside one block. A committed composition is its own undo step.
-3. **Fallback.** Any `input` event the editor did not cancel (some Android keyboards) goes through the same read-back.
+1. **`beforeinput`, cancelled.** `insertText`, `insertParagraph`, `insertLineBreak`, all `delete*` types, `historyUndo`/`historyRedo` and `format*` map to commands. Word and line deletes use the browser's `getTargetRanges()`, so they follow the platform's word boundaries. So does `insertText` when its target range covers text while the selection is a caret: that is how mobile autocorrect and word suggestions replace a word. `insertParagraph` picks the item of an open suggestion menu, because Android keyboards send Enter with keyCode 229, which `keydown` ignores.
+2. **IME composition, not cancelled.** While composing, the editor does not re-render the composed block or move the selection, and hides the toolbar. On each `input` it compares the block's DOM text with the model and applies the difference as one delete and one insert, so `change`, `getMarkdown()`, `isEmpty` and an open suggestion menu follow the composed text (on Android every word is a composition). The renderer adopts the browser's DOM for the new block object instead of rebuilding it, and only updates its empty state, so the placeholder does not cover composed text. Marks stored before composing (Mod+B, then compose) apply to all of the composed text. The first change records one undo step for the whole composition. On `compositionend` the committed text is read once more; the block is rendered from the model on the next frame, so input that arrives after `compositionend` in the same task (Firefox sends the last `input` then) still counts as the composition, and nothing is re-rendered between two compositions in one keystroke (Korean syllables). A cross-block selection is deleted when composition starts, so a composition always stays inside one block.
+3. **Fallback.** An `input` event the editor did not cancel goes through the same read-back, and typed text then runs the Markdown shortcuts. A `beforeinput` that cannot be cancelled (from some Android keyboards) for typed text, a replacement, or a deletion inside one text container is left to the browser and read back, so it is not applied twice.
 4. **`keydown`**: an open menu takes the navigation keys first. A block selection takes its own keys next (see "Block selection"). Then extension key bindings run in order, ending with `defaultKeymap()` (marks, block types, Mod+K, undo/redo, Tab, submit, Escape). A binding that returns true stops the rest and prevents the browser default. Mod+/ (block menu) and Mod+Shift+V (plain paste) are handled by the editor itself.
    ArrowDown on the last line of a code block, table or divider that ends the document adds an empty paragraph below it, and ArrowUp on the first line of one that starts the document adds one above it (`exitBlock`). Elsewhere the browser moves the caret. A click in the empty space below such a final block also adds a paragraph. Enter three times at the end of a code block still leaves it.
 5. **Markdown shortcuts** run after typed text: block rules on a space at the start of a block (`#`, `-`, `*`, `+`, `1.`, `[ ]`, `[x]`, `>`, ` ```lang `, `---`) and inline rules when a closing `*`, `_`, `` ` `` or `~` is typed. Undo restores the typed characters.
@@ -166,7 +166,7 @@ Each history entry is a snapshot of `{ doc, selection }` from before a change. T
 
 **Serializer** (`serialize.ts`) writes normalized Markdown for edited and new blocks: `**`, `*`, `~~`, ATX headings, `-` bullets, renumbered ordered lists, fenced code, `---`, GFM tables, tight lists. Markdown has no empty paragraph, so an empty line in the editor is written as `&nbsp;`: it renders as an empty line in any CommonMark renderer and reads back as an empty paragraph. Empty lines at the end of the document render as nothing and are not written. It escapes only characters that would change meaning. Where an escape is not enough, it writes a character reference: for example a letter right after closing bold (`**three!**&#98;`) and a leading or trailing space that would otherwise be trimmed (`&#32;`). The tests check save stability for every spec example.
 
-**Entities.** Named character references (`&copy;`) need the WHATWG list of 2,125 names. Node gets it as a table (`entities.ts`, about 11 KB gzipped). Browsers use their own HTML parser instead (`entities.dom.ts`): it decodes `&name;` inside a detached `<textarea>`, whose content is parsed as text, never as elements. The `#entities` import in `packages/core/package.json` picks the file through the `browser` export condition. A browser test checks that both give the same result for every name.
+**Entities.** Named character references (`&copy;`) need the WHATWG list of 2,125 names. Node gets it as a table (`entities.ts`, about 11 KB gzipped). Browsers use their own HTML parser instead (`entities.dom.ts`): it decodes `&name;` inside a detached `<textarea>`, whose content is parsed as text, never as elements. The `#entities` import in `packages/editor/package.json` picks the built file through the `browser` condition. In development, aliases in `tsconfig.json`, the playground's Vite config and `vitest.config.ts` point it at the source files instead. A browser test checks that both give the same result for every name.
 
 ## React wrapper
 
@@ -182,8 +182,8 @@ Measured on 2026-10-12 in headless Chromium in the development container (`npm r
 | --- | --- |
 | Keystroke handling under 16 ms at p95 in a 2,000-block document | 13.4 ms p95, 8.7 ms median, with a frame between keystrokes. Pass. |
 | 100 KB of Markdown parsed and rendered in under 100 ms | 211–221 ms on a cold first load. Fail. It was 101–125 ms at v0. |
-| Core under 40 KB min+gzip | 45.9 KB for browsers, plus 3.0 KB CSS. Fail. It was 33.8 KB at v0, before the extensions, theme and autolinks. |
-| React package under 2 KB min+gzip | 1.2 KB. Pass. |
+
+Bundle size has no fixed limit. The goal is a normal size for a Markdown editor, not the smallest possible one, so check the size when a change adds a lot of code. Today the core is 45.9 KB min+gzip for browsers plus 3.0 KB of CSS (33.8 KB at v0, before the extensions, theme and autolinks), and the React entry is 1.2 KB.
 
 What made the difference:
 
@@ -203,13 +203,15 @@ The cold-load result depends on the JavaScript engine warming up: about half of 
 | `npm run test:e2e:themed` | The same browser tests with a class on every `theme.classes` key, to show theme classes change no behavior. |
 | `npm run test:perf` | The two timing gates, run alone. |
 | `npm run typecheck` | TypeScript in strict mode. |
+| `npm run build` | The published files in `packages/editor/dist`: ES modules bundled with esbuild (`index.js`, `react.js`, the two entity files), the stylesheets, and type declarations from `tsc`. |
+
+CI (`.github/workflows/ci.yml`) runs the typecheck, unit tests, build and the Chromium and themed browser tests on every push to main and every pull request. The timing gates are left out because shared runners are too noisy for them.
 
 IME is simulated through the Chrome DevTools Protocol. Real input methods are covered by the manual checklist in `docs/ime-checklist.md`.
 
 ## Risks and gaps
 
 - **Only Chromium is tested.** Firefox and WebKit could not be installed in the development container. Safari and Firefox fire composition and `beforeinput` events in a different order, so this is the largest remaining risk. Playwright projects for both should be added where the browsers are available.
-- **IME was simulated**, not typed with a real IME. The manual checklist needs an owner before release.
+- **IME was simulated**, not typed with a real IME. `e2e/ime.spec.ts` drives composition through the Chrome DevTools Protocol and dispatches the events mobile keyboards send; `docs/ime-checklist.md` lists what still needs a real device. The manual checklist needs an owner before release.
 - **Spellcheck and autocorrect** replacements (`insertReplacementText`) are handled but not tested.
-- **The load-time and size gates fail** (see "Performance"). Load time should be measured on a laptop before deciding what to optimize.
-- **Publishing** needs a build: the `#entities` import and `main` point at TypeScript sources today, and must point at built files before publishing.
+- **The load-time gate fails** (see "Performance"). Load time should be measured on a laptop before deciding what to optimize.

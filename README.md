@@ -1,10 +1,10 @@
-# editor
+# @usememos/editor
 
-A block editor for standard Markdown. "editor" is a working name.
+A block editor for standard Markdown, for React or any web app.
 
 - Markdown in, Markdown out: CommonMark plus GFM tables, task lists, strikethrough and autolinks. Blocks you did not edit are saved byte for byte.
 - Block editing: slash menu, a formatting toolbar, Markdown shortcuts, and a block handle on tables and code blocks.
-- `@editor/core` has zero runtime dependencies and works without a framework. `@editor/react` is a thin React wrapper.
+- One package, `@usememos/editor`, with zero runtime dependencies. It works without a framework, and `@usememos/editor/react` is a thin React wrapper.
 
 Status: v0 in development, not published yet. [docs/syntax.md](docs/syntax.md) specifies the Markdown it reads and writes, and [docs/architecture.md](docs/architecture.md) explains how it works.
 
@@ -13,8 +13,8 @@ Status: v0 in development, not published yet. [docs/syntax.md](docs/syntax.md) s
 React:
 
 ```tsx
-import { MarkdownEditor } from '@editor/react';
-import '@editor/core/style.css';
+import { MarkdownEditor } from '@usememos/editor/react';
+import '@usememos/editor/style.css';
 
 function CommentBox() {
   const [markdown, setMarkdown] = useState('');
@@ -25,8 +25,8 @@ function CommentBox() {
 Without a framework:
 
 ```ts
-import { Editor } from '@editor/core';
-import '@editor/core/style.css';
+import { Editor } from '@usememos/editor';
+import '@usememos/editor/style.css';
 
 const editor = new Editor({
   element: document.querySelector('#editor')!,
@@ -68,7 +68,7 @@ In React, `placeholder`, `editable`, `attributes` and `resolveImageSrc` update l
 For apps that manage the editor instance themselves, `useEditor(options, deps)` creates one and `<EditorContent editor={editor} />` shows it:
 
 ```tsx
-import { EditorContent, useEditor } from '@editor/react';
+import { EditorContent, useEditor } from '@usememos/editor/react';
 
 function Composer() {
   const editor = useEditor({ content: '', extensions: [math()], onSubmit: send });
@@ -203,7 +203,7 @@ new Editor({
 
 Keys use the names of `isActive`: `paragraph`, `heading` (by level), `blockquote`, `bulletList`, `orderedList` and `taskList` (each list item; blocks are flat, so there is no list element), `codeBlock`, `table`, `divider` (the `<hr>`), `raw`, `image`, `bold`, `italic`, `strike`, `code`, `link`, and `token` (inline tokens of an extension syntax, by name). Extensions can add classes too; the editor's own `theme` wins for the same key. `setOptions({ theme })` changes them while the editor runs.
 
-To style the editor entirely with your own classes, import `@editor/core/base.css` instead of `style.css`. Spacing between blocks stays in `base.css`, and its rules are more specific than a single class, so margins in your classes do not change it.
+To style the editor entirely with your own classes, import `@usememos/editor/base.css` instead of `style.css`. Spacing between blocks stays in `base.css`, and its rules are more specific than a single class, so margins in your classes do not change it.
 
 ## Keyboard
 
@@ -243,4 +243,5 @@ npm test           # unit, spec and round-trip tests (vitest)
 npm run test:e2e   # browser tests (Playwright, Chromium)
 npm run test:perf  # timing gates, run alone
 npm run typecheck
+npm run build      # the published files, in packages/editor/dist
 ```
