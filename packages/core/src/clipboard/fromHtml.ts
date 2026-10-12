@@ -212,6 +212,12 @@ class Converter {
     this.spans.push(extra ? { ...span, ...extra } : span);
   }
 
+  /** True at the start of a block or right after a line break. */
+  private atLineStart(): boolean {
+    const last = this.lastChar();
+    return last === '' || last === '\n';
+  }
+
   /** The last character collected so far ("" at the start of a block). */
   private lastChar(): string {
     for (let i = this.spans.length - 1; i >= 0; i--) {
@@ -265,9 +271,9 @@ class Converter {
       return;
     }
     const block = BLOCKS.has(tag);
-    if (block && this.lastChar() !== '' && this.lastChar() !== '\n') this.lineBreak(format);
+    if (block && !this.atLineStart()) this.lineBreak(format);
     this.inlineChildren(el, format);
-    if (block && this.lastChar() !== '' && this.lastChar() !== '\n') this.lineBreak(format);
+    if (block && !this.atLineStart()) this.lineBreak(format);
   }
 
   private inlineChildren(el: Element, format: Format): void {
@@ -355,13 +361,10 @@ class Converter {
       if (isList(tag)) {
         emit();
         this.list(child, indent + 1, formatOf(child, format));
-      } else if (tag === 'p' || tag === 'div' || tag === 'span' || !BLOCKS.has(tag) || /^h[1-6]$/.test(tag)) {
-        if (emitted) this.inline(child, format);
-        else {
-          // Paragraphs of one item are joined with line breaks.
-          if (BLOCKS.has(tag) && this.lastChar() !== '' && this.lastChar() !== '\n') this.lineBreak(format);
-          this.inline(child, format);
-        }
+      } else if (tag === 'p' || tag === 'div' || !BLOCKS.has(tag) || /^h[1-6]$/.test(tag)) {
+        // Paragraphs of one item are joined with line breaks.
+        if (!emitted && BLOCKS.has(tag) && !this.atLineStart()) this.lineBreak(format);
+        this.inline(child, format);
       } else {
         emit();
         this.element(child, format);

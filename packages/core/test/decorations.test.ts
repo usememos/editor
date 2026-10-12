@@ -45,6 +45,24 @@ describe('splitByDecorations', () => {
     ]);
   });
 
+  it('never splits an atomic span; a decoration covers it only if it covers all of it', () => {
+    const content = [
+      { text: 'a ', marks: [] },
+      { text: '$x+y$', marks: [], token: 'math' },
+      { text: ' b', marks: [] },
+    ];
+    const pieces = splitByDecorations(content, [{ from: 1, to: 4, class: 'x' }, { from: 0, to: 9, class: 'all' }], (span, from) => {
+      expect(from).toBe(span.token ? 2 : from);
+      return !!span.token;
+    });
+    expect(pieces.map((p) => [p.span.text, p.atomic, p.decorations.map((d) => d.class).join(',')])).toEqual([
+      ['a', false, 'all'],
+      [' ', false, 'x,all'],
+      ['$x+y$', true, 'all'],
+      [' b', false, 'all'],
+    ]);
+  });
+
   it('returns spans unchanged without decorations', () => {
     const content = paragraph([{ text: 'x', marks: [] }]).content;
     expect(splitByDecorations(content, [])[0]!.span).toBe(content[0]);

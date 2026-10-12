@@ -9,7 +9,7 @@
 //
 // The structure follows the reference implementation's design: every block
 // type defines how a line continues it (`continueBlock`), what happens when it
-// closes (`finalizeBlock`), and the list of block starts is tried in order.
+// closes (`finalize`), and the list of block starts is tried in order.
 
 import type { BlockNode, ListItemNode, Root, SourceLines, TableAlign } from './ast';
 import { CLOSETAG, OPENTAG, type RefMap, extractReferences, parseInlines, unescapeString } from './inline';
@@ -565,11 +565,15 @@ class BlockParser {
     return Start.Leaf;
   }
 
+  /** Whether a new block would interrupt a paragraph, including a lazy continuation line. */
+  private inParagraph(container: BNode): boolean {
+    return container.type === 'paragraph' || (!this.allClosed && !this.blank && this.tip.type === 'paragraph');
+  }
+
   /** A block of a syntax extension. Like an HTML block, its indentation is part of it. */
   private startSyntaxBlock(container: BNode, rest: string): Start {
     if (this.indented || this.options.block.length === 0) return Start.None;
-    const inParagraph =
-      container.type === 'paragraph' || (!this.allClosed && !this.blank && this.tip.type === 'paragraph');
+    const inParagraph = this.inParagraph(container);
     for (const syntax of this.options.block) {
       if (inParagraph && !syntax.interruptsParagraph) continue;
       const matcher = syntax.open(rest);
@@ -603,11 +607,10 @@ class BlockParser {
 
   private startHtmlBlock(container: BNode, s: string): Start {
     if (this.indented || s[0] !== '<') return Start.None;
+    // Type 7 cannot interrupt a paragraph (not even a lazy one).
+    const inParagraph = this.inParagraph(container);
     for (let type = 1; type <= 7; type++) {
-      // Type 7 cannot interrupt a paragraph (not even a lazy one).
-      const interruptsParagraph =
-        container.type === 'paragraph' || (!this.allClosed && !this.blank && this.tip.type === 'paragraph');
-      if (reHtmlBlockOpen[type]!.test(s) && (type < 7 || !interruptsParagraph)) {
+      if (reHtmlBlockOpen[type]!.test(s) && (type < 7 || !inParagraph)) {
         this.closeUnmatchedBlocks();
         // The indentation is part of the HTML block, so the offset stays.
         const block = this.addChild('htmlBlock');
@@ -770,14 +773,14 @@ class BlockParser {
   private toAst(node: BNode): BlockNode[] {
     switch (node.type) {
       case 'paragraph':
-        return [{ type: 'paragraph', children: parseInlines(trimContent(node.content), this.refs, this.options.inline) }];
+        return [{ type: 'paragraph', children: parseInlines(trimContent(node.content), this.refs, this.options.inline, this.options.autolinks) }];
       case 'heading':
         return [
           {
             type: 'heading',
             level: node.level as 1 | 2 | 3 | 4 | 5 | 6,
             setext: node.setext,
-            children: parseInlines(trimContent(node.content), this.refs, this.options.inline),
+            children: parseInlines(trimContent(node.content), this.refs, this.options.inline, this.options.autolinks),
           },
         ];
       case 'thematicBreak':
@@ -808,7 +811,7 @@ class BlockParser {
           {
             type: 'table',
             align: node.align,
-            rows: node.rows.map((row) => row.map((cell) => parseInlines(cell, this.refs, this.options.inline))),
+            rows: node.rows.map((row) => row.map((cell) => parseInlines(cell, this.refs, this.options.inline, this.options.autolinks))),
           },
         ];
       default:

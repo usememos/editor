@@ -28,7 +28,8 @@ export function defaultKeymap(): Extension {
     'Ctrl-Enter': ({ editor }) => editor.submit(),
     Tab: ({ editor }) => (editor.isActive('table') ? editor.run((s) => moveCell(s, 1)) : editor.commands.indent()) || true,
     'Shift-Tab': ({ editor }) => (editor.isActive('table') ? editor.run((s) => moveCell(s, -1)) : editor.commands.outdent()) || true,
-    Escape: ({ editor }) => editor.commands.blur(),
+    // The first Escape selects the block; Escape in a block selection leaves the editor.
+    Escape: ({ editor }) => editor.commands.selectBlocks() || editor.commands.blur(),
   };
   // Ctrl+Y is redo on Windows and Linux; on macOS it is a text editing key.
   if (!isMac) keymap['Ctrl-y'] = ({ editor }) => editor.commands.redo() || true;

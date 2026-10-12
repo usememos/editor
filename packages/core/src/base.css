@@ -1,0 +1,218 @@
+/*
+ * Layout the editor needs to work, and all spacing between blocks.
+ * No colors or fonts: theme.css adds the default look. style.css imports
+ * both; import this file alone to style the editor entirely with your own
+ * CSS or theme classes (see the `theme` option).
+ *
+ * Block spacing lives here so classes added by a theme cannot change it:
+ * these rules are more specific than a single utility class.
+ * All selectors are scoped under .mbe-root (the editable area) and
+ * .mbe-ui (menus, toolbar and handle, which live in document.body).
+ */
+.mbe-root,
+.mbe-ui {
+  --mbe-block-gap: 8px;
+  --mbe-indent-size: 24px;
+}
+
+/* Document ---------------------------------------------------------------- */
+
+.mbe-root {
+  outline: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  caret-color: currentColor;
+  position: relative;
+}
+
+/* Block rhythm: every block has the gap above and below, and adjacent
+   margins collapse, so blocks sit one gap apart and a block with larger
+   margins (a heading, a divider) wins. No sibling selectors: in Chrome they
+   make every edit restyle and re-lay out all blocks after the edited one. */
+.mbe-root > .mbe-block {
+  margin: var(--mbe-block-gap) 0;
+  position: relative;
+}
+/* Block selection: whole blocks are highlighted and the caret is hidden.
+   The shadow pads the highlight without moving any text. */
+.mbe-root.mbe-block-selecting { caret-color: transparent; }
+.mbe-root > .mbe-block.mbe-block-selected {
+  background: color-mix(in srgb, Highlight 22%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, Highlight 22%, transparent);
+  border-radius: 2px;
+}
+/* Long documents: blocks of a loaded document skip layout and paint off screen.
+   See BlockRenderer.render for why only those. */
+.mbe-root > .mbe-lazy {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 24px;
+}
+
+/* Headings: more room above than below. */
+.mbe-root > :is(h1, h2).mbe-block { margin-top: 20px; }
+.mbe-root > h3.mbe-block { margin-top: 20px; margin-bottom: 6px; }
+.mbe-root > :is(h4, h5, h6).mbe-block { margin-top: 16px; margin-bottom: 4px; }
+
+/* Quote: the renderer marks a quote block that follows another (see
+   updateNeighborMarks). The negative margin cancels the gap, and padding
+   keeps a border unbroken, so consecutive quote blocks read as one quote. */
+.mbe-root > blockquote[data-quote-joined] { margin-top: calc(-1 * var(--mbe-block-gap)); padding-top: var(--mbe-block-gap); }
+
+/* Lists: items sit close together; the list as a whole gets the block gap.
+   The renderer marks the first item of each list with data-list-start
+   (see updateNeighborMarks). Item margins of 2px collapse with a neighbor's
+   gap, so only the gap shows at either end of a list. */
+.mbe-root > .mbe-list-item {
+  display: flex;
+  align-items: flex-start;
+  margin: 2px 0;
+}
+.mbe-root > .mbe-list-item[data-list-start] { margin-top: var(--mbe-block-gap); }
+/* Attribute rules instead of an inline custom property, so list items share computed styles. */
+.mbe-root > .mbe-list-item[data-indent='1'] { padding-inline-start: var(--mbe-indent-size); }
+.mbe-root > .mbe-list-item[data-indent='2'] { padding-inline-start: calc(2 * var(--mbe-indent-size)); }
+.mbe-root > .mbe-list-item[data-indent='3'] { padding-inline-start: calc(3 * var(--mbe-indent-size)); }
+.mbe-root > .mbe-list-item[data-indent='4'] { padding-inline-start: calc(4 * var(--mbe-indent-size)); }
+.mbe-root > .mbe-list-item[data-indent='5'] { padding-inline-start: calc(5 * var(--mbe-indent-size)); }
+.mbe-root .mbe-marker {
+  flex: none;
+  box-sizing: border-box;
+  width: var(--mbe-indent-size);
+  padding-inline-end: 6px;
+  text-align: end;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.mbe-root .mbe-list-item[data-list-type='bullet'] > .mbe-marker::before { content: '•'; }
+.mbe-root .mbe-list-item[data-list-type='task'] > .mbe-marker { width: auto; padding-inline-end: 8px; display: flex; }
+.mbe-root .mbe-list-item > .mbe-content { flex: 1; min-width: 0; }
+.mbe-root .mbe-checkbox {
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  margin: 4px 0 0;
+  cursor: pointer;
+}
+.mbe-root.mbe-readonly .mbe-checkbox { cursor: default; }
+
+/* Links: the text cursor while editing, so clicking places the caret. */
+.mbe-root a.mbe-link { cursor: text; }
+.mbe-root.mbe-readonly a.mbe-link { cursor: pointer; }
+.mbe-root .mbe-image { max-width: 100%; height: auto; margin: 8px 0; vertical-align: bottom; }
+
+/* Code */
+.mbe-root .mbe-code-bar { display: flex; align-items: center; }
+.mbe-root .mbe-code-lang {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 0;
+  width: 12em;
+}
+.mbe-root > .mbe-code pre,
+.mbe-root > pre.mbe-raw { white-space: pre-wrap; tab-size: 2; }
+.mbe-root > .mbe-code pre { margin: 0; }
+.mbe-root > .mbe-code pre code { display: block; }
+
+/* Rendered views (see Extension.views): a token or raw block shown rendered,
+   such as math. Clicking one, or moving the caret onto it, shows its source. */
+.mbe-root > .mbe-view-block { overflow-x: auto; overflow-y: hidden; }
+/* A renderer's own block margins (KaTeX's display math has 1em) would add to the block gap. */
+.mbe-root > .mbe-view-block > * { margin-block: 0; }
+
+/* Divider: the padding gives the line a larger click target. */
+.mbe-root > .mbe-divider.mbe-block { margin: 16px 0; padding: 4px 0; cursor: default; }
+.mbe-root > .mbe-divider hr { margin: 0; }
+
+/* Table */
+.mbe-root > .mbe-table { overflow-x: auto; }
+/* Columns fit their content and wrap at the editor's width; wider tables scroll. */
+.mbe-root > .mbe-table table { border-collapse: separate; border-spacing: 0; }
+.mbe-root > .mbe-table th,
+.mbe-root > .mbe-table td {
+  padding: 4px 8px;
+  min-width: 4em;
+  vertical-align: top;
+  text-align: left;
+  outline: none;
+}
+
+/* Nothing above the first block or below the last, whatever their type. */
+.mbe-root > .mbe-block:first-child { margin-top: 0; }
+.mbe-root > .mbe-block:last-child { margin-bottom: 0; }
+
+/* Placeholders and hints. When both apply, the slash hint wins over the placeholder. */
+.mbe-root .mbe-empty-content { position: relative; }
+.mbe-root > .mbe-paragraph.mbe-empty:only-child::before,
+.mbe-root > .mbe-paragraph.mbe-empty.mbe-show-hint::before,
+.mbe-root > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote)::before,
+.mbe-root > .mbe-list-item.mbe-empty[data-hint] > .mbe-content::before {
+  opacity: 0.5;
+  pointer-events: none;
+  position: absolute;
+}
+.mbe-root > .mbe-paragraph.mbe-empty:only-child::before { content: var(--mbe-placeholder, ''); }
+.mbe-root > .mbe-paragraph.mbe-empty.mbe-show-hint::before { content: var(--mbe-slash-hint, ''); }
+.mbe-root > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote)::before,
+.mbe-root > .mbe-list-item.mbe-empty[data-hint] > .mbe-content::before { content: attr(data-hint); }
+
+/* Widgets: app UI between blocks, such as an upload placeholder. Not editable text. */
+.mbe-root > .mbe-widget { cursor: default; user-select: none; -webkit-user-select: none; white-space: normal; }
+
+/* Floating UI -------------------------------------------------------------
+   System colors keep menus readable when theme.css is not loaded. */
+
+.mbe-ui { z-index: 1000; }
+.mbe-ui[hidden] { display: none !important; }
+.mbe-menu,
+.mbe-toolbar,
+.mbe-link-popover {
+  position: fixed;
+  background: Canvas;
+  color: CanvasText;
+  border: 1px solid GrayText;
+}
+.mbe-menu { min-width: 200px; max-height: 320px; overflow-y: auto; padding: 4px; }
+.mbe-menu-title { padding: 6px 8px 4px; }
+.mbe-menu-item { display: flex; align-items: center; gap: 8px; padding: 4px 8px; cursor: pointer; user-select: none; }
+.mbe-menu-item.mbe-highlighted { background: Highlight; color: HighlightText; }
+.mbe-menu-icon {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.mbe-menu-icon:empty { display: none; }
+.mbe-menu-label { flex: 1; }
+.mbe-menu-empty { padding: 6px 8px; }
+
+.mbe-toolbar { display: flex; align-items: center; gap: 2px; padding: 3px; }
+.mbe-tool {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 4px 8px;
+  min-width: 28px;
+  cursor: pointer;
+}
+.mbe-tool.mbe-active { background: Highlight; color: HighlightText; }
+.mbe-tool-sep { width: 1px; align-self: stretch; margin: 3px 2px; background: GrayText; }
+
+.mbe-link-popover { display: flex; gap: 4px; padding: 4px; }
+.mbe-link-input { font: inherit; color: inherit; width: 260px; padding: 5px 8px; }
+
+.mbe-handle {
+  position: fixed;
+  width: 20px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}

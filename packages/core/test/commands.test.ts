@@ -370,6 +370,78 @@ describe('block menu', () => {
   });
 });
 
+describe('whole blocks (block selection)', () => {
+  const doc = () =>
+    state(paragraph(txt('intro')), listItem('bullet', txt('a')), listItem('bullet', txt('a1'), { indent: 1 }), listItem('bullet', txt('b')), paragraph(txt('end')));
+
+  it('spanBlocks selects from the start of the first block to the end of the last', () => {
+    const s = doc();
+    expect(cmd.spanBlocks(s.doc.blocks, { from: 1, to: 3 })).toEqual({
+      anchor: { blockId: s.doc.blocks[1]!.id, offset: 0 },
+      focus: { blockId: s.doc.blocks[3]!.id, offset: 1 },
+    });
+  });
+
+  it('spanBlocks covers a table from its first cell to its last', () => {
+    const s = state(table([null, null], [[txt('a'), txt('b')], [txt('c'), txt('dd')]]));
+    const sel = cmd.spanBlocks(s.doc.blocks, { from: 0, to: 0 });
+    expect(sel.anchor.cell).toEqual({ row: 0, col: 0 });
+    expect(sel.focus).toMatchObject({ offset: 2, cell: { row: 1, col: 1 } });
+  });
+
+  it('deleteBlocks removes whole blocks and puts the caret at the end of the block before', () => {
+    const s = cmd.deleteBlocks(doc(), { from: 1, to: 3 });
+    expect(show(s)).toEqual(['p:intro', 'p:end']);
+    expect(s.selection.focus).toEqual({ blockId: s.doc.blocks[0]!.id, offset: 5 });
+  });
+
+  it('deleteBlocks at the start puts the caret at the start of the next block', () => {
+    const s = cmd.deleteBlocks(doc(), { from: 0, to: 0 });
+    expect(show(s)[0]).toBe('ul0:a');
+    expect(s.selection.focus).toEqual({ blockId: s.doc.blocks[0]!.id, offset: 0 });
+  });
+
+  it('deleteBlocks of every block leaves one empty paragraph', () => {
+    const s = cmd.deleteBlocks(doc(), { from: 0, to: 4 });
+    expect(show(s)).toEqual(['p:']);
+  });
+
+  it('deleteBlocks lifts nested items whose parent was deleted', () => {
+    const s = cmd.deleteBlocks(doc(), { from: 1, to: 1 });
+    expect(show(s)).toEqual(['p:intro', 'ul0:a1', 'ul0:b', 'p:end']);
+  });
+
+  it('deleteBlocks keeps blocks it did not touch as the same objects', () => {
+    const before = doc();
+    const s = cmd.deleteBlocks(before, { from: 4, to: 4 });
+    s.doc.blocks.forEach((b, i) => expect(b).toBe(before.doc.blocks[i]));
+  });
+
+  it('duplicateBlocks inserts copies with new IDs after the range and selects them', () => {
+    const before = doc();
+    const s = cmd.duplicateBlocks(before, { from: 1, to: 2 });
+    expect(show(s)).toEqual(['p:intro', 'ul0:a', 'ul1:a1', 'ul0:a', 'ul1:a1', 'ul0:b', 'p:end']);
+    expect(s.doc.blocks[3]!.id).not.toBe(before.doc.blocks[1]!.id);
+    expect(s.selection).toEqual(cmd.spanBlocks(s.doc.blocks, { from: 3, to: 4 }));
+  });
+
+  it('duplicateBlocks re-nests a copy that would be too deep after the range', () => {
+    const s = cmd.duplicateBlocks(doc(), { from: 2, to: 3 });
+    expect(show(s)).toEqual(['p:intro', 'ul0:a', 'ul1:a1', 'ul0:b', 'ul1:a1', 'ul0:b', 'p:end']);
+  });
+
+  it('replaceBlocks puts pasted blocks in place of the selected ones', () => {
+    const s = cmd.replaceBlocks(doc(), { from: 1, to: 3 }, [heading(2, txt('New')), paragraph(txt('text'))]);
+    expect(show(s)).toEqual(['p:intro', 'h2:New', 'p:text', 'p:end']);
+    expect(s.selection.focus).toEqual({ blockId: s.doc.blocks[2]!.id, offset: 4 });
+  });
+
+  it('replaceBlocks re-nests the items after a pasted paragraph', () => {
+    const s = cmd.replaceBlocks(doc(), { from: 1, to: 1 }, [paragraph(txt('x'))]);
+    expect(show(s)).toEqual(['p:intro', 'p:x', 'ul0:a1', 'ul0:b', 'p:end']);
+  });
+});
+
 describe('tables', () => {
   const t = () => state(table([null, null], [[txt('a'), txt('b')], [txt('c'), txt('d')]]));
 

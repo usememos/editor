@@ -3,7 +3,7 @@
 import { expect, test } from '@playwright/test';
 import { blocks, md } from './helpers';
 
-test('default keys: block types, strikethrough, and Escape blurs', async ({ page }) => {
+test('default keys: block types, strikethrough, and Escape selects the block, then blurs', async ({ page }) => {
   await page.goto('/?empty');
   await page.locator('#editor').click();
   await page.keyboard.type('title');
@@ -18,7 +18,10 @@ test('default keys: block types, strikethrough, and Escape blurs', async ({ page
   await page.keyboard.press('Control+Shift+S');
   expect(await blocks(page)).toEqual(['h2:title', 'ul0:item', 'task0[ ]:todo']);
   expect(await md(page)).toBe('## title\n\n- item\n- [ ] ~~todo~~\n');
+  await expect(page.locator('.mbe-toolbar')).toBeVisible();
   await page.keyboard.press('Escape'); // closes the toolbar
+  await page.keyboard.press('Escape'); // selects the block
+  expect(await page.evaluate(() => (window as any).editor.selectedBlocks.length)).toBe(1);
   await page.keyboard.press('Escape'); // blurs
   expect(await page.evaluate(() => (window as any).editor.hasFocus())).toBe(false);
 });

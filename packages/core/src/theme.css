@@ -1,0 +1,214 @@
+/*
+ * Default theme: quiet, compact styles that match a rendered Markdown view,
+ * so a document looks the same while editing and when read-only.
+ * Needs base.css, which holds the layout and all spacing between blocks.
+ * Every color, font and size is a custom property; the theme option's
+ * tokens set them (see theme.ts), or set them on the root in CSS.
+ * Light and dark follow prefers-color-scheme; set data-theme="light" or
+ * data-theme="dark" on the root or an ancestor, or the theme option's
+ * colorScheme, to force one.
+ */
+.mbe-root,
+.mbe-ui {
+  color-scheme: light dark;
+  --mbe-font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans',
+    sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+  --mbe-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  --mbe-font-size: 16px;
+  --mbe-line-height: 24px;
+  --mbe-radius: 8px;
+  /* Colors: light-dark() picks by the element's color-scheme. The theme
+     option's tokens set --mbe-<name>-light and --mbe-<name>-dark. */
+  --mbe-text: light-dark(var(--mbe-text-light, oklch(0.2438 0.0269 95.7226)), var(--mbe-text-dark, oklch(0.9 0.006 255)));
+  --mbe-muted: light-dark(var(--mbe-muted-light, oklch(0.5559 0.0075 97.4233)), var(--mbe-muted-dark, oklch(0.72 0.007 255)));
+  --mbe-bg: light-dark(var(--mbe-bg-light, transparent), var(--mbe-bg-dark, transparent));
+  --mbe-accent: light-dark(var(--mbe-accent-light, oklch(0.45 0.08 250)), var(--mbe-accent-dark, oklch(0.66 0.11 250)));
+  --mbe-link: light-dark(
+    var(--mbe-link-light, var(--mbe-accent-light, oklch(0.45 0.08 250))),
+    var(--mbe-link-dark, var(--mbe-accent-dark, oklch(0.66 0.11 250)))
+  );
+  --mbe-code-bg: light-dark(var(--mbe-code-bg-light, oklch(0.9341 0.0153 90.239)), var(--mbe-code-bg-dark, oklch(0.35 0.011 255)));
+  --mbe-border: light-dark(var(--mbe-border-light, oklch(0.8847 0.0069 97.3627)), var(--mbe-border-dark, oklch(0.38 0.01 255)));
+  --mbe-popup-bg: light-dark(var(--mbe-popup-bg-light, oklch(1 0 0)), var(--mbe-popup-bg-dark, oklch(0.32 0.01 255)));
+  --mbe-popup-border: light-dark(
+    var(--mbe-popup-border-light, var(--mbe-border-light, oklch(0.8847 0.0069 97.3627))),
+    var(--mbe-popup-border-dark, var(--mbe-border-dark, oklch(0.38 0.01 255)))
+  );
+  --mbe-hover: light-dark(var(--mbe-hover-light, oklch(0.9245 0.0138 92.9892)), var(--mbe-hover-dark, oklch(0.39 0.018 250)));
+  --mbe-danger: light-dark(var(--mbe-danger-light, oklch(0.5 0.12 25)), var(--mbe-danger-dark, oklch(0.64 0.18 24)));
+  /* Two soft shadows in light, one darker and wider in dark. */
+  --mbe-popup-shadow: 0 4px 12px light-dark(transparent, rgb(0 0 0 / 0.35)), 0 4px 6px -1px light-dark(rgb(0 0 0 / 0.1), transparent),
+    0 2px 4px -2px light-dark(rgb(0 0 0 / 0.1), transparent);
+  --mbe-block-code-bg: color-mix(in oklab, var(--mbe-code-bg) 45%, transparent);
+  --mbe-quote-border: color-mix(in oklab, var(--mbe-muted) 25%, transparent);
+}
+:where([data-theme='light']) :is(.mbe-root, .mbe-ui),
+.mbe-root[data-theme='light'],
+.mbe-ui[data-theme='light'] {
+  color-scheme: light;
+}
+:where([data-theme='dark']) :is(.mbe-root, .mbe-ui),
+.mbe-root[data-theme='dark'],
+.mbe-ui[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+/* Document ----------------------------------------------------------------
+   Editing and read-only use the same rules. */
+
+.mbe-root {
+  font-family: var(--mbe-font);
+  font-size: var(--mbe-font-size);
+  line-height: var(--mbe-line-height);
+  color: var(--mbe-text);
+  background: var(--mbe-bg);
+}
+
+/* Headings: close to the body size. */
+.mbe-root > :is(h1, h2, h3, h4, h5, h6) { font-weight: 600; }
+.mbe-root > h1 { font-size: 24px; line-height: 32px; }
+.mbe-root > h2 { font-size: 20px; line-height: 28px; }
+.mbe-root > h3 { font-size: 18px; line-height: 26px; }
+.mbe-root > :is(h4, h5, h6) { font-size: 16px; line-height: 24px; }
+.mbe-root > h6 { color: var(--mbe-muted); }
+
+/* Block selection */
+.mbe-root > .mbe-block.mbe-block-selected {
+  background: color-mix(in oklab, var(--mbe-accent) 14%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--mbe-accent) 14%, transparent);
+}
+
+/* Inline */
+.mbe-root a.mbe-link {
+  color: var(--mbe-link);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--mbe-link) 50%, transparent);
+  text-underline-offset: 2px;
+}
+.mbe-root a.mbe-link:hover { text-decoration-color: var(--mbe-link); }
+/* Inline source text: code, raw HTML and extension tokens (math, footnote
+   references) shown as source. line-height: 1, because smaller text in
+   another font would otherwise make its line taller than the rest. */
+.mbe-root :is(code, .mbe-raw-html, .mbe-token) { font-family: var(--mbe-mono); font-size: 0.875em; line-height: 1; }
+.mbe-root :is(.mbe-raw-html, .mbe-token) { color: var(--mbe-muted); }
+.mbe-root code { background: var(--mbe-code-bg); border-radius: 4px; padding: 2px 4px; }
+.mbe-root .mbe-image { border-radius: 8px; }
+
+/* Quote */
+.mbe-root > blockquote {
+  border-inline-start: 3px solid var(--mbe-quote-border);
+  padding-inline-start: 12px;
+  color: var(--mbe-muted);
+}
+
+/* Lists */
+.mbe-root .mbe-marker { color: var(--mbe-muted); }
+/* appearance: none, so a disabled checkbox in read-only is not greyed out. */
+.mbe-root .mbe-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--mbe-border);
+  border-radius: 4px;
+  background: transparent center / 14px no-repeat;
+}
+.mbe-root .mbe-checkbox:checked {
+  background-color: var(--mbe-accent);
+  border-color: var(--mbe-accent);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+}
+
+/* Code: a quiet panel, with the language as a small label above the code. */
+.mbe-root > .mbe-code {
+  background: var(--mbe-block-code-bg);
+  border-radius: var(--mbe-radius);
+  overflow: hidden;
+}
+.mbe-root .mbe-code-bar { padding: 6px 12px 0; }
+.mbe-root .mbe-code-lang { font: 12px/16px var(--mbe-font); color: var(--mbe-muted); }
+.mbe-root .mbe-code-lang::placeholder { color: var(--mbe-muted); opacity: 1; }
+/* Block source text: code blocks and raw blocks. */
+.mbe-root > .mbe-code pre,
+.mbe-root > pre.mbe-raw { font: 14px/22px var(--mbe-mono); }
+.mbe-root > .mbe-code pre { padding: 2px 12px 10px; }
+.mbe-root > .mbe-code pre code { background: none; padding: 0; border-radius: 0; font: inherit; }
+
+/* Raw blocks: Markdown kept as source (HTML, structure the editor cannot hold, extension syntax) */
+.mbe-root > pre.mbe-raw { color: var(--mbe-muted); }
+
+/* Divider */
+.mbe-root > .mbe-divider hr { border: none; border-top: 1px solid var(--mbe-border); }
+
+/* Table: a light grid around every cell and a shaded header row, as in
+   Notion and Outline. Separate borders, so the outer corners can be round. */
+.mbe-root > .mbe-table table {
+  font-size: 14px;
+  line-height: 20px;
+  border: 1px solid var(--mbe-border);
+  border-radius: var(--mbe-radius);
+}
+.mbe-root > .mbe-table :is(th, td) { padding: 6px 10px; min-width: 8em; }
+.mbe-root > .mbe-table :is(th, td):not(:first-child) { border-inline-start: 1px solid var(--mbe-border); }
+.mbe-root > .mbe-table tr:not(:first-child) > * { border-top: 1px solid var(--mbe-border); }
+.mbe-root > .mbe-table th { font-weight: 500; background: var(--mbe-block-code-bg); }
+/* The header's fill stays inside the round corners. */
+.mbe-root > .mbe-table tr:first-child > :first-child { border-start-start-radius: calc(var(--mbe-radius) - 1px); }
+.mbe-root > .mbe-table tr:first-child > :last-child { border-start-end-radius: calc(var(--mbe-radius) - 1px); }
+
+/* Placeholders and hints */
+.mbe-root > .mbe-paragraph.mbe-empty:only-child::before,
+.mbe-root > .mbe-paragraph.mbe-empty.mbe-show-hint::before,
+.mbe-root > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote)::before,
+.mbe-root > .mbe-list-item.mbe-empty[data-hint] > .mbe-content::before {
+  color: var(--mbe-muted);
+  opacity: 0.7;
+}
+
+/* Floating UI ------------------------------------------------------------- */
+
+.mbe-ui {
+  font-family: var(--mbe-font);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--mbe-text);
+}
+.mbe-menu,
+.mbe-toolbar,
+.mbe-link-popover {
+  color: var(--mbe-text);
+  background: var(--mbe-popup-bg);
+  border: 1px solid var(--mbe-popup-border);
+  border-radius: var(--mbe-radius);
+  box-shadow: var(--mbe-popup-shadow);
+}
+.mbe-menu-title { font-size: 11px; font-weight: 600; color: var(--mbe-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.mbe-menu-item { border-radius: 6px; }
+.mbe-menu-item.mbe-highlighted { background: var(--mbe-hover); color: inherit; }
+.mbe-menu-item.mbe-danger { color: var(--mbe-danger); }
+.mbe-menu-icon { border-radius: 4px; font-size: 11px; font-weight: 600; color: var(--mbe-muted); }
+.mbe-menu-empty { color: var(--mbe-muted); }
+
+.mbe-tool { border-radius: 6px; }
+.mbe-tool:hover { background: var(--mbe-hover); }
+.mbe-tool.mbe-active { color: var(--mbe-accent); background: var(--mbe-hover); }
+.mbe-tool-bold { font-weight: 700; }
+.mbe-tool-italic { font-style: italic; font-family: Georgia, serif; }
+.mbe-tool-strike { text-decoration: line-through; }
+.mbe-tool-code { font-family: var(--mbe-mono); font-size: 12px; }
+.mbe-tool-sep { background: var(--mbe-popup-border); }
+
+.mbe-link-input {
+  border: 1px solid var(--mbe-popup-border);
+  border-radius: 6px;
+  background: transparent;
+  outline: none;
+}
+.mbe-link-input:focus { border-color: var(--mbe-accent); }
+
+.mbe-handle {
+  border-radius: 4px;
+  color: var(--mbe-muted);
+  font-size: 12px;
+  letter-spacing: -2px;
+  opacity: 0.7;
+}
+.mbe-handle:hover { background: var(--mbe-hover); opacity: 1; }

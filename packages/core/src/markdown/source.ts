@@ -9,10 +9,11 @@
 // by the normalizing serializer. With no edits, saving returns the input
 // byte for byte.
 
-import type { Block, Doc } from '../model';
+import { type Block, type Doc, htmlBlock } from '../model';
+import type { BlockNode } from './ast';
 import { parseAst } from './blocks';
 import { lowerTopLevel } from './lower';
-import type { MarkdownOptions } from './options';
+import { DEFAULT_MARKDOWN, type MarkdownOptions } from './options';
 import { isEmptyParagraph, serializeBlocks } from './serialize';
 
 export interface SourceGroup {
@@ -55,23 +56,46 @@ export function loadMarkdown(text: string, options?: MarkdownOptions): { doc: Do
   const groups: SourceGroup[] = [];
   const groupOf = new WeakMap<Block, SourceGroup>();
   let lastEnd = 0;
-  root.children.forEach((node, i) => {
-    const lines = root.lines?.[i];
-    const from = lines ? (lineStarts[lines.start - 1] ?? text.length) : -1;
-    const to = lines ? (lineEnds[Math.max(lines.start, lines.end) - 1] ?? text.length) : -1;
-    // Line ranges never overlap; if they ever did, the block is just not kept.
-    const valid = lines !== undefined && from >= lastEnd && to >= from;
-    const source = valid ? text.slice(from, to) : undefined;
-    const lowered = lowerTopLevel(node, options, source);
+  for (let i = 0; i < root.children.length; i++) {
+    const node = root.children[i]!;
+    // A collapsible section is one raw HTML block, from <details> to its </details>.
+    const last = detailsEnd(root.children, i);
+    const from = lineStarts[root.lines[i]!.start - 1] ?? text.length;
+    const lines = root.lines[last]!;
+    const to = lineEnds[Math.max(lines.start, lines.end) - 1] ?? text.length;
+    const source = text.slice(from, to);
+    const lowered = last > i ? [htmlBlock(source)] : lowerTopLevel(node, options ?? DEFAULT_MARKDOWN, source);
+    i = last;
     blocks.push(...lowered);
-    if (lowered.length === 0 || source === undefined) return;
+    // Line ranges never overlap; if they ever did, the block is just not kept.
+    if (lowered.length === 0 || from < lastEnd || to < from) continue;
     lastEnd = to;
     const open = (node.type === 'codeBlock' && node.fenced) || node.type === 'htmlBlock' ? isOpen(source, options) : false;
     const group: SourceGroup = { index: groups.length, from, to, blocks: lowered, open };
     groups.push(group);
     for (const block of lowered) groupOf.set(block, group);
-  });
-  return { doc: { blocks }, source: { text, groups, groupOf, definitions: root.definitions ?? [] } };
+  }
+  return { doc: { blocks }, source: { text, groups, groupOf, definitions: root.definitions } };
+}
+
+/**
+ * When top-level block `i` is an HTML block that opens a <details> element
+ * and does not close it, the index of the HTML block that does. CommonMark
+ * ends an HTML block at a blank line, so a section with blank lines inside
+ * parses as several blocks; the editor keeps the whole section as one raw
+ * HTML block instead. Returns `i` when there is nothing to join, including
+ * a section that is never closed.
+ */
+function detailsEnd(nodes: readonly BlockNode[], i: number): number {
+  if (nodes[i]!.type !== 'htmlBlock') return i;
+  let depth = 0;
+  for (let j = i; j < nodes.length; j++) {
+    const node = nodes[j]!;
+    if (node.type !== 'htmlBlock') continue;
+    depth += (node.value.match(/<details\b/gi)?.length ?? 0) - (node.value.match(/<\/details\s*>/gi)?.length ?? 0);
+    if (depth <= 0) return j;
+  }
+  return i;
 }
 
 /** True if a block's source would swallow a paragraph written after it. */
@@ -90,6 +114,7 @@ function joins(a: Block | undefined, b: Block | undefined): boolean {
 }
 
 export function saveWithSource(blocks: readonly Block[], source: MarkdownSource, options?: MarkdownOptions): string {
+  const text = source.text;
   // 1. Split the blocks into kept groups and runs of other blocks.
   const chunks: Chunk[] = [];
   for (let i = 0; i < blocks.length; ) {
@@ -107,8 +132,15 @@ export function saveWithSource(blocks: readonly Block[], source: MarkdownSource,
   }
 
   // 2. A kept list or quote next to an edited one would merge with it in
-  //    Markdown, and an open group would swallow what follows it. Write those
-  //    groups normally too.
+  //    Markdown, and an open group would swallow what follows it. The same
+  //    goes for two kept groups that were not neighbours in the source (the
+  //    blocks between them were deleted), and a kept group that starts with
+  //    indentation after a list would become part of its last item. Write
+  //    those groups normally too.
+  /** True if `chunk` comes right after `prev` and the text between them did not come from the source. */
+  const newNeighbour = (prev: Chunk | undefined, chunk: Chunk) =>
+    !!prev && (!prev.group || !chunk.group || chunk.group.index !== prev.group.index + 1);
+  const indented = (chunk: Chunk) => !!chunk.group && /^[ \t]/.test(text.slice(chunk.group.from, chunk.group.to));
   for (let changed = true; changed; ) {
     changed = false;
     chunks.forEach((chunk, k) => {
@@ -117,9 +149,10 @@ export function saveWithSource(blocks: readonly Block[], source: MarkdownSource,
       const next = chunks[k + 1];
       const first = chunk.blocks[0];
       const last = chunk.blocks[chunk.blocks.length - 1];
+      const before = prev?.blocks[prev.blocks.length - 1];
       if (
-        (prev && !prev.group && joins(prev.blocks[prev.blocks.length - 1], first)) ||
-        (next && !next.group && joins(last, next.blocks[0])) ||
+        (newNeighbour(prev, chunk) && (joins(before, first) || (before?.type === 'listItem' && indented(chunk)))) ||
+        (next && newNeighbour(chunk, next) && joins(last, next.blocks[0])) ||
         (chunk.group.open && next)
       ) {
         chunk.group = null;
@@ -142,7 +175,6 @@ export function saveWithSource(blocks: readonly Block[], source: MarkdownSource,
   }
 
   // 4. Write each chunk, with the original text between neighbouring groups.
-  const text = source.text;
   if (chunks.length === 0 && source.groups.length === 0) {
     // The source has nothing that becomes a block (for example only ">"), and nothing was added.
     return text;

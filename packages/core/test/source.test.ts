@@ -82,6 +82,33 @@ describe('edited documents', () => {
     expect(save({ blocks: [...doc.blocks, paragraph(plain('after'))] }, source)).toBe('```\ncode\n```\n\nafter');
   });
 
+  it('writes two kept lists as one list when the block between them is deleted', () => {
+    const { doc, source } = loadMarkdown('* a\n* b\n\npara\n\n* c\n');
+    const removed: Doc = { blocks: [doc.blocks[0]!, doc.blocks[1]!, doc.blocks[3]!] };
+    // Kept as written, the two lists would read back as one loose list.
+    expect(save(removed, source)).toBe('- a\n- b\n- c\n');
+  });
+
+  it('keeps two kept groups byte for byte when they cannot merge', () => {
+    const { doc, source } = loadMarkdown('# Title\n\nmiddle\n\n* a\n* b\n');
+    const removed: Doc = { blocks: [doc.blocks[0]!, doc.blocks[2]!, doc.blocks[3]!] };
+    expect(save(removed, source)).toBe('# Title\n\n* a\n* b\n');
+  });
+
+  it('does not let an indented paragraph join a list it now follows', () => {
+    const { doc, source } = loadMarkdown('- a\n\npara\n\n   indented\n');
+    const removed: Doc = { blocks: [doc.blocks[0]!, doc.blocks[2]!] };
+    const out = save(removed, source);
+    expect(out).toBe('- a\n\nindented\n');
+    expect(loadMarkdown(out).doc.blocks.map((b) => b.type)).toEqual(['listItem', 'paragraph']);
+  });
+
+  it('does not let an indented code block join a list it now follows', () => {
+    const { doc, source } = loadMarkdown('- a\n\npara\n\n    code\n');
+    const removed: Doc = { blocks: [doc.blocks[0]!, doc.blocks[2]!] };
+    expect(save(removed, source)).toBe('- a\n\n```\ncode\n```\n');
+  });
+
   it('drops empty paragraphs added at the end', () => {
     const { doc, source } = loadMarkdown('a');
     expect(save({ blocks: [...doc.blocks, paragraph(), paragraph()] }, source)).toBe('a');

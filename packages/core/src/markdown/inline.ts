@@ -13,6 +13,7 @@ import type { Inline } from '../model';
 import type { InlineNode } from './ast';
 import { lookupEntity } from '#entities';
 import { lowerInlines } from './lower';
+import { emailLiterals, isLiteralBoundary, urlLiteralAt } from './autolink';
 import { type InlineSyntax, type MarkdownOptions, resolveMarkdown } from './options';
 
 /** Link reference definitions, keyed by normalized label. */
@@ -23,12 +24,52 @@ export type RefMap = Map<string, { readonly destination: string; readonly title:
  * reference definitions are not available here, so reference links stay text.
  */
 export function parseInline(src: string, options?: MarkdownOptions): Inline {
-  return lowerInlines(parseInlines(src, new Map(), resolveMarkdown(options).inline), options);
+  const o = resolveMarkdown(options);
+  return lowerInlines(parseInlines(src, new Map(), o.inline, o.autolinks), options);
 }
 
-/** Parses inline content to syntax tree nodes. `src` should already be trimmed. */
-export function parseInlines(src: string, refs: RefMap, syntax: readonly InlineSyntax[] = []): InlineNode[] {
-  return new InlineParser(src, refs, syntax).parse();
+/**
+ * Parses inline content to syntax tree nodes. `src` should already be
+ * trimmed. `autolinks` turns on GFM autolink literals.
+ */
+export function parseInlines(src: string, refs: RefMap, syntax: readonly InlineSyntax[] = [], autolinks = false): InlineNode[] {
+  const nodes = new InlineParser(src, refs, syntax, autolinks).parse();
+  return autolinks ? linkEmails(nodes) : nodes;
+}
+
+/**
+ * E-mail autolink literals, found in the final text nodes outside links (as
+ * cmark-gfm does), so a local part may hold "_" that the parser saw as a
+ * possible delimiter.
+ */
+function linkEmails(nodes: InlineNode[]): InlineNode[] {
+  let changed = false;
+  const out: InlineNode[] = [];
+  for (const node of nodes) {
+    if (node.type === 'text') {
+      const found = emailLiterals(node.value);
+      if (found.length === 0) {
+        out.push(node);
+        continue;
+      }
+      changed = true;
+      let pos = 0;
+      for (const { from, to } of found) {
+        if (from > pos) out.push({ type: 'text', value: node.value.slice(pos, from) });
+        const email = node.value.slice(from, to);
+        out.push({ type: 'link', destination: 'mailto:' + email, title: '', children: [{ type: 'text', value: email }] });
+        pos = to;
+      }
+      if (pos < node.value.length) out.push({ type: 'text', value: node.value.slice(pos) });
+    } else if (node.type === 'emphasis' || node.type === 'strong' || node.type === 'strike') {
+      const children = linkEmails(node.children);
+      if (children !== node.children) changed = true;
+      out.push(children === node.children ? node : { type: node.type, children });
+    } else {
+      out.push(node);
+    }
+  }
+  return changed ? out : nodes;
 }
 
 // ---------------------------------------------------------------------------
@@ -74,9 +115,12 @@ const reHtmlTag = new RegExp(
   'y',
 );
 
-const reAutolink = /<([A-Za-z][A-Za-z0-9.+-]{1,31}:[^<>\x00-\x20]*)>/y;
-const reEmailAutolink =
-  /<([a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*)>/y;
+/** The URI and e-mail address of an autolink (`<…>`), as regular expression sources. The serializer uses them too. */
+export const AUTOLINK_URI = '[A-Za-z][A-Za-z0-9.+-]{1,31}:[^<>\\x00-\\x20]*';
+export const AUTOLINK_EMAIL =
+  "[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*";
+const reAutolink = new RegExp(`<(${AUTOLINK_URI})>`, 'y');
+const reEmailAutolink = new RegExp(`<(${AUTOLINK_EMAIL})>`, 'y');
 const reLinkTitle = /"(?:\\[\s\S]|[^\\"\x00])*"|'(?:\\[\s\S]|[^\\'\x00])*'|\((?:\\[\s\S]|[^\\()\x00])*\)/y;
 const reLinkDestinationBraces = /<(?:[^<>\n\\\x00]|\\.)*>/y;
 const reLinkLabel = /\[(?:[^\\[\]]|\\[\s\S]){0,1000}\]/y;
@@ -297,6 +341,7 @@ class InlineParser {
     private readonly subject: string,
     private readonly refs: RefMap,
     syntax: readonly InlineSyntax[],
+    private readonly autolinks = false,
   ) {
     for (const s of syntax) {
       for (const ch of s.triggers) {
@@ -391,8 +436,27 @@ class InlineParser {
   }
 
   private parseString(block: Node): boolean {
+    const start = this.pos;
     const m = this.match(this.reText);
     if (!m) return false;
+    // GFM autolink literals, not inside link text (as in cmark-gfm). A URL
+    // may run past the text run, over characters such as "_" and "&".
+    if (this.autolinks && !this.brackets && /www\.|:\/\//i.test(m[0])) {
+      const reCandidate = /www\.|(?:https?|ftp):\/\//gi;
+      for (const c of m[0].matchAll(reCandidate)) {
+        const at = start + c.index!;
+        if (!isLiteralBoundary(this.subject[at - 1])) continue;
+        const url = urlLiteralAt(this.subject, at);
+        if (!url) continue;
+        if (at > start) block.append(new Node('text', this.subject.slice(start, at)));
+        const link = new Node('link');
+        link.destination = url.href;
+        link.append(new Node('text', this.subject.slice(at, url.end)));
+        block.append(link);
+        this.pos = url.end;
+        return true;
+      }
+    }
     block.append(new Node('text', m[0]));
     return true;
   }

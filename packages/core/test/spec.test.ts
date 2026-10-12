@@ -4,6 +4,7 @@
 
 import { afterAll, describe, expect, it } from 'vitest';
 import { renderAstToHtml } from '../src/markdown/html';
+import type { MarkdownOptions } from '../src/markdown/options';
 import { parseAst } from '../src/markdown/parse';
 import { type SpecExample, commonmark, gfm } from './fixtures/examples';
 
@@ -42,7 +43,7 @@ export function normalizeHtml(html: string): string {
     .trim();
 }
 
-function run(name: string, examples: SpecExample[]): void {
+function run(name: string, examples: SpecExample[], options: MarkdownOptions): void {
   const stats = new Map<string, { pass: number; total: number; failed: number[] }>();
   afterAll(() => {
     let pass = 0;
@@ -63,7 +64,7 @@ function run(name: string, examples: SpecExample[]): void {
       const s = stats.get(section)!;
       s.total++;
       it(`example ${ex.example} (${section})`, () => {
-        const actual = renderAstToHtml(parseAst(ex.markdown));
+        const actual = renderAstToHtml(parseAst(ex.markdown, options));
         const ok = normalizeHtml(actual) === normalizeHtml(ex.html);
         if (ok) s.pass++;
         else s.failed.push(ex.example);
@@ -73,8 +74,9 @@ function run(name: string, examples: SpecExample[]): void {
   });
 }
 
-run('CommonMark 0.31.2', commonmark);
-run('GFM extensions', gfm);
+// GFM autolink literals are an extension, so CommonMark is checked without them.
+run('CommonMark 0.31.2', commonmark, { autolinks: false });
+run('GFM extensions', gfm, {});
 
 describe('spec coverage targets', () => {
   it('lists the required sections in the fixture', () => {

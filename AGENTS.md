@@ -6,7 +6,7 @@ Notes for people and coding agents. See `README.md` for usage and `docs/architec
 
 ```sh
 npm install
-npm run dev        # playground: core at /, React at /react.html, memos setup at /memos.html
+npm run dev        # playground: note composer at /, React at /react.html
 npm test           # unit, spec and round-trip tests (vitest)
 npm run test:e2e   # browser tests (Playwright, Chromium)
 npm run test:perf  # timing gates, run alone
@@ -15,7 +15,7 @@ npm run typecheck
 
 ## Commit messages
 
-Follow [Conventional Commits](https://www.conventionalcommits.org/), the same style as `usememos/memos`:
+Follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
 <type>(<scope>): <summary>

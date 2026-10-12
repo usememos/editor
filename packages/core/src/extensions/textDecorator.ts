@@ -1,6 +1,6 @@
 // textDecorator: decorations from a regular expression or a scanner
-// function. Matches that overlap inline code, links, images or tokens are
-// skipped.
+// function. Matches that overlap inline code, links, images, raw HTML or
+// tokens are skipped.
 
 import type { Decoration, TextRange } from '../decorations';
 import { overlapsAny } from '../decorations';

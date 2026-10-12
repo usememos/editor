@@ -3,8 +3,8 @@
 // commonmark-0.31.2.json: the CommonMark 0.31.2 examples, in the shape of
 // https://spec.commonmark.org/0.31.2/spec.json (extracted from the spec's
 // spec.txt with the logic of its tools/spec_tests.py, tabs restored).
-// gfm-extensions.json: the table, strikethrough and task list examples from
-// cmark-gfm's test/spec.txt, with an `extension` field. The task list
+// gfm-extensions.json: the table, strikethrough, autolink and task list
+// examples from cmark-gfm's test/spec.txt, with an `extension` field. The task list
 // examples are marked "disabled" there; they are included here as "tasklist".
 
 import { readFileSync } from 'node:fs';

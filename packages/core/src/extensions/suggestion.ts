@@ -1,6 +1,6 @@
 // suggestion: a popup menu opened by a trigger character, like Tiptap's
-// Suggestion utility. The editor's slash menu is built on it, and memos
-// builds #tag autocomplete on it.
+// Suggestion utility. The editor's slash menu is built on it, and so is
+// #tag autocomplete in an app.
 
 import type { Editor } from '../editor';
 import type { Extension } from '../extension';

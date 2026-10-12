@@ -3,7 +3,7 @@
 // the spec tests and handy for debugging the parser.
 
 import { escapeHtml } from '../clipboard/toHtml';
-import type { BlockNode, InlineNode, ListItemNode, Root } from './ast';
+import { type BlockNode, type InlineNode, type ListItemNode, type Root, inlineNodesText } from './ast';
 
 export function renderAstToHtml(root: Root): string {
   const r = new Renderer();
@@ -197,32 +197,10 @@ class Renderer {
         this.out += '</a>';
         break;
       case 'image':
-        this.out += `<img src="${escapeHtml(encodeUrl(node.destination))}" alt="${escapeHtml(altText(node.children))}"`;
+        this.out += `<img src="${escapeHtml(encodeUrl(node.destination))}" alt="${escapeHtml(inlineNodesText(node.children, '\n'))}"`;
         if (node.title) this.out += ` title="${escapeHtml(node.title)}"`;
         this.out += ' />';
         break;
     }
   }
-}
-
-/** Alt text as the reference renderer produces it: the description's text without tags. */
-function altText(nodes: readonly InlineNode[]): string {
-  let s = '';
-  for (const node of nodes) {
-    switch (node.type) {
-      case 'text':
-      case 'code':
-      case 'html':
-      case 'token':
-        s += node.value;
-        break;
-      case 'softBreak':
-      case 'hardBreak':
-        s += '\n';
-        break;
-      default:
-        s += altText(node.children);
-    }
-  }
-  return s;
 }

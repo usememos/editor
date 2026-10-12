@@ -42,6 +42,7 @@ import {
   paragraph,
   quote,
   rangeHasMark,
+  sameCell,
   sameMarks,
   setLinkInRange,
   setMarkInRange,
@@ -54,7 +55,9 @@ import {
   withContent,
   createId,
 } from './model';
+import { emailLiterals, isLiteralBoundary, urlLiteralAt } from './markdown/autolink';
 import type { InlineSyntax } from './markdown/options';
+import { isExcluded } from './decorations';
 
 export type Command = (state: EditorState) => EditorState;
 
@@ -320,7 +323,7 @@ export function splitBlock(state: EditorState): EditorState {
   const length = text.length;
 
   if (isPlainTextBlock(block)) {
-    // Enter on an empty last line, below another empty line, leaves the code block.
+    // Enter on an empty last line, below another empty line, leaves the code or raw block.
     if (pos.offset === length && text.endsWith('\n\n')) {
       const trimmed = withContent(block, sliceInline(block.content, 0, length - 2));
       const p = paragraph();
@@ -375,7 +378,7 @@ function tableEnter(state: EditorState, block: TableBlock, pos: Position): Edito
 
 /**
  * Calls `fn` for each text container in the range, with the offsets inside it,
- * and returns the document's blocks with the results. Code and HTML blocks are
+ * and returns the document's blocks with the results. Code and raw blocks are
  * skipped: marks and links do not apply there.
  */
 function mapTextInRange(
@@ -640,6 +643,67 @@ export function deleteBlock(state: EditorState, blockId: string): EditorState {
 }
 
 // ---------------------------------------------------------------------------
+// Whole blocks, for block selection. A range is the indexes of its
+// first and last block, inclusive.
+
+export interface BlockRange {
+  readonly from: number;
+  readonly to: number;
+}
+
+/** A selection from the start of the first block in a range to the end of the last. */
+export function spanBlocks(blocks: readonly Block[], range: BlockRange): Selection {
+  return { anchor: startOf(blocks[range.from]!), focus: endOf(blocks[range.to]!) };
+}
+
+/**
+ * Lowers list items, starting at `index`, that are nested deeper than the
+ * item above allows (one level below it, or top level after a non-list
+ * block). Stops at the first item that fits, since everything after it
+ * already did. Mutates `blocks`; changed items keep their IDs.
+ */
+function fitIndents(blocks: Block[], index: number): void {
+  for (let i = Math.max(0, index); i < blocks.length; i++) {
+    const block = blocks[i]!;
+    if (block.type !== 'listItem') return;
+    const prev = blocks[i - 1];
+    const max = prev?.type === 'listItem' ? Math.min(MAX_INDENT, prev.indent + 1) : 0;
+    if (block.indent <= max) return;
+    blocks[i] = { ...block, indent: max };
+  }
+}
+
+/** Removes whole blocks. The caret goes to the end of the block before them, or the start of the block after. */
+export function deleteBlocks(state: EditorState, range: BlockRange): EditorState {
+  return replaceBlocks(state, range, []);
+}
+
+/** Inserts copies of the blocks right after them, and selects the copies. */
+export function duplicateBlocks(state: EditorState, range: BlockRange): EditorState {
+  const copies = state.doc.blocks.slice(range.from, range.to + 1).map(cloneBlock);
+  const out = splice(state, range.to + 1, 0, ...copies);
+  fitIndents(out, range.to + 1);
+  const at = { from: range.to + 1, to: range.to + copies.length };
+  return withBlocks(state, out, spanBlocks(out, at));
+}
+
+/** Replaces whole blocks with `fragment` and puts the caret at its end. An empty fragment deletes them. */
+export function replaceBlocks(state: EditorState, range: BlockRange, fragment: readonly Block[]): EditorState {
+  const out = splice(state, range.from, range.to - range.from + 1, ...fragment);
+  if (out.length === 0) {
+    const p = paragraph();
+    return withBlocks(state, [p], caret(p.id, 0));
+  }
+  fitIndents(out, range.from);
+  fitIndents(out, range.from + fragment.length);
+  let pos: Position;
+  if (fragment.length > 0) pos = endOf(out[range.from + fragment.length - 1]!);
+  else if (range.from > 0) pos = endOf(out[range.from - 1]!);
+  else pos = startOf(out[0]!);
+  return withBlocks(state, out, { anchor: pos, focus: pos });
+}
+
+// ---------------------------------------------------------------------------
 // Tables
 
 export function addRow(block: TableBlock, at: number): TableBlock {
@@ -744,6 +808,15 @@ export function moveCell(state: EditorState, delta: 1 | -1): EditorState {
  * a level 2 heading. Runs after a space or "-" is typed. Returns null when no
  * rule applies.
  */
+const BLOCK_RULES: [RegExp, (m: RegExpExecArray) => BlockTypeSpec][] = [
+  [/^(#{1,6}) $/, (m) => ({ type: 'heading', level: m[1]!.length as HeadingLevel })],
+  [/^[-*+] $/, () => ({ type: 'listItem', listType: 'bullet' })],
+  [/^\d{1,9}[.)] $/, () => ({ type: 'listItem', listType: 'ordered' })],
+  [/^\[[ xX]?\] $/, () => ({ type: 'listItem', listType: 'task' })],
+  [/^> $/, () => ({ type: 'quote' })],
+  [/^```([^`\s]*) $/, (m) => ({ type: 'code', language: m[1] })],
+];
+
 export function applyBlockInputRules(state: EditorState): EditorState | null {
   if (!isCollapsed(state.selection)) return null;
   const pos = state.selection.focus;
@@ -757,18 +830,10 @@ export function applyBlockInputRules(state: EditorState): EditorState | null {
     return withBlocks(state, splice(state, index, 1, divider(), rest), caret(rest.id, 0));
   }
 
-  const rules: [RegExp, (m: RegExpExecArray) => BlockTypeSpec][] = [
-    [/^(#{1,6}) $/, (m) => ({ type: 'heading', level: m[1]!.length as HeadingLevel })],
-    [/^[-*+] $/, () => ({ type: 'listItem', listType: 'bullet' })],
-    [/^\d{1,9}[.)] $/, () => ({ type: 'listItem', listType: 'ordered' })],
-    [/^\[[ xX]?\] $/, () => ({ type: 'listItem', listType: 'task' })],
-    [/^> $/, () => ({ type: 'quote' })],
-    [/^```([^`\s]*) $/, (m) => ({ type: 'code', language: m[1] })],
-  ];
   // Only "[ ] " applies inside a bullet item (turning "- [ ] " into a task).
   const allowed = block.type === 'paragraph' || (block.type === 'listItem' && block.listType === 'bullet');
   if (!allowed) return null;
-  for (const [re, toSpec] of rules) {
+  for (const [re, toSpec] of BLOCK_RULES) {
     const m = re.exec(before);
     if (!m) continue;
     const spec = toSpec(m);
@@ -792,6 +857,16 @@ export function applyBlockInputRules(state: EditorState): EditorState | null {
   return null;
 }
 
+/** The caret and the inline content it is in, when the selection is collapsed in text that takes marks. */
+function inlineAtCaret(state: EditorState): { pos: Position; block: Block; content: Inline } | null {
+  if (!isCollapsed(state.selection)) return null;
+  const pos = state.selection.focus;
+  const block = getBlock(state.doc, pos.blockId);
+  if (isPlainTextBlock(block)) return null;
+  const content = containerContent(block, pos.cell);
+  return content ? { pos, block, content } : null;
+}
+
 const INLINE_RULES: { re: RegExp; mark: Mark; delim: number }[] = [
   { re: /(?:^|[^*])\*\*([^*\s](?:[^*]*[^*\s])?)\*\*$/, mark: 'bold', delim: 2 },
   { re: /(?:^|[^_\p{L}\p{N}])__([^_\s](?:[^_]*[^_\s])?)__$/u, mark: 'bold', delim: 2 },
@@ -806,12 +881,9 @@ const INLINE_RULES: { re: RegExp; mark: Mark; delim: number }[] = [
  * `` `x` `` or `~~x~~` applies the mark and removes the delimiters.
  */
 export function applyInlineInputRules(state: EditorState): EditorState | null {
-  if (!isCollapsed(state.selection)) return null;
-  const pos = state.selection.focus;
-  const block = getBlock(state.doc, pos.blockId);
-  if (isPlainTextBlock(block)) return null;
-  const content = containerContent(block, pos.cell);
-  if (!content) return null;
+  const at = inlineAtCaret(state);
+  if (!at) return null;
+  const { pos, block, content } = at;
   const before = inlineText(content).slice(0, pos.offset);
 
   for (const rule of INLINE_RULES) {
@@ -843,12 +915,9 @@ export function applyInlineInputRules(state: EditorState): EditorState | null {
  * verbatim instead of escaped. Only plain text on the caret's line counts.
  */
 export function applyTokenInputRules(state: EditorState, syntax: readonly InlineSyntax[]): EditorState | null {
-  if (syntax.length === 0 || !isCollapsed(state.selection)) return null;
-  const pos = state.selection.focus;
-  const block = getBlock(state.doc, pos.blockId);
-  if (isPlainTextBlock(block)) return null;
-  const content = containerContent(block, pos.cell);
-  if (!content) return null;
+  const at = syntax.length > 0 ? inlineAtCaret(state) : null;
+  if (!at) return null;
+  const { pos, block, content } = at;
   const text = inlineText(content);
   const end = pos.offset;
   const lineStart = Math.max(text.lastIndexOf('\n', end - 1) + 1, end - 1000);
@@ -866,6 +935,41 @@ export function applyTokenInputRules(state: EditorState, syntax: readonly Inline
   return null;
 }
 
+/**
+ * A GFM autolink literal (a `www.`, `http(s)://` or `ftp://` URL, or an
+ * e-mail address) just followed by a typed space becomes a link, the same
+ * link it reads back as after saving. Only text that is not code, a link, a
+ * token, raw HTML or an image counts.
+ */
+export function applyAutolinkInputRule(state: EditorState): EditorState | null {
+  const at = inlineAtCaret(state);
+  if (!at) return null;
+  const { pos, block, content } = at;
+  const text = inlineText(content);
+  const end = pos.offset - 1;
+  if (end <= 0 || !/\s/.test(text[end]!)) return null;
+  let start = end;
+  while (start > 0 && !/\s/.test(text[start - 1]!)) start--;
+  const word = text.slice(start, end);
+  let found: { from: number; to: number; href: string } | null = null;
+  for (const m of word.matchAll(/www\.|(?:https?|ftp):\/\//gi)) {
+    if (!isLiteralBoundary(m.index === 0 ? undefined : word[m.index! - 1])) continue;
+    const url = urlLiteralAt(word, m.index!);
+    if (url) {
+      found = { from: start + m.index!, to: start + url.end, href: url.href };
+      break;
+    }
+  }
+  if (!found) {
+    const email = emailLiterals(word)[0];
+    if (email) found = { from: start + email.from, to: start + email.to, href: 'mailto:' + word.slice(email.from, email.to) };
+  }
+  if (!found) return null;
+  if (sliceInline(content, found.from, found.to).some(isExcluded)) return null;
+  const updated = withContainerContent(block, pos.cell, setLinkInRange(content, found.from, found.to, found.href));
+  return replaceBlock(state, updated, state.selection);
+}
+
 // ---------------------------------------------------------------------------
 // Clipboard
 
@@ -876,17 +980,15 @@ export function selectedBlocks(state: EditorState): Block[] {
   const end = blockIndex(state.doc, to.blockId);
   return state.doc.blocks.slice(start, end + 1).map((block) => {
     if (!isTextBlock(block)) {
-      if (block.type === 'table' && start === end && from.cell && to.cell) {
-        // Within one table: copy the selected text of a single cell as a paragraph.
-        if (from.cell.row === to.cell.row && from.cell.col === to.cell.col) {
-          return paragraph(sliceInline(contentOf(block, from.cell), from.offset, to.offset));
-        }
+      // Within one table cell: copy the selected text as a paragraph.
+      if (block.type === 'table' && start === end && from.cell && sameCell(from.cell, to.cell)) {
+        return paragraph(sliceInline(contentOf(block, from.cell), from.offset, to.offset));
       }
       return cloneBlock(block);
     }
     const a = block.id === from.blockId ? from.offset : 0;
     const b = block.id === to.blockId ? to.offset : Infinity;
-    return { ...withContent(block, sliceInline(block.content, a, b)), id: createId() };
+    return cloneBlock(withContent(block, sliceInline(block.content, a, b)));
   });
 }
 
@@ -903,7 +1005,7 @@ export function insertBlocks(state: EditorState, fragment: readonly Block[]): Ed
   const index = blockIndex(s.doc, pos.blockId);
   const block = s.doc.blocks[index]!;
 
-  // In a table cell, a code block or an HTML block, paste as text.
+  // In a table cell, a code block or a raw block, paste as text.
   if (!isTextBlock(block) || isPlainTextBlock(block)) {
     const only = fragment[0]!;
     if (block.type === 'table' && fragment.length === 1 && isTextBlock(only) && !isPlainTextBlock(only)) {
@@ -1017,15 +1119,11 @@ export function insertFragment(state: EditorState, fragment: readonly Block[], o
   }
   if (options.select !== 'keep') return next;
   const map = (p: Position): Position =>
-    p.blockId === target.blockId && sameCellOf(p.cell, target.cell) && p.offset > target.offset
+    p.blockId === target.blockId && sameCell(p.cell, target.cell) && p.offset > target.offset
       ? { ...after, offset: after.offset + p.offset - target.offset }
       : p;
   const selection = clampSelection(next.doc, { anchor: map(s.selection.anchor), focus: map(s.selection.focus) });
   return { ...next, selection };
-}
-
-function sameCellOf(a?: Cell, b?: Cell): boolean {
-  return a?.row === b?.row && a?.col === b?.col;
 }
 
 /**

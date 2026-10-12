@@ -34,8 +34,9 @@ import {
   sameMarks,
   setMarkInRange,
 } from '../model';
-import { isUnicodePunctuation, isUnicodeWhitespace, parseInline } from './inline';
-import { type MarkdownOptions, type ResolvedMarkdown, resolveMarkdown } from './options';
+import { AUTOLINK_EMAIL, AUTOLINK_URI, isUnicodePunctuation, isUnicodeWhitespace, parseInline } from './inline';
+import { literalHref } from './autolink';
+import { type InlineSyntax, type MarkdownOptions, type ResolvedMarkdown, resolveMarkdown } from './options';
 import { type MarkdownSource, saveWithSource } from './source';
 
 export function serializeMarkdown(doc: Doc, options: SerializeOptions = {}): string {
@@ -141,7 +142,7 @@ function serializeCode(language: string, text: string): string {
   // A backtick fence cannot have backticks in its info string; use tildes then.
   const ch = language.includes('`') ? '~' : '`';
   const fence = ch.repeat(Math.max(3, longestRun(text, ch) + 1));
-  const info = language.replace(/\\(?=[!-/:-@[-`{-~]|$)/g, '\\\\').replace(/&(?=#?[A-Za-z0-9]+;)/g, '\\&');
+  const info = escapeEntities(language.replace(/\\(?=[!-/:-@[-`{-~]|$)/g, '\\\\'));
   return `${fence}${info}\n${text ? text + '\n' : ''}${fence}`;
 }
 
@@ -219,10 +220,12 @@ interface InlineContext {
 
 function contexts(options: MarkdownOptions | undefined) {
   const o = resolveMarkdown(options);
+  const inline = { lineStart: false, newline: 'entity', options: o } satisfies InlineContext;
   return {
     paragraph: { lineStart: true, newline: o.breaks ? 'soft' : 'break', options: o } satisfies InlineContext,
-    heading: { lineStart: false, newline: 'entity', options: o } satisfies InlineContext,
-    cell: { lineStart: false, newline: 'entity', options: o } satisfies InlineContext,
+    // Headings and table cells are one line: a line break is written as a character reference.
+    heading: inline,
+    cell: inline,
   };
 }
 
@@ -233,15 +236,24 @@ export function serializeInline(inline: Inline, options?: MarkdownOptions): stri
 
 type EmphasisMark = 'bold' | 'italic' | 'strike';
 const EMPHASIS: readonly EmphasisMark[] = ['bold', 'italic', 'strike'];
+const isEmphasis = (m: Mark): m is EmphasisMark => (EMPHASIS as readonly Mark[]).includes(m);
 
 function inlineToMarkdown(inline: Inline, ctx: InlineContext): string {
   const spans = representableInline(inline);
+  // Links that are GFM autolink literals are written bare, as typed, when the
+  // output reads back the same; otherwise in angle brackets or as [text](url).
+  if (ctx.options.autolinks && spans.some(isBareLink)) {
+    for (const strategy of STRATEGIES) {
+      const out = render(spans, ctx, strategy, true);
+      if (sameInline(parseInline(out, ctx.options), spans)) return out;
+    }
+  }
   const first = render(spans, ctx, STRATEGIES[0]!);
   // Emphasis is the one place where the simple rules can fail: a delimiter
   // that can both open and close may pair with the wrong partner when marks
   // overlap. Check by parsing the output back, and if it does not give the
   // same content, try the other strategies.
-  if (!spans.some((s) => s.marks.some((m) => m === 'bold' || m === 'italic' || m === 'strike'))) return first;
+  if (!spans.some((s) => s.marks.some(isEmphasis))) return first;
   if (sameInline(parseInline(first, ctx.options), spans)) return first;
   for (const strategy of STRATEGIES.slice(1)) {
     const out = render(spans, ctx, strategy);
@@ -342,11 +354,11 @@ interface OpenMark {
 }
 
 function emphasisMarks(span: Span): EmphasisMark[] {
-  return span.marks.filter((m): m is EmphasisMark => m === 'bold' || m === 'italic' || m === 'strike');
+  return span.marks.filter(isEmphasis);
 }
 
 /** Builds the token list: text, delimiters for marks, and raw syntax. */
-function tokenize(spans: readonly Span[], ctx: InlineContext, italic: '*' | '_'): Token[] {
+function tokenize(spans: readonly Span[], ctx: InlineContext, italic: '*' | '_', bare: boolean): Token[] {
   const tokens: Token[] = [];
   const stack: OpenMark[] = [];
 
@@ -381,12 +393,17 @@ function tokenize(spans: readonly Span[], ctx: InlineContext, italic: '*' | '_')
     }
   };
 
+  /** Keeps the open marks from `base` up that are in `marks`, and closes the rest. */
+  const closeExcept = (marks: readonly EmphasisMark[], base: number) => {
+    let keep = base;
+    while (keep < stack.length && marks.includes(stack[keep]!.mark)) keep++;
+    closeTo(keep);
+  };
+
   /** Closes marks the span does not have (above `base`) and opens the ones it adds. */
   const emitSpan = (span: Span, base: number, index: number, limit: number) => {
     const target = emphasisMarks(span);
-    let keep = base;
-    while (keep < stack.length && target.includes(stack[keep]!.mark)) keep++;
-    closeTo(keep);
+    closeExcept(target, base);
     openMarks(target, index, limit);
     if (span.image) {
       tokens.push({ kind: 'raw', text: imageMarkdown(span.image, ctx) });
@@ -412,12 +429,10 @@ function tokenize(spans: readonly Span[], ctx: InlineContext, italic: '*' | '_')
     let j = i;
     while (j < spans.length && spans[j]!.link === span.link) j++;
     const common = EMPHASIS.filter((m) => spans.slice(i, j).every((s) => s.marks.includes(m)));
-    let keep = 0;
-    while (keep < stack.length && common.includes(stack[keep]!.mark)) keep++;
-    closeTo(keep);
+    closeExcept(common, 0);
     openMarks(common, i, spans.length);
 
-    const auto = j === i + 1 ? autolink(span) : null;
+    const auto = j === i + 1 ? (bare && isBareLink(span) ? span.text : autolink(span)) : null;
     if (auto) {
       tokens.push({ kind: 'raw', text: auto });
     } else {
@@ -521,8 +536,8 @@ function flanking(ch: string, before: string | undefined, after: string | undefi
 
 // -- Rendering --------------------------------------------------------------
 
-function render(spans: readonly Span[], ctx: InlineContext, strategy: Strategy): string {
-  const tokens = tokenize(spans, ctx, strategy.italic);
+function render(spans: readonly Span[], ctx: InlineContext, strategy: Strategy, bare = false): string {
+  const tokens = tokenize(spans, ctx, strategy.italic, bare);
   fixFlanking(tokens, strategy.encodeAll);
   let out = '';
   tokens.forEach((tok, i) => {
@@ -594,6 +609,7 @@ function escapeText(
       endsLine,
       blockSyntax: ctx.lineStart && startsLine,
       escape: ctx.options.escape,
+      inline: ctx.options.inline,
     });
   });
   return out;
@@ -611,9 +627,15 @@ function escapeLine(
     blockSyntax: boolean;
     /** Characters syntax extensions need escaped. */
     escape?: string;
+    /** Inline syntax extensions, some of which may read a backslash escape as a token. */
+    inline?: readonly InlineSyntax[];
   },
 ): string {
   if (line === '') return '';
+  // A backslash escape, or a character reference where an extension reads
+  // the escape as its own token (`tags()` keeps `\#` as written).
+  const bs = (ch: string) =>
+    o.inline?.some((s) => s.triggers.includes('\\') && s.match('\\' + ch, 0) === 2) ? entity(ch) : '\\' + ch;
   // Characters written as entities: word characters next to delimiters, and
   // spaces or tabs at the start or end of a line (which Markdown strips).
   const lastIndex = line.length - lastChar(line).length;
@@ -635,7 +657,7 @@ function escapeLine(
     const prev = i > 0 ? (encodeAt.has(i - 1) ? ';' : line[i - 1]) : o.before;
     const next = i < line.length - 1 ? (encodeAt.has(i + 1) ? '&' : line[i + 1]) : o.after;
     if (i === blockEscape) {
-      out += '\\' + ch;
+      out += bs(ch);
       continue;
     }
     switch (ch) {
@@ -647,27 +669,27 @@ function escapeLine(
       case '~':
       case '[':
       case ']':
-        out += '\\' + ch;
+        out += bs(ch);
         break;
       case '_': {
         // Intraword underscores (snake_case) cannot open or close emphasis.
         const intraword = prev !== undefined && next !== undefined && ALNUM.test(prev) && ALNUM.test(next);
-        out += intraword ? ch : '\\_';
+        out += intraword ? ch : bs('_');
         break;
       }
       case '<':
         // Only "<" that could start a tag or an autolink.
-        out += next === undefined || /[A-Za-z/!?]/.test(next) ? '\\<' : ch;
+        out += next === undefined || /[A-Za-z/!?]/.test(next) ? bs('<') : ch;
         break;
       case '&':
-        out += ENTITY_LIKE.test(line.slice(i, i + 40)) ? '\\&' : ch;
+        out += ENTITY_LIKE.test(line.slice(i, i + 40)) ? bs('&') : ch;
         break;
       case '!':
         // "!" before a link would make it an image.
-        out += next === '[' ? '\\!' : ch;
+        out += next === '[' ? bs('!') : ch;
         break;
       default:
-        out += o.escape && o.escape.includes(ch) ? '\\' + ch : ch;
+        out += o.escape && o.escape.includes(ch) ? bs(ch) : ch;
     }
   }
   return out;
@@ -699,9 +721,14 @@ function codeSpan(text: string): string {
 
 // -- Links and images -------------------------------------------------------
 
-const reAutolinkUri = /^[A-Za-z][A-Za-z0-9.+-]{1,31}:[^<>\x00-\x20]*$/;
-const reEmail =
-  /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+const reAutolinkUri = new RegExp(`^${AUTOLINK_URI}$`);
+const reEmail = new RegExp(`^${AUTOLINK_EMAIL}$`);
+
+/** Whether a link span's text is a GFM autolink literal for its own destination. */
+function isBareLink(span: Span): boolean {
+  if (span.link === undefined || span.image || span.token || span.marks.includes('code') || span.marks.includes('html')) return false;
+  return literalHref(span.text) === span.link;
+}
 
 /** `<url>` when a link's text is its own URL (or e-mail address), else null. */
 function autolink(span: Span): string | null {

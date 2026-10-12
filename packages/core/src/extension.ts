@@ -7,6 +7,7 @@ import type { Editor } from './editor';
 import type { SuggestionConfig } from './extensions/suggestion';
 import type { MarkdownSyntax } from './markdown/options';
 import type { Position } from './model';
+import type { ThemeClasses } from './theme';
 
 export interface ExtensionContext {
   readonly editor: Editor;
@@ -17,6 +18,14 @@ export interface ExtensionContext {
  * default is prevented.
  */
 export type KeyHandler = (ctx: ExtensionContext) => boolean;
+
+/**
+ * Renders the Markdown source of a token (`kind` is `inline`, `element` a
+ * span) or of a raw block (`block`, a div) into `element`. Returns false, or
+ * throws, to show the source instead. Results are cached by source, so the
+ * output must depend on nothing else.
+ */
+export type SyntaxView = (source: string, element: HTMLElement, kind: 'inline' | 'block') => void | false;
 
 export interface Extension {
   /** Unique name, for debugging and for replacing a built-in extension. */
@@ -43,6 +52,20 @@ export interface Extension {
    * position under the pointer (null outside text). Return true to stop it.
    */
   readonly handleDrop?: (ctx: ExtensionContext & { readonly event: DragEvent; readonly position: Position | null }) => boolean;
+  /**
+   * Shows tokens and raw blocks of a syntax rendered instead of as source,
+   * keyed by syntax name; `math()` uses this to show formulas. While editing,
+   * a token shows its source when the caret touches it, and a raw block when
+   * the selection is in it; clicking either does the same. Read-only always
+   * shows the rendered view.
+   */
+  readonly views?: Readonly<Record<string, SyntaxView>>;
+  /**
+   * Theme classes for the elements this extension cares about, such as
+   * `token.math`. The editor's `theme` wins for the same key, and an earlier
+   * extension wins over a later one.
+   */
+  readonly theme?: { readonly classes?: ThemeClasses };
   /** Called once when the editor is created. May return a cleanup function, called on destroy. */
   readonly onCreate?: (ctx: ExtensionContext) => void | (() => void);
 }

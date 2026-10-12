@@ -406,6 +406,19 @@ export function setLinkInRange(inline: Inline, from: number, to: number, href: s
   return concatInline(sliceInline(inline, 0, from), middle, sliceInline(inline, to));
 }
 
+/** Extension tokens that touch an offset, edges included, with their start offsets. At most two. */
+export function tokensAt(inline: Inline, offset: number): { token: string; from: number }[] {
+  const out: { token: string; from: number }[] = [];
+  let pos = 0;
+  for (const span of inline) {
+    if (pos > offset) break;
+    const end = pos + span.text.length;
+    if (span.token && offset <= end) out.push({ token: span.token, from: pos });
+    pos = end;
+  }
+  return out;
+}
+
 /** The link at an offset (the character after it, or before it at the end), if any. */
 export function linkAt(inline: Inline, offset: number): { href: string; from: number; to: number } | null {
   const span = spanAt(inline, offset) ?? (offset > 0 ? spanAt(inline, offset - 1) : undefined);

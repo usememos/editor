@@ -114,13 +114,13 @@ test('setOptions changes the placeholder, attributes, editability and image URLs
     const editor = (window as any).editor;
     editor.setOptions({
       placeholder: 'New placeholder',
-      attributes: { autocorrect: 'on', 'aria-label': 'Memo' },
+      attributes: { autocorrect: 'on', 'aria-label': 'Note' },
       resolveImageSrc: (src: string) => `https://cdn.example${src}`,
     });
   });
   const root = page.locator('#editor');
   await expect(root).toHaveAttribute('autocorrect', 'on');
-  await expect(root).toHaveAttribute('aria-label', 'Memo');
+  await expect(root).toHaveAttribute('aria-label', 'Note');
   await expect(root.locator('img')).toHaveAttribute('src', 'https://cdn.example/file/x.png');
   expect(await md(page)).toBe('![a](/file/x.png)');
   await page.evaluate(() => (window as any).editor.setOptions({ attributes: {}, editable: false }));

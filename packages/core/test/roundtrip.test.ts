@@ -168,7 +168,7 @@ describe('serializer conventions', () => {
         t('<kbd>', 'html'),
       ]),
     ).toBe(
-      '**b** *i* ~~s~~ ``a`b`` [text](http://e.com/x(1)) <http://x.y> <me@x.y> [sp](<a b>) ![A \\*b\\*](p.png "say \\"hi\\"") <kbd>',
+      '**b** *i* ~~s~~ ``a`b`` [text](http://e.com/x(1)) http://x.y me@x.y [sp](<a b>) ![A \\*b\\*](p.png "say \\"hi\\"") <kbd>',
     );
   });
 
@@ -415,7 +415,7 @@ const DIALECTS: { name: string; options: MarkdownOptions }[] = [
   { name: 'breaks', options: { breaks: true } },
   { name: 'breaks, no setext', options: { breaks: true, setext: false } },
   {
-    name: 'memos: breaks, no setext, math, footnotes',
+    name: 'notes: breaks, no setext, math, footnotes',
     options: { breaks: true, setext: false, syntax: [math().markdown!, footnotes().markdown!] },
   },
 ];

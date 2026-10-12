@@ -15,7 +15,7 @@ import { htmlToDoc } from './clipboard/fromHtml';
 import { type ChangeKind, History } from './history';
 import { DEFAULT_LABELS, type Labels } from './labels';
 import { parseMarkdown } from './markdown/parse';
-import { serializeMarkdown } from './markdown/serialize';
+import { serializeBlocks, serializeMarkdown } from './markdown/serialize';
 import { type MarkdownSource, loadMarkdown } from './markdown/source';
 import { type MarkdownOptions, type ResolvedMarkdown, resolveMarkdown } from './markdown/options';
 import type { Extension } from './extension';
@@ -51,7 +51,9 @@ import {
 import { FormatToolbar, LinkPopover } from './ui/toolbar';
 import { BlockHandle } from './ui/handle';
 import { Menu, type MenuSection, isMac, isTouch, matches } from './ui/popup';
-import { BlockRenderer, contentElement, domText, domToPosition, positionToDom, safeHref } from './view/dom';
+import { BLOCK_ATTR, BlockRenderer, childIndex, contentElement, domText, domToPosition, positionToDom, safeHref } from './view/dom';
+import { revealedViews, sameRevealed, viewEntry } from './view/reveal';
+import { type Theme, mergeClasses, tokenProperties } from './theme';
 
 export interface EditorOptions {
   /** The element the editor renders into. */
@@ -72,6 +74,8 @@ export interface EditorOptions {
   attributes?: Readonly<Record<string, string>>;
   /** Maps an image `src` to the URL to display. The saved Markdown keeps the original `src`. */
   resolveImageSrc?: (src: string) => string;
+  /** Classes for rendered elements, colors and fonts, and the color scheme. See `Theme`. */
+  theme?: Theme;
   /** Overrides UI strings. */
   labels?: Partial<Labels>;
   /** Shows the formatting toolbar on selection. Default true. */
@@ -87,7 +91,7 @@ export interface EditorOptions {
 }
 
 /** Options that `setOptions` can change while the editor runs. */
-export type RuntimeOptions = Pick<EditorOptions, 'placeholder' | 'editable' | 'attributes' | 'resolveImageSrc'>;
+export type RuntimeOptions = Pick<EditorOptions, 'placeholder' | 'editable' | 'attributes' | 'resolveImageSrc' | 'theme'>;
 
 export interface EditorEvents {
   /** After document changes, at most once per animation frame. */
@@ -167,6 +171,8 @@ export interface EditorCommands {
   undo(): boolean;
   redo(): boolean;
   selectAll(): boolean;
+  /** Selects the blocks the selection touches as whole blocks (block selection). Escape does this. */
+  selectBlocks(): boolean;
   focus(position?: 'start' | 'end' | Position): boolean;
   blur(): boolean;
 }
@@ -248,6 +254,10 @@ export class Editor {
   private readonly extensions: readonly Extension[];
   private readonly bindings: readonly Binding[];
   private runtime: RuntimeOptions;
+  /** The merged theme classes, serialized, to skip re-rendering when they did not change. */
+  private classesKey = '{}';
+  /** Custom properties the theme's tokens set on the root. */
+  private tokenNames: readonly string[] = [];
   private readonly listeners = new Map<keyof EditorEvents, Set<(payload: never) => void>>();
   private readonly cleanup: (() => void)[] = [];
   private widgets: WidgetImpl[] = [];
@@ -255,6 +265,8 @@ export class Editor {
   private plainPasteNext = false;
   private destroyed = false;
   private focused = false;
+  /** A mouse button is down in the editor. Rendered views keep their state until it is released, so a drag is not disturbed. */
+  private pointerDown = false;
 
   /** Suggestion menus from extensions, then the slash menu. */
   private readonly suggestions: { readonly config: SuggestionConfig; readonly menu: Menu }[];
@@ -265,6 +277,15 @@ export class Editor {
   private readonly linkPopover: LinkPopover;
   private readonly handle: BlockHandle;
   private hintEl: HTMLElement | null = null;
+  /**
+   * The block selection, by block ID, or null for a text selection. While it
+   * is set, the model selection spans the selected blocks, so block type,
+   * indent and mark commands apply to all of them, and the browser selection
+   * is a hidden caret at the start of the head block.
+   */
+  private blockSel: { anchor: string; head: string } | null = null;
+  /** Block elements that carry the selected class. */
+  private selectedEls: HTMLElement[] = [];
 
   constructor(options: EditorOptions) {
     const root = options.element;
@@ -289,6 +310,8 @@ export class Editor {
       const els = this.widgets.filter((w) => w.blockId === blockId).map((w) => w.element);
       return els.length ? els : undefined;
     };
+    const views = new Map(this.extensions.flatMap((e) => Object.entries(e.views ?? {})));
+    if (views.size > 0) this.renderer.views = views;
     const decorators = this.extensions.flatMap((e) => (e.decorations ? [e.decorations] : []));
     if (decorators.length > 0) {
       this.renderer.decorate = (block, content, cell) => {
@@ -307,6 +330,7 @@ export class Editor {
     this.applyRuntime({ placeholder: options.placeholder, attributes: options.attributes });
     this.runtime = { ...this.runtime, resolveImageSrc: options.resolveImageSrc };
     this.renderer.resolveImageSrc = options.resolveImageSrc;
+    this.applyTheme(options.theme);
 
     const configs = this.extensions.flatMap((e) => (e.suggestion ? [e.suggestion] : []));
     if (options.slashMenu !== false) configs.push(this.slashSuggestion() as unknown as SuggestionConfig);
@@ -339,10 +363,10 @@ export class Editor {
     this.listen(root, 'focusin', (e) => this.onFocusIn(e as FocusEvent));
     this.listen(root, 'focusout', (e) => this.onFocusOut(e as FocusEvent));
     this.listen(root.ownerDocument, 'selectionchange', () => this.onSelectionChange());
+    this.listen(root.ownerDocument, 'mouseup', () => this.onMouseUp());
     this.listen(root.ownerDocument, 'scroll', () => this.onScroll(), true);
 
-    this.renderer.render(this.current.doc, true, true);
-    this.applyReadOnly();
+    this.paint(true, true);
     this.afterRender();
     for (const ext of this.extensions) {
       const dispose = ext.onCreate?.({ editor: this });
@@ -368,13 +392,12 @@ export class Editor {
     else this.history.clear();
     const loaded = loadMarkdown(markdown, this.markdown);
     this.source = loaded.source;
+    this.blockSel = null;
     const next = createState(loaded.doc);
     this.relocateWidgets(this.current.doc, next.doc, true);
     this.current = next;
-    this.renderer.render(this.current.doc, true, true);
-    this.applyReadOnly();
+    this.paint(true, true);
     this.afterRender();
-    this.syncDomSelection();
     this.emit('selectionChange', { editor: this });
   }
 
@@ -454,8 +477,10 @@ export class Editor {
   setSelection(selection: Selection | SelectionJSON): boolean {
     const sel = isSelection(selection) ? clampSelection(this.current.doc, selection) : selectionFromJSON(this.current.doc, selection);
     if (!sel) return false;
+    this.dropBlockSelection();
     this.current = { ...this.current, selection: sel, storedMarks: null };
     this.history.breakGroup();
+    this.refreshRevealed();
     this.syncDomSelection();
     this.updateUi();
     this.emit('selectionChange', { editor: this });
@@ -496,7 +521,7 @@ export class Editor {
       this.widgets = this.widgets.filter((x) => x !== w);
     });
     this.widgets.push(widget);
-    this.renderer.render(this.current.doc);
+    this.paint();
     return widget;
   }
 
@@ -538,10 +563,11 @@ export class Editor {
   // -------------------------------------------------------------------------
   // Options and events
 
-  /** Changes `placeholder`, `editable`, `attributes` or `resolveImageSrc`. */
+  /** Changes `placeholder`, `editable`, `attributes`, `resolveImageSrc` or `theme`. */
   setOptions(options: RuntimeOptions): void {
     if (options.editable !== undefined && options.editable === this.readOnly) {
       this.readOnly = !options.editable;
+      this.refreshRevealed();
       this.applyReadOnly();
       this.hideUi();
     }
@@ -576,10 +602,29 @@ export class Editor {
     if ('resolveImageSrc' in options && options.resolveImageSrc !== this.runtime.resolveImageSrc) {
       this.runtime = { ...this.runtime, resolveImageSrc: options.resolveImageSrc };
       this.renderer.resolveImageSrc = options.resolveImageSrc;
-      this.renderer.render(this.current.doc, true);
-      this.applyReadOnly();
-      this.syncDomSelection();
+      this.paint(true);
     }
+    if ('theme' in options && this.applyTheme(options.theme)) this.paint(true);
+  }
+
+  /** Sets the theme. Returns true when blocks must re-render for new classes. */
+  private applyTheme(theme: Theme | undefined): boolean {
+    this.runtime = { ...this.runtime, theme };
+    // Tokens and the color scheme are custom properties and CSS: no re-render.
+    const style = this.root.style;
+    const props = tokenProperties(theme?.tokens);
+    for (const name of this.tokenNames) if (!props.has(name)) style.removeProperty(name);
+    for (const [name, value] of props) style.setProperty(name, value);
+    this.tokenNames = [...props.keys()];
+    const scheme = theme?.colorScheme ?? 'auto';
+    style.colorScheme = scheme === 'auto' ? '' : scheme;
+    // Earlier extensions win over later ones, and the editor's own theme over all.
+    const classes = mergeClasses([...this.extensions.map((e) => e.theme?.classes).reverse(), theme?.classes]);
+    const key = JSON.stringify(classes);
+    if (key === this.classesKey) return false;
+    this.classesKey = key;
+    this.renderer.classes = classes;
+    return true;
   }
 
   // -------------------------------------------------------------------------
@@ -642,6 +687,13 @@ export class Editor {
       redo: () => this.redo(),
       selectAll: () => {
         this.setSelection(cmd.selectAll(this.current).selection);
+        return true;
+      },
+      selectBlocks: () => {
+        if (this.readOnly) return false;
+        if (!this.hasFocus()) this.root.focus({ preventScroll: true });
+        const { anchor, focus } = this.current.selection;
+        this.selectBlockRange(anchor.blockId, focus.blockId);
         return true;
       },
       focus: (position) => {
@@ -716,6 +768,8 @@ export class Editor {
     this.linkPopover.destroy();
     this.handle.destroy();
     for (const name of Object.keys(this.runtime.attributes ?? {})) this.root.removeAttribute(name);
+    for (const name of this.tokenNames) this.root.style.removeProperty(name);
+    this.root.style.colorScheme = '';
     this.root.contentEditable = 'false';
     this.root.classList.remove('mbe-root');
     this.root.replaceChildren();
@@ -736,9 +790,13 @@ export class Editor {
     const hadFocus = this.hasFocus();
     if (docChanged) this.relocateWidgets(this.current.doc, next.doc, false);
     this.current = next;
-    this.renderer.render(next.doc);
-    if (this.readOnly) this.applyReadOnly();
-    this.syncDomSelection(hadFocus);
+    if (this.blockSel) {
+      // Block commands keep block IDs, so the same blocks stay selected.
+      const range = this.blockRange();
+      if (range) this.current = { ...next, selection: cmd.spanBlocks(next.doc.blocks, range) };
+      else this.blockSel = null;
+    }
+    this.paint(false, false, hadFocus);
     this.afterRender();
     if (docChanged) this.scheduleChange();
     this.emit('selectionChange', { editor: this });
@@ -817,8 +875,10 @@ export class Editor {
   private syncDomSelection(force = false): void {
     const sel = this.root.ownerDocument.getSelection();
     if (!sel || (!force && !this.hasFocus())) return;
-    const anchor = this.toDom(this.state.selection.anchor);
-    const focus = this.toDom(this.state.selection.focus);
+    const parked = this.parkedCaret();
+    const target = parked ? { anchor: parked, focus: parked } : this.state.selection;
+    const anchor = this.toDom(target.anchor);
+    const focus = this.toDom(target.focus);
     if (!anchor || !focus) return;
     if (
       sel.anchorNode === anchor.node &&
@@ -829,7 +889,7 @@ export class Editor {
       return;
     }
     // A caret in a table cell needs that cell (its own editing host) focused.
-    if (this.state.selection.focus.cell) {
+    if (target.focus.cell) {
       const host = (focus.node instanceof Element ? focus.node : focus.node.parentElement)?.closest<HTMLElement>('[data-row]');
       if (host && this.root.ownerDocument.activeElement !== host) host.focus({ preventScroll: true });
     } else if (this.root.ownerDocument.activeElement !== this.root && this.hasFocus()) {
@@ -860,6 +920,12 @@ export class Editor {
       if (!this.hasFocus()) this.updateUi();
       return;
     }
+    if (this.blockSel) {
+      // Only the hidden caret moved: the browser may move it out of a block it
+      // cannot hold a caret in (a divider). A click ends block selection on mousedown.
+      this.updateUi();
+      return;
+    }
     const cur = this.state.selection;
     if (samePosition(selection.anchor, cur.anchor) && samePosition(selection.focus, cur.focus)) {
       this.updateUi();
@@ -867,12 +933,80 @@ export class Editor {
     }
     this.current = { ...this.state, selection, storedMarks: null };
     this.history.breakGroup();
+    if (!this.pointerDown) this.refreshRevealed();
     this.updateUi();
     this.emit('selectionChange', { editor: this });
   }
 
+  /**
+   * Renders the document, then puts the browser selection back. Only blocks
+   * whose object or revealed views changed are rebuilt, unless `force`.
+   * `hadFocus`: whether the editor had focus before the change (re-rendering
+   * a table replaces the focused cell).
+   */
+  private paint(force = false, lazy = false, hadFocus = this.hasFocus()): void {
+    const views = this.renderer.views;
+    if (views && !this.pointerDown) this.renderer.revealed = revealedViews(this.state, views, !this.readOnly && hadFocus);
+    this.renderer.render(this.state.doc, force, lazy);
+    this.applyReadOnly();
+    this.paintBlockSelection();
+    this.syncDomSelection(hadFocus);
+  }
+
+  /** Re-renders if the views that show their source changed: after the selection, focus or editability changes. */
+  private refreshRevealed(): void {
+    const views = this.renderer.views;
+    if (!views || this.pointerDown) return;
+    const next = revealedViews(this.state, views, !this.readOnly && this.hasFocus());
+    if (!sameRevealed(next, this.renderer.revealed)) this.paint();
+  }
+
+  private onMouseUp(): void {
+    if (!this.pointerDown) return;
+    this.pointerDown = false;
+    if (!this.destroyed && !this.composing) this.refreshRevealed();
+  }
+
+  /**
+   * When an arrow key at the edge of a block would move past a rendered raw
+   * block next to it (the browser skips non-editable blocks), the position in
+   * that block's source to move to instead.
+   */
+  private viewBlockPast(key: string): Position | null {
+    const sel = this.state.selection;
+    if (!isCollapsed(sel) || sel.focus.cell) return null;
+    const pos = sel.focus;
+    const blocks = this.state.doc.blocks;
+    const index = blockIndex(this.state.doc, pos.blockId);
+    const forward = key === 'ArrowDown' || key === 'ArrowRight';
+    const next = blocks[index + (forward ? 1 : -1)];
+    if (next?.type !== 'raw' || !this.renderer.elementFor(next.id)?.classList.contains('mbe-view-block')) return null;
+    const current = blocks[index]!;
+    if (!isTextBlock(current)) return null;
+    if (key === 'ArrowRight' && pos.offset !== endOf(current).offset) return null;
+    if (key === 'ArrowLeft' && pos.offset !== 0) return null;
+    if (key === 'ArrowDown' || key === 'ArrowUp') {
+      // Only from the first or last line of text.
+      const caret = this.selectionRect();
+      const box = contentElement(this.renderer.elementFor(current.id)!)?.getBoundingClientRect();
+      if (caret && box && caret.height > 0 && (forward ? box.bottom - caret.bottom : caret.top - box.top) > caret.height / 2) return null;
+    }
+    return viewEntry(next, forward);
+  }
+
+  /** A click on a rendered view puts the caret in its source: at the end of a token, or of a block's formula. */
+  private revealView(view: HTMLElement): void {
+    const block = view.hasAttribute(BLOCK_ATTR) ? getBlock(this.state.doc, view.getAttribute(BLOCK_ATTR)!) : null;
+    const pos = block ? (block.type === 'raw' ? viewEntry(block, false) : null) : domToPosition(this.root, view.parentNode!, childIndex(view) + 1);
+    if (!pos) return;
+    this.root.focus({ preventScroll: true });
+    this.setSelection({ anchor: pos, focus: pos });
+  }
+
   /** The browser selection is the source of truth when an event starts. */
   private refreshSelection(): void {
+    // A block selection's browser selection is only a parked caret.
+    if (this.blockSel) return;
     const selection = this.readDomSelection();
     if (selection) this.current = { ...this.state, selection };
   }
@@ -902,6 +1036,13 @@ export class Editor {
 
     e.preventDefault();
     if (this.readOnly) return;
+    if (this.blockSel) {
+      // Typing does nothing while whole blocks are selected; deleting removes them.
+      if (type.startsWith('delete')) this.deleteSelectedBlocks();
+      else if (type === 'historyUndo') this.undo();
+      else if (type === 'historyRedo') this.redo();
+      return;
+    }
     this.refreshSelection();
 
     switch (type) {
@@ -975,11 +1116,13 @@ export class Editor {
     if (text === ' ' || text === '-') this.run((s) => cmd.applyBlockInputRules(s));
     if (text.length === 1 && '*_`~'.includes(text)) this.run((s) => cmd.applyInlineInputRules(s));
     if (this.markdown.inline.length > 0) this.run((s) => cmd.applyTokenInputRules(s, this.markdown.inline) ?? s);
+    if (text === ' ' && this.markdown.autolinks) this.run((s) => cmd.applyAutolinkInputRule(s) ?? s);
     if ([...text].length === 1) this.maybeOpenSuggestion(text);
   }
 
   private onCompositionStart(e: Event): void {
     if (this.fromControl(e)) return;
+    this.dropBlockSelection();
     this.refreshSelection();
     // Replace a non-collapsed selection before the browser starts composing,
     // so the composition always happens inside one block.
@@ -1055,9 +1198,7 @@ export class Editor {
     }
     if (!changed) {
       // Text is unchanged but the browser may have altered structure.
-      this.renderer.render(this.state.doc, true);
-      this.applyReadOnly();
-      this.syncDomSelection();
+      this.paint(true);
       return;
     }
     const selection = this.readDomSelection() ?? state.selection;
@@ -1089,6 +1230,10 @@ export class Editor {
 
     if (e.key === 'Escape' && this.toolbar?.isOpen) return handled(() => this.toolbar!.hide());
     if (this.readOnly) return;
+    if (this.blockSel && this.onBlockKey(e)) {
+      e.preventDefault();
+      return;
+    }
 
     // Extension key bindings, earlier extensions first.
     let refreshed = false;
@@ -1112,12 +1257,23 @@ export class Editor {
         return;
       }
     }
-    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !mod && !e.shiftKey && !e.altKey) {
+    if (e.key.startsWith('Arrow') && !mod && !e.shiftKey && !e.altKey) {
+      this.refreshSelection();
+      // Step into the source of a rendered block, which the browser would skip.
+      const into = this.renderer.views ? this.viewBlockPast(e.key) : null;
+      if (into) {
+        e.preventDefault();
+        this.setSelection({ anchor: into, focus: into });
+        return;
+      }
       // On the last line of a final code block or table (or the first line of
       // a first one), add a paragraph past it. Elsewhere the browser moves the caret.
-      this.refreshSelection();
-      const next = cmd.exitBlock(this.state, e.key === 'ArrowDown' ? 1 : -1);
-      if (next !== this.state) return handled(() => this.run(() => next));
+      const vertical = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+      const next = vertical ? cmd.exitBlock(this.state, vertical) : this.state;
+      if (next !== this.state) {
+        e.preventDefault();
+        this.run(() => next);
+      }
     }
   }
 
@@ -1128,7 +1284,15 @@ export class Editor {
 
   private onMouseDown(e: MouseEvent): void {
     const target = e.target as HTMLElement;
+    this.dropBlockSelection();
     if (target === this.root && e.button === 0 && !this.readOnly && this.clickBelowLastBlock(e)) return;
+    const view = e.button === 0 && !this.readOnly ? target.closest?.<HTMLElement>('.mbe-view, .mbe-view-block') : null;
+    if (view && this.root.contains(view)) {
+      e.preventDefault();
+      this.revealView(view);
+      return;
+    }
+    if (e.button === 0) this.pointerDown = true;
     if (target.classList?.contains('mbe-checkbox')) {
       // Toggle in the model; keep the caret where it is.
       e.preventDefault();
@@ -1183,6 +1347,8 @@ export class Editor {
     if (this.focused || !this.hasFocus()) return;
     this.focused = true;
     this.root.classList.add('mbe-focused');
+    // A click that focuses the editor reveals on mouseup, once its selection is known.
+    if (!this.pointerDown) this.refreshRevealed();
     this.options.onFocus?.(this);
     this.emit('focus', { editor: this, event });
     this.updateUi();
@@ -1197,6 +1363,7 @@ export class Editor {
       if (!this.focused) return;
       this.focused = false;
       this.root.classList.remove('mbe-focused');
+      this.refreshRevealed();
       this.hideUi();
       this.flushChange();
       this.options.onBlur?.(this);
@@ -1214,13 +1381,22 @@ export class Editor {
 
   private onCopy(e: ClipboardEvent, cut: boolean): void {
     if (this.fromControl(e)) return;
+    const range = this.blockRange();
+    if (range) {
+      // Whole blocks, even an empty one.
+      if (!e.clipboardData) return;
+      e.preventDefault();
+      const doc: Doc = { blocks: this.state.doc.blocks.slice(range.from, range.to + 1).map(cmd.cloneBlock) };
+      // serializeBlocks keeps a selected empty line, which serializeMarkdown drops at the end.
+      writeClipboard(e.clipboardData, doc, serializeBlocks(doc.blocks, this.markdown));
+      if (cut && !this.readOnly) this.deleteSelectedBlocks();
+      return;
+    }
     this.refreshSelection();
     if (isCollapsed(this.state.selection) || !e.clipboardData) return;
     e.preventDefault();
     const doc: Doc = { blocks: cmd.selectedBlocks(this.state) };
-    const markdown = serializeMarkdown(doc, this.markdown).replace(/\n$/, '');
-    e.clipboardData.setData('text/plain', markdown);
-    e.clipboardData.setData('text/html', `<meta charset="utf-8"><div data-mbe-markdown="${encodeURIComponent(markdown)}">${docToHtml(doc)}</div>`);
+    writeClipboard(e.clipboardData, doc, serializeMarkdown(doc, this.markdown).replace(/\n$/, ''));
     if (cut && !this.readOnly) this.run(cmd.deleteSelection);
   }
 
@@ -1237,31 +1413,40 @@ export class Editor {
     const plainOnly = this.plainPasteNext;
     this.plainPasteNext = false;
 
+    // Over a block selection: the pasted blocks replace the selected ones.
+    const range = this.blockRange();
+    if (range) {
+      const fragment = this.pastedBlocks(text, html, plainOnly);
+      this.blockSel = null;
+      this.run((s) => cmd.replaceBlocks(s, range, fragment));
+      return;
+    }
     const block = getBlock(this.state.doc, this.state.selection.focus.blockId);
     if (isPlainTextBlock(block)) {
       this.run((s) => cmd.insertText(s, text));
       return;
     }
-    if (plainOnly) {
-      // Mod+Shift+V: the text as typed, one paragraph per line.
-      const lines = text.replace(/\r\n?/g, '\n').split('\n');
-      this.run((s) => cmd.insertBlocks(s, lines.map((l) => paragraph(plain(l)))));
-      return;
-    }
     // A URL pasted over selected text makes it a link.
     const url = text.trim();
-    if (!isCollapsed(this.state.selection) && /^(https?:\/\/|mailto:)\S+$/i.test(url)) {
+    if (!plainOnly && !isCollapsed(this.state.selection) && /^(https?:\/\/|mailto:)\S+$/i.test(url)) {
       this.run((s) => cmd.setLink(s, url));
       return;
     }
+    const fragment = this.pastedBlocks(text, html, plainOnly);
+    this.run((s) => cmd.insertBlocks(s, fragment));
+  }
 
+  /** Clipboard content as blocks: the editor's own Markdown, other HTML, or text as Markdown. */
+  private pastedBlocks(text: string, html: string, plainOnly: boolean): readonly Block[] {
+    // Mod+Shift+V: the text as typed, one paragraph per line.
+    if (plainOnly) return text.replace(/\r\n?/g, '\n').split('\n').map((l) => paragraph(plain(l)));
     let fragment: readonly Block[];
     const internal = /data-mbe-markdown="([^"]*)"/.exec(html);
     if (internal) fragment = parseMarkdown(decodeURIComponent(internal[1]!), this.markdown).blocks;
     else if (html) fragment = htmlToDoc(html).blocks;
     else fragment = parseMarkdown(text, this.markdown).blocks;
     if (fragment.length === 0 && text) fragment = parseMarkdown(text, this.markdown).blocks;
-    this.run((s) => cmd.insertBlocks(s, fragment));
+    return fragment;
   }
 
   private onDrop(e: DragEvent): void {
@@ -1412,7 +1597,7 @@ export class Editor {
       allowSpaces: true,
       emptyLabel: this.labels.noResults,
       className: 'mbe-slash-menu',
-      items: ({ query }) => items.filter((item) => matches({ ...item, run: () => {} }, query)),
+      items: ({ query }) => items.filter((item) => matches(item, query)),
       command: ({ range, item }) => {
         const blockId = range.from.blockId;
         const block = getBlock(this.current.doc, blockId);
@@ -1428,6 +1613,148 @@ export class Editor {
         });
       },
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Block selection
+
+  /** The blocks of the block selection, in document order. Empty when the selection is text. */
+  get selectedBlocks(): readonly Block[] {
+    const range = this.blockRange();
+    return range ? this.current.doc.blocks.slice(range.from, range.to + 1) : [];
+  }
+
+  private blockRange(): cmd.BlockRange | null {
+    if (!this.blockSel) return null;
+    const doc = this.current.doc;
+    const a = blockIndex(doc, this.blockSel.anchor);
+    const h = blockIndex(doc, this.blockSel.head);
+    return a < 0 || h < 0 ? null : { from: Math.min(a, h), to: Math.max(a, h) };
+  }
+
+  /** Selects whole blocks, from the block `anchor` to the block `head`. */
+  private selectBlockRange(anchor: string, head: string): void {
+    this.blockSel = { anchor, head };
+    this.current = { ...this.current, selection: cmd.spanBlocks(this.current.doc.blocks, this.blockRange()!), storedMarks: null };
+    this.history.breakGroup();
+    this.closeSuggestion();
+    this.toolbar?.hide();
+    this.blockMenu.hide();
+    this.refreshRevealed();
+    this.paintBlockSelection();
+    this.syncDomSelection(true);
+    this.updateUi();
+    this.emit('selectionChange', { editor: this });
+  }
+
+  /** Leaves block selection, keeping the hidden caret as a collapsed selection. */
+  private dropBlockSelection(): void {
+    const parked = this.parkedCaret();
+    if (!parked) return;
+    this.blockSel = null;
+    this.current = { ...this.current, selection: { anchor: parked, focus: parked }, storedMarks: null };
+    this.paintBlockSelection();
+  }
+
+  /** Leaves block selection with the caret at `pos`. */
+  private exitBlockSelection(pos: Position): void {
+    this.blockSel = null;
+    this.paintBlockSelection();
+    this.setSelection({ anchor: pos, focus: pos });
+  }
+
+  /** Where the hidden browser caret sits during a block selection: the start of the head block. */
+  private parkedCaret(): Position | null {
+    if (!this.blockSel) return null;
+    const head = this.current.doc.blocks.find((b) => b.id === this.blockSel!.head);
+    return head ? startOf(head) : null;
+  }
+
+  private paintBlockSelection(): void {
+    const range = this.blockRange();
+    const els: HTMLElement[] = [];
+    if (range) {
+      for (const block of this.current.doc.blocks.slice(range.from, range.to + 1)) {
+        const el = this.renderer.elementFor(block.id);
+        if (el) els.push(el);
+      }
+    }
+    for (const el of this.selectedEls) if (!els.includes(el)) el.classList.remove('mbe-block-selected');
+    for (const el of els) el.classList.add('mbe-block-selected');
+    this.selectedEls = els;
+    this.root.classList.toggle('mbe-block-selecting', els.length > 0);
+  }
+
+  private deleteSelectedBlocks(): void {
+    const range = this.blockRange();
+    if (!range) return;
+    this.blockSel = null;
+    this.run((s) => cmd.deleteBlocks(s, range));
+  }
+
+  /**
+   * Keys while whole blocks are selected. Arrows move the selection by
+   * block (Shift extends it), Enter and Left/Right go back to editing text,
+   * Backspace and Delete remove the blocks, Mod+A selects every block,
+   * Mod+D duplicates, and Escape leaves the editor. Other keys go to the
+   * key bindings, which act on all selected blocks.
+   */
+  private onBlockKey(e: KeyboardEvent): boolean {
+    const range = this.blockRange();
+    if (!range) return false;
+    const blocks = this.state.doc.blocks;
+    const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
+    const mod = isMac ? e.metaKey : e.ctrlKey;
+    const clamp = (i: number) => blocks[Math.max(0, Math.min(blocks.length - 1, i))]!.id;
+    switch (e.key) {
+      case 'Escape':
+        if (!plain || e.shiftKey) return false;
+        this.dropBlockSelection();
+        this.blur();
+        return true;
+      case 'ArrowUp':
+      case 'ArrowDown': {
+        if (!plain) return false;
+        const up = e.key === 'ArrowUp';
+        if (e.shiftKey) {
+          this.selectBlockRange(this.blockSel!.anchor, clamp(blockIndex(this.current.doc, this.blockSel!.head) + (up ? -1 : 1)));
+        } else {
+          const id = clamp(up ? range.from - 1 : range.to + 1);
+          this.selectBlockRange(id, id);
+        }
+        return true;
+      }
+      case 'ArrowLeft':
+      case 'ArrowRight':
+        if (!plain || e.shiftKey) return false;
+        this.exitBlockSelection(e.key === 'ArrowLeft' ? startOf(blocks[range.from]!) : endOf(blocks[range.to]!));
+        return true;
+      case 'Enter':
+        if (!plain || e.shiftKey) return false;
+        this.exitBlockSelection(endOf(blocks[range.to]!));
+        return true;
+      case 'Backspace':
+      case 'Delete':
+        if (!plain) return false;
+        this.deleteSelectedBlocks();
+        return true;
+    }
+    if (mod && !e.altKey && !e.shiftKey) {
+      const key = e.key.toLowerCase();
+      if (key === 'a') {
+        this.selectBlockRange(blocks[0]!.id, blocks[blocks.length - 1]!.id);
+        return true;
+      }
+      if (key === 'd') {
+        const count = range.to - range.from + 1;
+        if (this.run((s) => cmd.duplicateBlocks(s, range))) {
+          const copies = this.current.doc.blocks;
+          this.selectBlockRange(copies[range.to + 1]!.id, copies[range.to + count]!.id);
+        }
+        return true;
+      }
+    }
+    return false;
   }
 
   // -------------------------------------------------------------------------
@@ -1467,6 +1794,7 @@ export class Editor {
 
   openBlockMenu(blockId: string, anchor?: DOMRect): void {
     if (this.readOnly || !this.hasBlockMenu(blockId)) return;
+    this.dropBlockSelection();
     this.closeSuggestion();
     this.toolbar?.hide();
     // Keep the caret in the table cell for table actions; otherwise move it into the block.
@@ -1515,7 +1843,7 @@ export class Editor {
 
     // Hint in an empty focused paragraph.
     const pos = this.state.selection.focus;
-    const el = focused && isCollapsed(this.state.selection) ? this.renderer.elementFor(pos.blockId) : undefined;
+    const el = focused && !this.blockSel && isCollapsed(this.state.selection) ? this.renderer.elementFor(pos.blockId) : undefined;
     // The placeholder of an empty document takes precedence over the slash hint.
     const placeholderShown = !!this.options.placeholder && this.state.doc.blocks.length === 1;
     const showHint =
@@ -1543,6 +1871,7 @@ export class Editor {
         !this.readOnly &&
         !this.composing &&
         !isCollapsed(this.state.selection) &&
+        !this.blockSel &&
         !this.suggest &&
         !this.blockMenu.isOpen &&
         !!block &&
@@ -1572,6 +1901,7 @@ export class Editor {
   }
 
   private hideUi(): void {
+    this.dropBlockSelection();
     this.closeSuggestion();
     this.blockMenu.hide();
     this.toolbar?.hide();
@@ -1598,6 +1928,12 @@ function blockName(block: Block): ActiveName {
     default:
       return block.type;
   }
+}
+
+/** Writes blocks to the clipboard as Markdown and as HTML that carries the Markdown, so pasting into an editor is lossless. */
+function writeClipboard(data: DataTransfer, doc: Doc, text: string): void {
+  data.setData('text/plain', text);
+  data.setData('text/html', `<meta charset="utf-8"><div data-mbe-markdown="${encodeURIComponent(text)}">${docToHtml(doc)}</div>`);
 }
 
 function sameBlocks(a: Doc, b: Doc): boolean {

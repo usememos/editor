@@ -27,6 +27,8 @@ export const DEFAULT_LABELS = {
   listHint: 'List',
   quoteHint: 'Quote',
   language: 'Language',
+  /** Shown in a code block's language field when it has none. */
+  plainText: 'text',
   addRowAbove: 'Add row above',
   addRowBelow: 'Add row below',
   addColumnLeft: 'Add column left',

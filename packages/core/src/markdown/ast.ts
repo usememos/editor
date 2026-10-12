@@ -4,11 +4,13 @@
 // CommonMark 0.31.2 spec plus the GFM extensions for tables, task list items
 // and strikethrough. The tree keeps everything the spec's reference HTML
 // output needs, so `renderAstToHtml` (html.ts) can be checked against the
-// spec examples. `astToDoc` (lower.ts) then lowers it to the editor's flat
-// document model.
+// spec examples. `loadMarkdown` (source.ts) then lowers each top-level block
+// to the editor's flat document model (lower.ts).
 //
 // Strings in the tree are final: backslash escapes and entities are already
 // decoded, and link reference definitions are already resolved.
+
+import type { Align } from '../model';
 
 export type InlineNode =
   | TextNode
@@ -118,7 +120,7 @@ export interface RawNode {
   readonly value: string;
 }
 
-export type TableAlign = 'left' | 'center' | 'right' | null;
+export type TableAlign = Align;
 
 export interface TableNode {
   readonly type: 'table';
@@ -137,7 +139,34 @@ export interface Root {
   readonly type: 'root';
   readonly children: BlockNode[];
   /** Source lines of each child, by index. */
-  readonly lines?: readonly SourceLines[];
+  readonly lines: readonly SourceLines[];
   /** Source text of every link reference definition, in order. */
-  readonly definitions?: readonly string[];
+  readonly definitions: readonly string[];
+}
+
+/**
+ * The text of inline nodes without their markup, as in image alt text. `soft`
+ * is the text of a soft line break; a hard line break is "\n".
+ */
+export function inlineNodesText(nodes: readonly InlineNode[], soft: string): string {
+  let s = '';
+  for (const node of nodes) {
+    switch (node.type) {
+      case 'text':
+      case 'code':
+      case 'html':
+      case 'token':
+        s += node.value;
+        break;
+      case 'softBreak':
+        s += soft;
+        break;
+      case 'hardBreak':
+        s += '\n';
+        break;
+      default:
+        s += inlineNodesText(node.children, soft);
+    }
+  }
+  return s;
 }

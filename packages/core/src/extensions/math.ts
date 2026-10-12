@@ -1,6 +1,8 @@
-// Math: `$…$` and `$$…$$` inline, and `$$` fenced blocks. Kept as source
-// and saved verbatim, so a renderer such as remark-math or KaTeX shows it.
-// The rules follow memos' math syntax: an inline opener followed by a space,
+// Math: `$…$` and `$$…$$` inline, and `$$` fenced blocks. Saved verbatim.
+// With a `render` function (for example KaTeX's), formulas show rendered,
+// and their source shows while the caret is on them; without one they show
+// as source.
+// The rules follow Pandoc's tex_math_dollars: an inline opener followed by a space,
 // or a closer preceded by a space or followed by a digit, is a plain dollar
 // sign ("costs $5 and $10" is text).
 
@@ -68,6 +70,39 @@ const block: BlockSyntax = {
   },
 };
 
-export function math(): Extension {
-  return { name: 'math', markdown: { inline: [inline], block: [block], escape: '$' } };
+export interface MathOptions {
+  /**
+   * Renders TeX into `element`. `displayMode` is true for a `$$` block.
+   * KaTeX's `render` has this shape:
+   * `render: (tex, el, options) => katex.render(tex, el, { ...options, throwOnError: false })`.
+   * Throwing shows the source instead.
+   */
+  readonly render?: (tex: string, element: HTMLElement, options: { readonly displayMode: boolean }) => void;
+}
+
+/** The TeX inside a token (`$x$`, `$$x$$`) or a fenced block (`$$` lines around it). */
+export function mathSource(source: string, kind: 'inline' | 'block'): string {
+  if (kind === 'inline') {
+    let size = 0;
+    while (source.charCodeAt(size) === DOLLAR) size++;
+    return source.slice(size, source.length - size);
+  }
+  const lines = source.split('\n');
+  const closed = lines.length > 1 && /^[ \t]*\${2,}[ \t]*$/.test(lines[lines.length - 1]!);
+  return lines.slice(1, closed ? -1 : undefined).join('\n');
+}
+
+export function math(options: MathOptions = {}): Extension {
+  const { render } = options;
+  return {
+    name: 'math',
+    markdown: { inline: [inline], block: [block], escape: '$' },
+    views: render && {
+      math(source, element, kind) {
+        const tex = mathSource(source, kind);
+        if (!tex.trim()) return false;
+        render(tex, element, { displayMode: kind === 'block' });
+      },
+    },
+  };
 }

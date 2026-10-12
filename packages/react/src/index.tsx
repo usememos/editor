@@ -13,6 +13,7 @@ type EditorProps = Pick<
   | 'autofocus'
   | 'attributes'
   | 'resolveImageSrc'
+  | 'theme'
   | 'toolbar'
   | 'slashMenu'
   | 'labels'
@@ -34,7 +35,7 @@ export interface MarkdownEditorProps extends EditorProps {
 }
 
 /** Options that `setOptions` applies without recreating the editor. */
-const LIVE = ['placeholder', 'editable', 'attributes', 'resolveImageSrc'] as const;
+const LIVE = ['placeholder', 'editable', 'attributes', 'resolveImageSrc', 'theme'] as const;
 
 /** The extension list's identity for recreating the editor: names, so an inline array does not recreate it on every render. */
 const extensionKey = (extensions: EditorOptions['extensions']) => (extensions ?? []).map((e) => e.name).join('\n');
@@ -42,7 +43,7 @@ const extensionKey = (extensions: EditorOptions['extensions']) => (extensions ??
 /**
  * The editor as a controlled React component. A `ref` gives the core `Editor`.
  *
- * `placeholder`, `editable`, `attributes` and `resolveImageSrc` update live.
+ * `placeholder`, `editable`, `attributes`, `resolveImageSrc` and `theme` update live.
  * A change to the names in `extensions` recreates the editor, keeping its
  * Markdown. Other props are read when the editor is created; change the
  * component's `key` to apply new values.
@@ -65,21 +66,12 @@ export const MarkdownEditor = forwardRef(function MarkdownEditor(props: Markdown
   const extensions = extensionKey(props.extensions);
 
   useEffect(() => {
-    const p = latest.current;
+    const { value, defaultValue, onChange, onSubmit, onFocus, onBlur, className, style, ...options } = latest.current;
     const previous = editorRef.current;
     const editor = new Editor({
+      ...options,
       element: container.current!,
-      content: previous?.getMarkdown() ?? p.value ?? p.defaultValue ?? '',
-      markdown: p.markdown,
-      extensions: p.extensions,
-      placeholder: p.placeholder,
-      editable: p.editable,
-      autofocus: p.autofocus,
-      attributes: p.attributes,
-      resolveImageSrc: p.resolveImageSrc,
-      toolbar: p.toolbar,
-      slashMenu: p.slashMenu,
-      labels: p.labels,
+      content: previous?.getMarkdown() ?? value ?? defaultValue ?? '',
       onChange: (markdown) => {
         pending.current.push(markdown);
         if (pending.current.length > 100) pending.current.shift();

@@ -35,7 +35,8 @@ test('Shift+Enter inserts a hard line break', async ({ page }) => {
   await page.keyboard.type('one');
   await page.keyboard.press('Shift+Enter');
   await page.keyboard.type('two');
-  expect(await md(page)).toBe('one\\\ntwo\n');
+  // The playground reads single newlines as line breaks, so a line break saves as a plain newline.
+  expect(await md(page)).toBe('one\ntwo\n');
   expect(await blocks(page)).toEqual(['p:one\ntwo']);
   // The caret is on the second line: Backspace three times removes "two", once more removes the break.
   for (let i = 0; i < 4; i++) await page.keyboard.press('Backspace');

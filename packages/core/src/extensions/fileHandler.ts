@@ -1,5 +1,5 @@
-// fileHandler: receives files pasted or dropped into the editor. memos sends
-// pasted files to the attachment list and uploads dropped images inline.
+// fileHandler: receives files pasted or dropped into the editor, for example
+// to add pasted files as attachments and upload dropped images inline.
 
 import type { Editor } from '../editor';
 import type { Extension } from '../extension';

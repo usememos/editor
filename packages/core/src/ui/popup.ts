@@ -6,6 +6,7 @@
 
 const THEME_VARS = [
   '--mbe-font',
+  '--mbe-mono',
   '--mbe-text',
   '--mbe-muted',
   '--mbe-bg',
@@ -14,6 +15,7 @@ const THEME_VARS = [
   '--mbe-popup-shadow',
   '--mbe-hover',
   '--mbe-accent',
+  '--mbe-danger',
   '--mbe-radius',
 ];
 
@@ -80,10 +82,8 @@ export class Popup {
       const value = style.getPropertyValue(name);
       if (value) this.el.style.setProperty(name, value);
     }
+    // Colors are light-dark() values, so the popup needs the root's color scheme too.
     this.el.style.colorScheme = style.colorScheme;
-    const themed = this.owner.closest('[data-theme]');
-    if (themed) this.el.dataset.theme = themed.getAttribute('data-theme')!;
-    else delete this.el.dataset.theme;
   }
 }
 
@@ -209,8 +209,8 @@ export class Menu {
   }
 }
 
-/** Case-insensitive match of a query against an item's label and aliases (prefix of any word, or substring). */
-export function matches(item: MenuItem, query: string): boolean {
+/** Case-insensitive match of a query against an item's label and aliases (a substring, also with spaces ignored). */
+export function matches(item: Pick<MenuItem, 'label' | 'aliases'>, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   const words = [item.label, ...(item.aliases ?? [])].map((w) => w.toLowerCase());

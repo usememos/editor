@@ -1,12 +1,11 @@
-export const SAMPLE = `# Welcome to the editor
+export const SAMPLE = `## Weekly notes #work/planning
 
-This is **standard Markdown** with *block editor* features. Type \`/\` for the slash menu, select text for the toolbar, or hover a block for its handle.
+Standard **Markdown** with *block editing*. Type \`/\` for blocks, \`#\` for tags, or select text for the toolbar.
+A single line break stays a line break.
 
-## Lists
-
-- Bullets, with **nesting**
+- Ship the editor #work
     - Press Tab to indent
-- [Links](https://commonmark.org) work too
+- Read [CommonMark](https://commonmark.org) @alice
 
 1. Numbered
 2. Lists
@@ -14,7 +13,13 @@ This is **standard Markdown** with *block editor* features. Type \`/\` for the s
 - [x] Task lists
 - [ ] Click the box
 
-> Quotes keep *inline* formatting.
+> Quotes stay quiet.
+
+Inline math $e^{i\\pi} + 1 = 0$ and a footnote[^1].
+
+$$
+\\int_0^1 x\\,dx = \\frac{1}{2}
+$$
 
 \`\`\`ts
 const editor = new Editor({ element, content, onChange });
@@ -27,6 +32,5 @@ const editor = new Editor({ element, content, onChange });
 
 ---
 
-Shift+Enter adds a line break\\
-inside a block.
+[^1]: Footnotes are kept as written.
 `;

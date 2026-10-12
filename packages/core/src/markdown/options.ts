@@ -12,6 +12,11 @@ export interface MarkdownOptions {
    * With false, `Title`⏎`---` is a paragraph and a divider.
    */
   readonly setext?: boolean;
+  /**
+   * GFM autolink literals: `www.example.com`, `https://example.com` and
+   * `name@example.com` written without angle brackets are links. Default true.
+   */
+  readonly autolinks?: boolean;
   /** Syntax outside CommonMark and GFM, such as math or footnotes. */
   readonly syntax?: readonly MarkdownSyntax[];
 }
@@ -67,13 +72,14 @@ export interface BlockSyntaxMatcher {
 export interface ResolvedMarkdown {
   readonly breaks: boolean;
   readonly setext: boolean;
+  readonly autolinks: boolean;
   readonly syntax: readonly MarkdownSyntax[];
   readonly inline: readonly InlineSyntax[];
   readonly block: readonly BlockSyntax[];
   readonly escape: string;
 }
 
-export const DEFAULT_MARKDOWN: ResolvedMarkdown = { breaks: false, setext: true, syntax: [], inline: [], block: [], escape: '' };
+export const DEFAULT_MARKDOWN: ResolvedMarkdown = { breaks: false, setext: true, autolinks: true, syntax: [], inline: [], block: [], escape: '' };
 
 const resolved = new WeakMap<MarkdownOptions, ResolvedMarkdown>();
 
@@ -85,6 +91,7 @@ export function resolveMarkdown(options: MarkdownOptions | undefined): ResolvedM
     r = {
       breaks: options.breaks ?? false,
       setext: options.setext ?? true,
+      autolinks: options.autolinks ?? true,
       syntax,
       inline: syntax.flatMap((s) => s.inline ?? []),
       block: syntax.flatMap((s) => s.block ?? []),

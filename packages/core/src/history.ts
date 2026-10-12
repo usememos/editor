@@ -43,17 +43,18 @@ export class History {
   }
 
   undo(current: EditorState): EditorState | null {
-    const entry = this.undoStack.pop();
-    if (!entry) return null;
-    this.redoStack.push({ doc: current.doc, selection: current.selection });
-    this.lastKind = null;
-    return { doc: entry.doc, selection: entry.selection, storedMarks: null };
+    return this.step(current, this.undoStack, this.redoStack);
   }
 
   redo(current: EditorState): EditorState | null {
-    const entry = this.redoStack.pop();
+    return this.step(current, this.redoStack, this.undoStack);
+  }
+
+  /** Moves the newest entry of `from` back into the document, and the current state onto `to`. */
+  private step(current: EditorState, from: Entry[], to: Entry[]): EditorState | null {
+    const entry = from.pop();
     if (!entry) return null;
-    this.undoStack.push({ doc: current.doc, selection: current.selection });
+    to.push({ doc: current.doc, selection: current.selection });
     this.lastKind = null;
     return { doc: entry.doc, selection: entry.selection, storedMarks: null };
   }
