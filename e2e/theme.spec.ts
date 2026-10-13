@@ -1,6 +1,6 @@
 // The theme option: classes on rendered elements, in editing and read-only.
 
-import { expect, test, type Page } from '@playwright/test';
+import { expect, type Page, test } from './helpers';
 
 const CLASSES = {
   paragraph: 't-paragraph',

@@ -1,5 +1,6 @@
 import { Editor, type EditorOptions } from '@usememos/editor';
 import { type CSSProperties, type ForwardedRef, forwardRef, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 
 export type { Editor } from '@usememos/editor';
 
@@ -10,6 +11,7 @@ type EditorProps = Pick<
   | 'extensions'
   | 'placeholder'
   | 'editable'
+  | 'taskToggle'
   | 'autofocus'
   | 'attributes'
   | 'resolveImageSrc'
@@ -17,6 +19,7 @@ type EditorProps = Pick<
   | 'toolbar'
   | 'slashMenu'
   | 'labels'
+  | 'icons'
 >;
 
 export interface MarkdownEditorProps extends EditorProps {
@@ -35,7 +38,7 @@ export interface MarkdownEditorProps extends EditorProps {
 }
 
 /** Options that `setOptions` applies without recreating the editor. */
-const LIVE = ['placeholder', 'editable', 'attributes', 'resolveImageSrc', 'theme'] as const;
+const LIVE = ['placeholder', 'editable', 'taskToggle', 'attributes', 'resolveImageSrc', 'theme'] as const;
 
 /** The extension list's identity for recreating the editor: names, so an inline array does not recreate it on every render. */
 const extensionKey = (extensions: EditorOptions['extensions']) => (extensions ?? []).map((e) => e.name).join('\n');
@@ -43,7 +46,7 @@ const extensionKey = (extensions: EditorOptions['extensions']) => (extensions ??
 /**
  * The editor as a controlled React component. A `ref` gives the core `Editor`.
  *
- * `placeholder`, `editable`, `attributes`, `resolveImageSrc` and `theme` update live.
+ * `placeholder`, `editable`, `taskToggle`, `attributes`, `resolveImageSrc` and `theme` update live.
  * A change to the names in `extensions` recreates the editor, keeping its
  * Markdown. Other props are read when the editor is created; change the
  * component's `key` to apply new values.
@@ -75,7 +78,11 @@ export const MarkdownEditor = forwardRef(function MarkdownEditor(props: Markdown
       onChange: (markdown) => {
         pending.current.push(markdown);
         if (pending.current.length > 100) pending.current.shift();
-        latest.current.onChange?.(markdown);
+        // Render the parent's update now, as React does for a native input's
+        // onChange. Left to React's scheduler, it can still be waiting when
+        // the parent sets a new value (clearing the box on submit) that equals
+        // the value it last rendered; the value effect would then not run.
+        flushSync(() => latest.current.onChange?.(markdown));
       },
       onSubmit: (markdown) => latest.current.onSubmit?.(markdown),
       onFocus: () => latest.current.onFocus?.(),
@@ -143,7 +150,7 @@ function useLiveOptions(editorRef: { current: Editor | null }, props: EditorProp
     let any = false;
     for (const key of LIVE) {
       if (props[key] === applied.current.props[key]) continue;
-      (changed as Record<string, unknown>)[key] = key === 'editable' ? (props.editable ?? true) : props[key];
+      (changed as Record<string, unknown>)[key] = key === 'editable' ? (props.editable ?? true) : key === 'taskToggle' ? (props.taskToggle ?? false) : props[key];
       any = true;
     }
     applied.current = { editor, props: { ...props } };

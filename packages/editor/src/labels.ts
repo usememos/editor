@@ -8,6 +8,8 @@ export const DEFAULT_LABELS = {
   bulletList: 'Bulleted list',
   numberedList: 'Numbered list',
   todoList: 'To-do list',
+  /** Accessible name of a task checkbox whose item has no text. */
+  task: 'Task',
   quote: 'Quote',
   code: 'Code block',
   table: 'Table',

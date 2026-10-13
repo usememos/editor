@@ -40,6 +40,7 @@ import {
   listItem,
   orderedRange,
   paragraph,
+  plain,
   quote,
   rangeHasMark,
   sameCell,
@@ -614,6 +615,55 @@ export function indentListItems(state: EditorState, delta: 1 | -1): EditorState 
   return changed ? withBlocks(state, blocks) : state;
 }
 
+const CODE_INDENT = '  ';
+
+/**
+ * Tab / Shift+Tab in a code block. Tab at a caret inserts two spaces; over a
+ * selection it indents every line it touches. Shift+Tab removes up to two
+ * leading spaces (or a tab) from those lines.
+ */
+export function indentCode(state: EditorState, delta: 1 | -1): EditorState {
+  const { anchor, focus } = state.selection;
+  if (anchor.blockId !== focus.blockId) return state;
+  const block = getBlock(state.doc, focus.blockId);
+  if (block.type !== 'code') return state;
+  if (delta === 1 && isCollapsed(state.selection)) return insertText(state, CODE_INDENT);
+  const text = inlineText(block.content);
+  const from = Math.min(anchor.offset, focus.offset);
+  const to = Math.max(anchor.offset, focus.offset);
+  // Starts of the lines the selection touches, and how much each one changes.
+  const edits: { at: number; remove: number }[] = [];
+  for (let at = text.lastIndexOf('\n', from - 1) + 1; ; ) {
+    const lead = /^(?: {1,2}|\t)/.exec(text.slice(at))?.[0].length ?? 0;
+    edits.push({ at, remove: delta === 1 ? 0 : lead });
+    const next = text.indexOf('\n', at);
+    if (next < 0 || next >= to) break;
+    at = next + 1;
+  }
+  if (delta === -1 && edits.every((e) => e.remove === 0)) return state;
+  let out = '';
+  let last = 0;
+  for (const e of edits) {
+    out += text.slice(last, e.at) + (delta === 1 ? CODE_INDENT : '');
+    last = e.at + e.remove;
+  }
+  out += text.slice(last);
+  // A position moves by the change at every line start up to it; inside removed indentation, to the line start.
+  const map = (offset: number) => {
+    let shift = 0;
+    for (const e of edits) {
+      if (e.at > offset) break;
+      shift += delta === 1 ? CODE_INDENT.length : -Math.min(e.remove, offset - e.at);
+    }
+    return offset + shift;
+  };
+  const updated = withContent(block, plain(out));
+  return replaceBlock(state, updated, {
+    anchor: { ...anchor, offset: map(anchor.offset) },
+    focus: { ...focus, offset: map(focus.offset) },
+  });
+}
+
 export function toggleTask(state: EditorState, blockId: string): EditorState {
   const block = getBlock(state.doc, blockId);
   if (block.type !== 'listItem' || block.listType !== 'task') return state;
@@ -933,6 +983,77 @@ export function applyTokenInputRules(state: EditorState, syntax: readonly Inline
     }
   }
   return null;
+}
+
+/**
+ * Removes the token of extension syntax from text that no longer reads as
+ * that syntax, such as `^1]` left after deleting the `[` of `[^1]`, so it is
+ * shown and saved as the text it now is. Text marked as code loses its token
+ * too. A run of one token may hold several tokens written next to each other.
+ * Only blocks that changed since `before` are checked.
+ */
+export function dropBrokenTokens(state: EditorState, before: EditorState, syntax: readonly InlineSyntax[]): EditorState {
+  if (syntax.length === 0 || state.doc === before.doc) return state;
+  const old = new Set(before.doc.blocks);
+  let blocks: Block[] | null = null;
+  state.doc.blocks.forEach((block, i) => {
+    if (old.has(block) || block.type === 'divider') return;
+    const containers: (Cell | undefined)[] =
+      block.type === 'table' ? block.rows.flatMap((row, r) => row.map((_, c) => ({ row: r, col: c }))) : [undefined];
+    let next: Block = block;
+    for (const cell of containers) {
+      const content = containerContent(next, cell);
+      if (!content?.some((s) => s.token)) continue;
+      const fixed = untokenizeBroken(content, syntax);
+      if (fixed !== content) next = withContainerContent(next, cell, fixed);
+    }
+    if (next !== block) (blocks ??= [...state.doc.blocks])[i] = next;
+  });
+  return blocks ? { ...state, doc: { ...state.doc, blocks } } : state;
+}
+
+/**
+ * Lowers list items nested deeper than the block above allows: one level
+ * below a list item, or not nested after any other block. Markdown cannot
+ * write a nested item without its parent, so this is what saving would give.
+ * It happens when a parent item becomes another kind of block or is removed.
+ */
+export function clampListIndents(state: EditorState, before: EditorState): EditorState {
+  if (state.doc === before.doc) return state;
+  let blocks: Block[] | null = null;
+  let max = 0;
+  state.doc.blocks.forEach((block, i) => {
+    if (block.type !== 'listItem') {
+      max = 0;
+      return;
+    }
+    if (block.indent > max) (blocks ??= [...state.doc.blocks])[i] = { ...block, indent: max };
+    max = Math.min(block.indent, max) + 1;
+  });
+  return blocks ? { ...state, doc: { ...state.doc, blocks } } : state;
+}
+
+function untokenizeBroken(content: Inline, syntax: readonly InlineSyntax[]): Inline {
+  const text = inlineText(content);
+  let out: Inline = content;
+  let pos = 0;
+  for (const span of content) {
+    const start = pos;
+    const end = (pos += span.text.length);
+    if (!span.token) continue;
+    // Code is never read as syntax.
+    const s = span.marks.includes('code') ? undefined : syntax.find((x) => x.name === span.token);
+    let at = start;
+    while (s && at < end) {
+      const e = s.match(text, at);
+      if (e <= at || e > end) break;
+      at = e;
+    }
+    if (at === end) continue;
+    const { token: _broken, ...plainSpan } = span;
+    out = concatInline(sliceInline(out, 0, start), [plainSpan], sliceInline(out, end));
+  }
+  return out;
 }
 
 /**

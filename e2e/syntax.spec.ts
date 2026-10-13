@@ -1,8 +1,7 @@
 // The syntax spec (docs/syntax.md) in the browser: tags, mentions,
 // escapes, suggestion menus and autolink literals as typed with a keyboard.
 
-import { expect, test } from '@playwright/test';
-import { blocks, md } from './helpers';
+import { blocks, expect, md, test } from './helpers';
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/?empty');

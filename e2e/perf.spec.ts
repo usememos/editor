@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './helpers';
 
 // Release gates (spec): p95 keystroke under 16 ms in a 2,000-block document,
 // and 100 KB of Markdown parsed and rendered in under 100 ms.

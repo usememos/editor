@@ -9,7 +9,7 @@ npm install
 npm run dev        # playground: note composer at /, React at /react.html
 npm test           # unit, spec and round-trip tests (vitest)
 npm run test:e2e   # browser tests (Playwright, Chromium)
-npx playwright test --project=firefox --project=webkit  # IME tests in Firefox and WebKit (needs those browsers)
+npx playwright test --project=firefox --project=webkit  # the browser tests in Firefox and WebKit (needs those browsers)
 npm run test:perf  # timing gates, run alone
 npm run typecheck
 npm run build      # the published files, in packages/editor/dist

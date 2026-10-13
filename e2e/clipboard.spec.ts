@@ -1,5 +1,4 @@
-import { expect, test } from '@playwright/test';
-import { blocks, md } from './helpers';
+import { blocks, expect, md, test } from './helpers';
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/?empty');
@@ -10,7 +9,7 @@ async function paste(page: import('@playwright/test').Page, data: Record<string,
   await page.evaluate((d) => {
     const dt = new DataTransfer();
     for (const [k, v] of Object.entries(d)) dt.setData(k, v);
-    document.getElementById('editor')!.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    document.getElementById('editor')!.dispatchEvent((window as any).clipboardEvent('paste', dt));
   }, data);
 }
 
@@ -58,7 +57,7 @@ test('copy then paste inside the editor round-trips through Markdown', async ({ 
   await page.keyboard.press('Control+a');
   const data = await page.evaluate(() => {
     const dt = new DataTransfer();
-    document.getElementById('editor')!.dispatchEvent(new ClipboardEvent('copy', { clipboardData: dt, bubbles: true, cancelable: true }));
+    document.getElementById('editor')!.dispatchEvent((window as any).clipboardEvent('copy', dt));
     return { 'text/plain': dt.getData('text/plain'), 'text/html': dt.getData('text/html') };
   });
   expect(data['text/plain']).toBe('## Head\n\n- item');

@@ -17,6 +17,7 @@ import {
   quote,
   table,
 } from '../src/model';
+import { footnotes } from '../src/extensions/footnotes';
 
 // Compact text form of a document, for readable assertions:
 // "p:hello", "h2:Title", "ul0:item", "ol1:item", "task0[x]:done", "quote:text", "code(js):x", "hr", "table:a|b/c|d".
@@ -628,3 +629,83 @@ describe('selectAll', () => {
 function stateAt(blocks: Block[], selection: Selection): EditorState {
   return { ...createState({ blocks }), selection };
 }
+
+describe('dropBrokenTokens', () => {
+  const syntax = footnotes().markdown!.inline!;
+  const tokens = (s: EditorState) =>
+    s.doc.blocks.map((b) => ('content' in b ? b.content.map((x) => (x.token ? `{${x.text}}` : x.text)).join('') : ''));
+  const withToken = (text: string, from: number, to: number) =>
+    state(paragraph([{ text: text.slice(0, from), marks: [] }, { text: text.slice(from, to), marks: [], token: 'footnote' }, { text: text.slice(to), marks: [] }]));
+
+  it('removes the token from text that no longer reads as its syntax', () => {
+    const before = withToken('a[^1] b', 1, 5);
+    const edited = cmd.deleteRange(before, { blockId: before.doc.blocks[0]!.id, offset: 1 }, { blockId: before.doc.blocks[0]!.id, offset: 2 });
+    expect(tokens(edited)).toEqual(['a{^1]} b']);
+    expect(tokens(cmd.dropBrokenTokens(edited, before, syntax))).toEqual(['a^1] b']);
+  });
+
+  it('keeps valid tokens, several in one run, and blocks that did not change', () => {
+    const before = withToken('a[^1][^2] b', 1, 9);
+    const other = { ...before, doc: { blocks: [...before.doc.blocks] } };
+    expect(cmd.dropBrokenTokens(other, before, syntax)).toBe(other);
+    const changed = cmd.insertText(at(before, 0, 11), '!');
+    expect(tokens(cmd.dropBrokenTokens(changed, before, syntax))).toEqual(['a{[^1][^2]} b!']);
+  });
+
+  it('removes the token from text marked as code', () => {
+    const before = withToken('a[^1] b', 1, 5);
+    const coded = cmd.toggleMark(range(before, [0, 0], [0, 7]), 'code');
+    expect(tokens(coded)).toEqual(['a{[^1]} b']);
+    expect(tokens(cmd.dropBrokenTokens(coded, before, syntax))).toEqual(['a[^1] b']);
+  });
+});
+
+describe('clampListIndents', () => {
+  const doc = (...blocks: Block[]) => state(...blocks);
+
+  it('lowers an item nested deeper than the block above allows', () => {
+    const before = doc(paragraph(plain('p')), listItem('bullet', plain('a'), { indent: 1 }), listItem('bullet', plain('b'), { indent: 2 }));
+    const edited = { ...before, doc: { blocks: [...before.doc.blocks] } };
+    expect(show(cmd.clampListIndents(edited, before))).toEqual(['p:p', 'ul0:a', 'ul1:b']);
+  });
+
+  it('keeps items one level below their parent, and the same state when nothing is too deep', () => {
+    const before = doc(listItem('bullet', plain('a')), listItem('bullet', plain('b'), { indent: 1 }), listItem('task', plain('c'), { indent: 2 }), listItem('bullet', plain('d')));
+    const edited = { ...before, doc: { blocks: [...before.doc.blocks] } };
+    expect(cmd.clampListIndents(edited, before)).toBe(edited);
+  });
+});
+
+describe('indentCode', () => {
+  const offsets = (s: EditorState) => [s.selection.anchor.offset, s.selection.focus.offset];
+
+  it('inserts two spaces at a caret', () => {
+    const s = cmd.indentCode(at(state(codeBlock('js', 'ab')), 0, 1), 1);
+    expect(show(s)).toEqual(['code(js):a  b']);
+    expect(offsets(s)).toEqual([3, 3]);
+  });
+
+  it('indents and outdents every line a selection touches, keeping the selection on the same text', () => {
+    let s = range(state(codeBlock('js', 'one\ntwo\nthree')), [0, 1], [0, 5]);
+    s = cmd.indentCode(s, 1);
+    expect(show(s)).toEqual(['code(js):  one\n  two\nthree']);
+    expect(offsets(s)).toEqual([3, 9]);
+    s = cmd.indentCode(s, -1);
+    expect(show(s)).toEqual(['code(js):one\ntwo\nthree']);
+    expect(offsets(s)).toEqual([1, 5]);
+  });
+
+  it('outdents up to two spaces or one tab, and does nothing without indentation', () => {
+    const s = at(state(codeBlock('', '   a\n\tb')), 0, 4);
+    expect(show(cmd.indentCode(s, -1))).toEqual(['code(): a\n\tb']);
+    const t = range(state(codeBlock('', 'a\n\tb')), [0, 0], [0, 4]);
+    expect(show(cmd.indentCode(t, -1))).toEqual(['code():a\nb']);
+    const none = at(state(codeBlock('', 'a')), 0, 1);
+    expect(cmd.indentCode(none, -1)).toBe(none);
+  });
+
+  it('only acts in a code block', () => {
+    const s = at(state(paragraph(plain('a'))), 0, 1);
+    expect(cmd.indentCode(s, 1)).toBe(s);
+  });
+});

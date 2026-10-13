@@ -4,14 +4,15 @@
 
 import type { Editor } from '../editor';
 import type { Extension } from '../extension';
+import type { Icon } from '../icons';
 import type { Position } from '../model';
 
 export interface SuggestionItem {
   /** Stable ID, for tests and keys. Defaults to the label. */
   readonly id?: string;
   readonly label: string;
-  /** Short glyph shown before the label. */
-  readonly icon?: string;
+  /** Shown before the label: text, or an element (such as an `<svg>`) that is cloned. */
+  readonly icon?: Icon;
 }
 
 export interface SuggestionRange {

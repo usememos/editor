@@ -1,8 +1,7 @@
 // Block selection: whole blocks selected with Escape, then deleted, copied,
 // cut, duplicated, replaced by a paste, or changed by the block keys.
 
-import { expect, test, type Page } from '@playwright/test';
-import { blocks, md } from './helpers';
+import { blocks, expect, md, type Page, test } from './helpers';
 
 const DOC = '# Plan\n\nFirst paragraph.\n\n- one\n- two\n  - nested\n\nLast paragraph.\n';
 
@@ -25,7 +24,7 @@ const selected = (page: Page) =>
 const copy = (page: Page, type: 'copy' | 'cut') =>
   page.evaluate((type) => {
     const data = new DataTransfer();
-    document.activeElement!.dispatchEvent(new ClipboardEvent(type, { clipboardData: data, bubbles: true, cancelable: true }));
+    document.activeElement!.dispatchEvent((window as any).clipboardEvent(type, data));
     return { text: data.getData('text/plain'), html: data.getData('text/html') };
   }, type);
 
@@ -33,7 +32,7 @@ const paste = (page: Page, text: string) =>
   page.evaluate((text) => {
     const data = new DataTransfer();
     data.setData('text/plain', text);
-    document.activeElement!.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    document.activeElement!.dispatchEvent((window as any).clipboardEvent('paste', data));
   }, text);
 
 test('Escape selects the block with the caret and highlights it; Escape again leaves the editor', async ({ page }) => {
@@ -58,6 +57,11 @@ test('Escape over a text selection that crosses blocks selects all of them', asy
   await caretIn(page, 'p');
   await page.keyboard.press('Shift+ArrowDown');
   await page.keyboard.press('Shift+ArrowDown');
+  // On a slow machine the selectionchange for the second Shift+ArrowDown can
+  // arrive after the next key, and reopen the toolbar that Escape closed.
+  await expect.poll(() => page.evaluate(() => (window as any).editor.state.selection.focus.blockId)).toBe(
+    await page.evaluate(() => (window as any).editor.state.doc.blocks[3].id),
+  );
   await expect(page.locator('.mbe-toolbar')).toBeVisible();
   await page.keyboard.press('Escape'); // closes the toolbar
   await page.keyboard.press('Escape');

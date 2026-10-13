@@ -126,3 +126,44 @@ describe('edited documents', () => {
     expect(save({ blocks: [paragraph()] }, source)).toBe('');
   });
 });
+
+describe('ticked task items', () => {
+  /** Flips `checked` on the task items at `indexes`, as `toggleTask` does. */
+  function tick(doc: Doc, ...indexes: number[]): Doc {
+    return { blocks: doc.blocks.map((b, i) => (indexes.includes(i) && b.type === 'listItem' ? { ...b, checked: !b.checked } : b)) };
+  }
+
+  it('rewrites only the box of the ticked item', () => {
+    const md = '* [ ] one\n* [X] two\n    * [ ]  nested *x*\n';
+    const { doc, source } = loadMarkdown(md);
+    expect(save(tick(doc, 0), source)).toBe('* [x] one\n* [X] two\n    * [ ]  nested *x*\n');
+    expect(save(tick(doc, 1, 2), source)).toBe('* [ ] one\n* [ ] two\n    * [x]  nested *x*\n');
+  });
+
+  it('keeps the rest of the document and the text around the list', () => {
+    const md = 'Title\r\n=====\r\n\r\n\r\n1) [x] done\r\n2) [ ] next\r\n\r\n__end__';
+    const { doc, source } = loadMarkdown(md, { setext: true });
+    const items = doc.blocks.flatMap((b, i) => (b.type === 'listItem' ? [i] : []));
+    expect(save(tick(doc, ...items), source)).toBe('Title\r\n=====\r\n\r\n\r\n1) [ ] done\r\n2) [x] next\r\n\r\n__end__');
+  });
+
+  it('keeps the source when an item is ticked and unticked again', () => {
+    const md = '+ [ ]\ttab\n';
+    const { doc, source } = loadMarkdown(md);
+    expect(save(tick(tick(doc, 0), 0), source)).toBe(md);
+  });
+
+  it('rewrites the list normally when an item was also edited', () => {
+    const { doc, source } = loadMarkdown('* [ ] a\n* [ ] b');
+    expect(save(editBlock(tick(doc, 0), 1, 'B'), source)).toBe('- [x] a\n- [ ] B');
+  });
+
+  it('skips a line that only looks like a task item', () => {
+    // "2." cannot interrupt a paragraph, so the second line continues the first item.
+    const md = '- [ ] a\n  2. [ ] b\n- [ ] c';
+    const { doc, source } = loadMarkdown(md);
+    expect(doc.blocks.length).toBe(2);
+    const saved = save(tick(doc, 1), source);
+    expect(loadMarkdown(saved).doc.blocks.map((b) => b.type === 'listItem' && b.checked)).toEqual([false, true]);
+  });
+});

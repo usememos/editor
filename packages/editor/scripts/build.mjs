@@ -25,7 +25,7 @@ await build({
   entryPoints: [src('react/index.tsx')],
   outfile: join(dist, 'react.js'),
   jsx: 'automatic',
-  external: ['@usememos/editor', 'react', 'react/*'],
+  external: ['@usememos/editor', 'react', 'react/*', 'react-dom'],
 });
 
 await build({

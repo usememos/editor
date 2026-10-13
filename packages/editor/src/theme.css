@@ -185,6 +185,7 @@
 .mbe-menu-item.mbe-highlighted { background: var(--mbe-hover); color: inherit; }
 .mbe-menu-item.mbe-danger { color: var(--mbe-danger); }
 .mbe-menu-icon { border-radius: 4px; font-size: 11px; font-weight: 600; color: var(--mbe-muted); }
+.mbe-menu-item.mbe-danger .mbe-menu-icon { color: inherit; }
 .mbe-menu-empty { color: var(--mbe-muted); }
 
 .mbe-tool { border-radius: 6px; }
@@ -207,8 +208,6 @@
 .mbe-handle {
   border-radius: 4px;
   color: var(--mbe-muted);
-  font-size: 12px;
-  letter-spacing: -2px;
   opacity: 0.7;
 }
 .mbe-handle:hover { background: var(--mbe-hover); opacity: 1; }

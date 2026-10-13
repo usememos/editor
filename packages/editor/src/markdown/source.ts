@@ -106,6 +106,8 @@ function isOpen(source: string, options: MarkdownOptions | undefined): boolean {
 interface Chunk {
   group: SourceGroup | null;
   blocks: Block[];
+  /** The group's source with ticked task boxes rewritten, when that is the only change. */
+  text?: string;
 }
 
 /** Lists and quotes next to each other in Markdown merge into one. */
@@ -115,6 +117,8 @@ function joins(a: Block | undefined, b: Block | undefined): boolean {
 
 export function saveWithSource(blocks: readonly Block[], source: MarkdownSource, options?: MarkdownOptions): string {
   const text = source.text;
+  /** Groups by the ID of their first block, to find a group whose blocks were replaced. Built on first use. */
+  let firstBlocks: Map<string, SourceGroup> | undefined;
   // 1. Split the blocks into kept groups and runs of other blocks.
   const chunks: Chunk[] = [];
   for (let i = 0; i < blocks.length; ) {
@@ -123,6 +127,13 @@ export function saveWithSource(blocks: readonly Block[], source: MarkdownSource,
     if (group && group.blocks[0] === block && group.blocks.every((b, k) => blocks[i + k] === b)) {
       chunks.push({ group, blocks: [...group.blocks] });
       i += group.blocks.length;
+      continue;
+    }
+    firstBlocks ??= new Map(source.groups.map((g) => [g.blocks[0]!.id, g]));
+    const ticked = tickedGroup(blocks, i, firstBlocks, source, options);
+    if (ticked) {
+      chunks.push(ticked);
+      i += ticked.blocks.length;
       continue;
     }
     const last = chunks[chunks.length - 1];
@@ -190,7 +201,7 @@ export function saveWithSource(blocks: readonly Block[], source: MarkdownSource,
   let out = '';
   let prev: Chunk | undefined;
   for (const chunk of chunks) {
-    const body = chunk.group ? text.slice(chunk.group.from, chunk.group.to) : serializeBlocks(chunk.blocks, options);
+    const body = chunk.group ? (chunk.text ?? text.slice(chunk.group.from, chunk.group.to)) : serializeBlocks(chunk.blocks, options);
     if (body === '' && !chunk.group) continue;
     const g = chunk.group;
     const p = prev?.group;
@@ -224,6 +235,65 @@ export function saveWithSource(blocks: readonly Block[], source: MarkdownSource,
     ending = newline;
   }
   return out + ending;
+}
+
+/** A task list item marker: indentation, a bullet or number, spaces, then `[ ]`, `[x]` or `[X]`. */
+const reTaskLine = /^([ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]+\[)([ xX])(?=\][ \t]|\]$)/gm;
+
+/**
+ * The group that starts at `blocks[i]` as a kept chunk, when the only
+ * change to it is the `checked` state of task items: each block is the
+ * loaded object or a task item that differs from it only in `checked`.
+ * The chunk's text is the group's source with the box of each changed
+ * item rewritten. The result is parsed again and used only if it reads
+ * back as the current blocks; otherwise null, and the group is serialized.
+ */
+function tickedGroup(
+  blocks: readonly Block[],
+  i: number,
+  firstBlocks: ReadonlyMap<string, SourceGroup>,
+  source: MarkdownSource,
+  options?: MarkdownOptions,
+): Chunk | null {
+  const loaded = firstBlocks.get(blocks[i]!.id);
+  if (!loaded || loaded.open) return null;
+  const current = blocks.slice(i, i + loaded.blocks.length);
+  if (current.length !== loaded.blocks.length) return null;
+  let changed = false;
+  for (let k = 0; k < current.length; k++) {
+    const a = loaded.blocks[k]!;
+    const b = current[k]!;
+    if (a === b) continue;
+    if (!onlyChecked(a, b)) return null;
+    changed = true;
+  }
+  if (!changed) return null;
+  const tasks = current.filter((b) => b.type === 'listItem' && b.listType === 'task');
+  const original = source.text.slice(loaded.from, loaded.to);
+  let n = 0;
+  const patched = original.replace(reTaskLine, (match, head: string, box: string) => {
+    const block = tasks[n++];
+    if (!block || block.type !== 'listItem') return match;
+    const checked = box !== ' ';
+    return checked === block.checked ? match : head + (block.checked ? 'x' : ' ');
+  });
+  if (n !== tasks.length) return null;
+  const reread = loadMarkdown(patched, options).doc.blocks;
+  if (serializeBlocks(reread, options) !== serializeBlocks(current, options)) return null;
+  return { group: loaded, blocks: current, text: patched };
+}
+
+/** True if `b` is task item `a`, or a copy of it with only its `checked` state changed. */
+function onlyChecked(a: Block, b: Block): boolean {
+  return (
+    a.type === 'listItem' &&
+    b.type === 'listItem' &&
+    a.listType === 'task' &&
+    b.listType === 'task' &&
+    a.id === b.id &&
+    a.indent === b.indent &&
+    a.content === b.content
+  );
 }
 
 /** Text with whitespace runs collapsed, for finding a definition whatever its indentation. */

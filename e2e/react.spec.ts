@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './helpers';
 
 test('React comment box: controlled value, Mod+Enter posts and clears', async ({ page }) => {
   await page.goto('/react.html');

@@ -18,7 +18,7 @@ Other products confirm the split behind rules 1 and 2. Editors that keep Markdow
 
 | Area | Decision |
 | --- | --- |
-| Package | One package, `@usememos/editor`: plain TypeScript with zero runtime dependencies. A thin React wrapper is the `@usememos/editor/react` subpath, with React 18 or later as an optional peer dependency. |
+| Package | One package, `@usememos/editor`: plain TypeScript with zero runtime dependencies. A thin React wrapper is the `@usememos/editor/react` subpath, with React and React DOM 18 or later as optional peer dependencies. |
 | Document model | A flat list of immutable blocks. Each block has a stable ID. Inline content is a list of text spans with marks, a link or an image. |
 | Editing surface | One `contentEditable` root that the editor owns completely. Table cells are nested editing hosts. |
 | Input | Cancel `beforeinput` and apply a model command. IME composition is the one exception: the browser edits the DOM, and the editor reads the result back into the model on every `input`. |
@@ -27,6 +27,7 @@ Other products confirm the split behind rules 1 and 2. Editors that keep Markdow
 | Markdown | Our own CommonMark 0.31.2 + GFM parser and a normalizing serializer. Saving is stable: `serialize(parse(md))` is a fixed point. |
 | Public API | Modeled on Tiptap and ProseMirror: `editor.commands`, `isActive`, `getAttributes`, `on()` events, JSON-safe selections, and extensions as plain objects that add syntax, keys, decorations, suggestion menus and input hooks. Markdown is the only content format. |
 | UI | Slash menu, block handle and block menu, formatting toolbar, link popover. All plain DOM, styled with CSS custom properties. |
+| Icons | Lucide icons, copied into the source as SVG data rather than imported from a package, so the core keeps zero runtime dependencies. The `icons` option replaces any of them. |
 
 ## Source map
 
@@ -47,6 +48,7 @@ Other products confirm the split behind rules 1 and 2. Editors that keep Markdow
 | `packages/editor/src/theme.ts` | The `theme` option's types, and merging class maps from extensions and the editor. |
 | `packages/editor/src/base.css`, `theme.css`, `style.css` | Layout and block spacing; the default look; both together. |
 | `packages/editor/src/labels.ts` | Every UI string, for localization. |
+| `packages/editor/src/icons.ts` | Every built-in icon, as Lucide SVG data, and building them into elements. |
 | `packages/editor/src/react/index.tsx` | `<MarkdownEditor>`, `useEditor` and `<EditorContent>`. |
 
 ## Document model
@@ -68,13 +70,15 @@ One `contentEditable` root, not one per block, so native selection crosses block
 - `BlockRenderer.render` reuses the element of every block whose object is unchanged, inserts new elements in order, and removes anything else, including nodes the browser inserted on its own. Ordered list numbers are recomputed after each render and cached per element.
 - Loading a document (`new Editor`, `setMarkdown`) builds all elements in a fragment and marks them `content-visibility: auto`, so blocks off screen skip layout. Blocks rendered while editing never get that property: Chrome treats a new `content-visibility` block as skipped until the next frame, and an arrow key pressed before then put the caret in the wrong place (found by the browser tests under load).
 
+**Read-only and task toggling.** `editable: false` makes the root and every table cell `contenteditable="false"`, sets `aria-readonly="true"` and the class `mbe-readonly`, and disables every `<input>`. `run()`, undo, redo, paste, cut, drop and `beforeinput` do nothing, the caret does not reveal any view's source, and the toolbar, menus and block handle do not show. Copy works, and links open on a plain click. `taskToggle: true` keeps all of that except for task checkboxes: they stay enabled, are Tab stops (`tabIndex` 0, while editing they are `-1`), take their accessible name from the item's text, and the root also gets the class `mbe-tasks`. A press on a checkbox (`mousedown`, or a keyboard `click` with `detail` 0 from Space) applies `toggleTask` through the same path as an edit: it is recorded in undo history, re-renders the item and emits `change`. The press is cancelled, so focus, the selection and the scroll position do not move. `taskToggle` has no effect while `editable` is `true`, and `isEditable` stays `false` with it.
+
 ## Input pipeline
 
 1. **`beforeinput`, cancelled.** `insertText`, `insertParagraph`, `insertLineBreak`, all `delete*` types, `historyUndo`/`historyRedo` and `format*` map to commands. Word and line deletes use the browser's `getTargetRanges()`, so they follow the platform's word boundaries. So does `insertText` when its target range covers text while the selection is a caret: that is how mobile autocorrect and word suggestions replace a word. `insertParagraph` picks the item of an open suggestion menu, because Android keyboards send Enter with keyCode 229, which `keydown` ignores.
 2. **IME composition, not cancelled.** While composing, the editor does not re-render the composed block or move the selection, and hides the toolbar. On each `input` it compares the block's DOM text with the model and applies the difference as one delete and one insert, so `change`, `getMarkdown()`, `isEmpty` and an open suggestion menu follow the composed text (on Android every word is a composition). The renderer adopts the browser's DOM for the new block object instead of rebuilding it, and only updates its empty state, so the placeholder does not cover composed text. Marks stored before composing (Mod+B, then compose) apply to all of the composed text. The first change records one undo step for the whole composition. On `compositionend` the committed text is read once more; the block is rendered from the model on the next frame, so input that arrives after `compositionend` in the same task (Firefox sends the last `input` then) still counts as the composition, and nothing is re-rendered between two compositions in one keystroke (Korean syllables). A cross-block selection is deleted when composition starts, so a composition always stays inside one block.
 3. **Fallback.** An `input` event the editor did not cancel goes through the same read-back, and typed text then runs the Markdown shortcuts. A `beforeinput` that cannot be cancelled (from some Android keyboards) for typed text, a replacement, or a deletion inside one text container is left to the browser and read back, so it is not applied twice.
 4. **`keydown`**: an open menu takes the navigation keys first. A block selection takes its own keys next (see "Block selection"). Then extension key bindings run in order, ending with `defaultKeymap()` (marks, block types, Mod+K, undo/redo, Tab, submit, Escape). A binding that returns true stops the rest and prevents the browser default. Mod+/ (block menu) and Mod+Shift+V (plain paste) are handled by the editor itself.
-   ArrowDown on the last line of a code block, table or divider that ends the document adds an empty paragraph below it, and ArrowUp on the first line of one that starts the document adds one above it (`exitBlock`). Elsewhere the browser moves the caret. A click in the empty space below such a final block also adds a paragraph. Enter three times at the end of a code block still leaves it.
+   ArrowDown on the last line of a code block, table or divider that ends the document adds an empty paragraph below it, and ArrowUp on the first line of one that starts the document adds one above it (`exitBlock`). Elsewhere the browser moves the caret. When it passes over a block that holds a caret (Firefox skips list items, which are flex boxes, and WebKit skips code blocks and tables), the editor moves the caret into that block at the same horizontal position. After any caret key the editor keeps the caret 8 px clear of the scroll container's edge. Backspace at the start of a block is handled on `keydown`, because WebKit sends no `beforeinput` there when no editable text comes before the caret. A click in the empty space below such a final block also adds a paragraph. Enter three times at the end of a code block still leaves it.
 5. **Markdown shortcuts** run after typed text: block rules on a space at the start of a block (`#`, `-`, `*`, `+`, `1.`, `[ ]`, `[x]`, `>`, ` ```lang `, `---`) and inline rules when a closing `*`, `_`, `` ` `` or `~` is typed. Undo restores the typed characters.
 
 Selection: on `selectionchange`, the DOM selection is read into the model. After each change, the model selection is written back to the DOM, only when it differs.
@@ -117,8 +121,48 @@ Each history entry is a snapshot of `{ doc, selection }` from before a change. T
 - **Popups** are appended to `document.body` with `position: fixed`, so a parent with `overflow: hidden` (a chat input, a modal) does not clip them. They copy the editor's theme variables and flip above the anchor when there is no room below.
 - **Suggestion menus** (`suggestion()`) open when their trigger character is typed at the start of a block or after a space, and track the query typed after it. Items may be async; results for an outdated query are dropped. A menu with no items hides but keeps tracking, so it comes back when the query matches again. Suggestions do not open in table cells, code or raw blocks.
 - **Slash menu** is a suggestion menu. It opens on `/` (or the full-width `／` from Japanese IMEs) at the start of a block or after a space. Typing filters it. Picking a text type (paragraph, heading, list, quote, code) converts the current block in place and keeps its text; a table or divider goes below the block, or replaces it if empty. It shows "No results" until the query passes three characters with no match, then hides. The menu is a listbox wired to the editor with `aria-activedescendant`. It rebuilds only when the query changes, so a late `selectionchange` does not reset the highlighted item.
-- **Block handle** appears on hover next to tables and code blocks only, and follows the caret into them on touch devices. It opens the block menu: Duplicate, Delete and, with the caret in a table cell, row, column and alignment actions. Mod+/ opens the same menu from the keyboard inside those blocks. Other blocks have no handle; they change type through the slash menu or Markdown shortcuts.
-- **Formatting toolbar** appears over a non-empty selection: bold, italic, strikethrough, code and link. It does not change block types. Buttons show their state with `aria-pressed`. On touch devices it sits below the selection, away from the native selection menu.
+- **Block handle** is a grip icon. It appears on hover next to tables and code blocks only, and follows the caret into them on touch devices. It opens the block menu: Duplicate, Delete and, with the caret in a table cell, row, column and alignment actions. Mod+/ opens the same menu from the keyboard inside those blocks. Other blocks have no handle; they change type through the slash menu or Markdown shortcuts.
+- **Formatting toolbar** appears over a non-empty selection: bold, italic, strikethrough, code and link, each an icon button named by its label (`aria-label` and a tooltip with the shortcut). It does not change block types. Buttons show their state with `aria-pressed`. On touch devices it sits below the selection, away from the native selection menu.
+
+## Icons
+
+Every icon in the editor's UI comes from [Lucide](https://lucide.dev), the icon set memos uses through `lucide-react`, so the editor's menus match the app around it. Before this, the UI used Unicode characters (`⋮⋮`, `🗑`, `⊞`), which look different in every font and operating system, and an emoji such as `🗑` renders in color.
+
+**Decisions**
+
+- **The icons are copied, not imported.** `icons.ts` holds the SVG data of the icons the editor uses, taken from `lucide-static`, with the Lucide version and its ISC license notice in a `/*! … */` comment that the build keeps. A dependency on `lucide` or `lucide-react` would break the "zero runtime dependencies" rule (see "Summary of decisions") for 26 icons, and `lucide-react` would tie the core to React. To update an icon, copy its new data from the same package and change the version in the comment.
+- **Icons are built with `createElementNS`, never from markup.** This keeps the editor working under a Content Security Policy with Trusted Types, and no host string is ever parsed as HTML. Each icon is an `<svg class="mbe-icon">` with Lucide's attributes (24×24 view box, `stroke="currentColor"`, stroke width 2, round caps and joins), `aria-hidden="true"`, and its size set in CSS. The control around the icon carries its accessible name.
+- **Icons take the color of the text around them** (`currentColor`), so `theme.tokens`, a highlighted menu row and the danger color of "Delete" apply to the icon too. `base.css` sets the icon size (16px); `theme.css` gives menu icons the muted color, except in a danger row such as "Delete", where the icon takes the row's color.
+- **The `icons` option replaces any built-in icon.** It maps an icon name to either a string, shown as text (an emoji or a letter, as before), or an `Element`, such as an `<svg>` from another icon set, which is cloned for every place it appears. Names are the keys of `labels` for the same control, so `icons.delete` goes with `labels.delete`. Like `labels`, the option is fixed for the editor's lifetime. The React wrapper passes it through as a prop that is read on mount.
+- **Suggestion items take the same kinds of icon.** `SuggestionItem.icon` is a string (text, as before) or an `Element` (cloned). An extension's menu can therefore show Lucide icons next to the built-in ones.
+
+**The built-in icons**
+
+| Where | Icon name (key of `icons` and `labels`) | Lucide icon |
+| --- | --- | --- |
+| Slash menu | `text`, `heading1`, `heading2`, `heading3` | `type`, `heading-1`, `heading-2`, `heading-3` |
+| Slash menu | `bulletList`, `numberedList`, `todoList` | `list`, `list-ordered`, `list-todo` |
+| Slash menu | `quote`, `code`, `table`, `divider` | `text-quote`, `square-code`, `table`, `minus` |
+| Block menu | `duplicate`, `delete` | `copy`, `trash` |
+| Block menu, table cell | `addRowAbove`, `addRowBelow`, `addColumnLeft`, `addColumnRight` | `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right` |
+| Block menu, table cell | `alignLeft`, `alignCenter`, `alignRight` | `text-align-start`, `text-align-center`, `text-align-end` |
+| Block menu, table cell | `deleteRow`, `deleteColumn` | `trash` |
+| Formatting toolbar | `bold`, `italic`, `strike`, `inlineCode`, `link` | `bold`, `italic`, `strikethrough`, `code`, `link` |
+| Block handle | `blockHandle` | `grip-vertical` |
+
+That is 28 places and 26 distinct icons.
+
+**Not icons.** The bullet list marker (`•`) is part of the rendered document, styled like the text, and stays a character. The checkmark in a checked task box is already Lucide's `check` path; it stays a data URI in `theme.css` because it is drawn as the checkbox's background.
+
+**Requirements**
+
+- No Unicode glyph remains as an icon in the editor's UI: every menu row, toolbar button and the block handle renders an `svg.mbe-icon`, unless the host replaced it with a string.
+- The built-in icons add at most 3 KB gzipped to `dist/index.js`.
+- An `icons` entry replaces exactly that icon, in every place it appears, and leaves the others as built in.
+- Toolbar buttons keep their accessible names, tooltips and `aria-pressed` state; tests find them by name, not by text.
+- The core still has no `dependencies` in `package.json`.
+
+**Non-goals.** React elements as icons (`<Trash2 />` from `lucide-react`) are not accepted: the core is not React, and rendering React into every menu row costs more than it gives. The built-in icons are already Lucide's, so memos needs no override. An app that wants another set passes `<svg>` elements. Icon size and stroke width are CSS, not options.
 
 ## Extension points
 
@@ -131,6 +175,8 @@ Each history entry is a snapshot of `{ doc, selection }` from before a change. T
 - **Selections as JSON** are block indexes and offsets. Loading the same Markdown always gives the same blocks, so a stored selection fits after a reload; a value that does not fit is clamped and a value that is not a selection is ignored.
 
 ## Styling
+
+Paragraphs, headings, quotes, list items and table cells have `dir="auto"`, so each takes its direction from its first letter: a Hebrew or Arabic line reads right to left, its list marker moves to the right, and the CSS uses logical properties (`padding-inline-start`, `border-inline-start`, `text-align: start`) so indents and borders follow. Code and raw blocks keep the editor's direction.
 
 `style.css` imports `base.css` (layout the editor needs, and every margin between blocks) and `theme.css` (colors, fonts, borders and backgrounds). `base.css` sets no colors or fonts; its menus use system colors (`Canvas`, `Highlight`) so they stay readable without `theme.css`. Its spacing selectors are at least two classes strong, so a host's single utility class with a margin cannot change the rhythm. The `theme.classes` option adds host classes to elements in the same pass that builds them (`renderBlock`, `wrapMarks`, `renderSpan`), so they apply when editing and when read-only alike. Changing the classes re-renders every block; setting the same classes again does nothing. Colors are `light-dark()` values that read `--mbe-<name>-light` and `--mbe-<name>-dark` with the default palette as fallback, so one rule covers both schemes and `theme.tokens` only sets those variables on the root; `theme.colorScheme` sets the root's `color-scheme`. Neither re-renders. Popups live in `document.body`, so they copy the computed variables and the root's `color-scheme` when they open. The default look styles the document like a rendered Markdown view, and the same rules apply when editing and when read-only: read-only adds no visual change except the pointer cursor on links and checkboxes. Checkboxes use `appearance: none`, so a disabled checkbox is not greyed out by the browser, and the code block language field has the same color when disabled. Every block has the block gap above and below, and vertical margins collapse, so blocks sit one gap apart and a heading's or divider's larger margin wins. Blocks are siblings in one flat list, so list and quote grouping depends on neighbours. The renderer marks it with attributes after each render (`data-list-start` on the first item of a list, including where a numbered list meets a bullet list, and `data-quote-joined` on a quote block that follows another), and the CSS uses those: list items sit 2px apart with the gap around the list, and joined quote blocks show one unbroken bar. See the sibling selector note under Performance. A browser test compares screenshots of the sample document in both modes.
 
@@ -153,7 +199,7 @@ Each history entry is a snapshot of `{ doc, selection }` from before a change. T
 - Link titles and reference-style link labels are not kept. Links are saved inline.
 - A top-level paragraph holding only a no-break space (`&nbsp;`) becomes an empty paragraph. This is how empty lines are saved (see "Serializer").
 
-**Source-preserving save** (`source.ts`). Loading records, for each top-level Markdown block, its source lines and the model blocks it became (a "group"). Blocks are immutable and every edit replaces the blocks it touches, so a group whose blocks are all still the same objects, in the same order, was not edited. Saving writes such a group's original text, and the original text between two groups that are still neighbours. Other blocks go through the serializer. A kept list or quote next to an edited one is rewritten too, because Markdown would merge them, and so is a code fence without its closing line that is no longer last. The same check applies to two kept groups that were not neighbours in the source, which happens when the blocks between them are deleted: two lists that now meet are rewritten as one list, and a kept group that starts with indentation right after a list is rewritten so it does not become part of the list's last item. Link reference definitions that are no longer written are added at the end, so reference links in kept blocks still resolve. With no edits, saving returns the input byte for byte; a test checks this for every spec example.
+**Source-preserving save** (`source.ts`). Loading records, for each top-level Markdown block, its source lines and the model blocks it became (a "group"). Blocks are immutable and every edit replaces the blocks it touches, so a group whose blocks are all still the same objects, in the same order, was not edited. Saving writes such a group's original text, and the original text between two groups that are still neighbours. Other blocks go through the serializer. A kept list or quote next to an edited one is rewritten too, because Markdown would merge them, and so is a code fence without its closing line that is no longer last. The same check applies to two kept groups that were not neighbours in the source, which happens when the blocks between them are deleted: two lists that now meet are rewritten as one list, and a kept group that starts with indentation right after a list is rewritten so it does not become part of the list's last item. Link reference definitions that are no longer written are added at the end, so reference links in kept blocks still resolve. With no edits, saving returns the input byte for byte; a test checks this for every spec example. A group whose only change is the `checked` state of task items (each changed block is a task item with the same ID, indent and content object) keeps its source too, with the character between the brackets of each changed item rewritten (` ` or `x`). The patched source is parsed again and kept only if it serializes the same as the current blocks; otherwise the group goes through the serializer. So ticking a box changes one byte of the saved Markdown.
 
 **Syntax extensions** (`markdown/options.ts`). An extension can add Markdown syntax that the editor keeps as source, so a renderer that knows it (remark-math, footnotes in remark-gfm) shows it and the editor never breaks it.
 
@@ -170,7 +216,7 @@ Each history entry is a snapshot of `{ doc, selection }` from before a change. T
 
 ## React wrapper
 
-`<MarkdownEditor>` creates one `Editor` per mount and forwards its `ref` to it. `onChange` fires at most once per animation frame. The wrapper keeps a short queue of the values it emitted, and calls `setMarkdown` only when a new `value` prop is not one of them, so a parent that re-renders with a slightly stale value does not overwrite newer typing. A new `value` that arrives while an IME is composing is held and applied on `compositionend`. `placeholder`, `editable`, `attributes` and `resolveImageSrc` go through `setOptions`. The editor is recreated, keeping its Markdown, only when the names of its extensions change. `onSubmit(markdown)` receives the current Markdown after flushing pending changes.
+`<MarkdownEditor>` creates one `Editor` per mount and forwards its `ref` to it. `onChange` fires at most once per animation frame. The wrapper keeps a short queue of the values it emitted, and calls `setMarkdown` only when a new `value` prop is not one of them, so a parent that re-renders with a slightly stale value does not overwrite newer typing. It calls `onChange` inside `flushSync`, so the parent renders each emitted value at once, as React does for a native input's `onChange`. Otherwise the update could still be queued when the parent sets a value that equals the one it last rendered, such as clearing the box right after fast typing and Mod+Enter, and the wrapper would not see a new `value` and would keep the typed text. A new `value` that arrives while an IME is composing is held and applied on `compositionend`. `placeholder`, `editable`, `taskToggle`, `attributes` and `resolveImageSrc` go through `setOptions`. The editor is recreated, keeping its Markdown, only when the names of its extensions change. `onSubmit(markdown)` receives the current Markdown after flushing pending changes.
 
 `useEditor(options, deps)` creates an editor on a detached element and `<EditorContent>` moves that element into the page, as in Tiptap. Autofocus waits until the element is mounted.
 
@@ -205,13 +251,13 @@ The cold-load result depends on the JavaScript engine warming up: about half of 
 | `npm run typecheck` | TypeScript in strict mode. |
 | `npm run build` | The published files in `packages/editor/dist`: ES modules bundled with esbuild (`index.js`, `react.js`, the two entity files), the stylesheets, and type declarations from `tsc`. |
 
-CI (`.github/workflows/ci.yml`) runs the typecheck, unit tests, build and the Chromium and themed browser tests on every push to main and every pull request. The timing gates are left out because shared runners are too noisy for them.
+CI (`.github/workflows/ci.yml`) runs the typecheck, unit tests, build and the browser tests in Chromium (plain and themed), Firefox and WebKit on every push to main and every pull request. Firefox and WebKit each run in two shards, as four jobs side by side. Tests that drive IME through the Chrome DevTools Protocol run in Chromium only. The timing gates are left out because shared runners are too noisy for them.
 
 IME is simulated through the Chrome DevTools Protocol. Real input methods are covered by the manual checklist in `docs/ime-checklist.md`.
 
 ## Risks and gaps
 
-- **Only Chromium is tested.** Firefox and WebKit could not be installed in the development container. Safari and Firefox fire composition and `beforeinput` events in a different order, so this is the largest remaining risk. Playwright projects for both should be added where the browsers are available.
+- **Firefox and WebKit are Playwright's builds**, not the Firefox and Safari people use. They run the whole browser suite in CI, but on Linux, so macOS and iOS key bindings (Cmd+arrows, Option+Backspace) are not covered.
 - **IME was simulated**, not typed with a real IME. `e2e/ime.spec.ts` drives composition through the Chrome DevTools Protocol and dispatches the events mobile keyboards send; `docs/ime-checklist.md` lists what still needs a real device. The manual checklist needs an owner before release.
 - **Spellcheck and autocorrect** replacements (`insertReplacementText`) are handled but not tested.
 - **The load-time gate fails** (see "Performance"). Load time should be measured on a laptop before deciding what to optimize.

@@ -122,10 +122,13 @@ function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HT
     case 'heading':
     case 'quote':
       root = el(block.type === 'paragraph' ? 'p' : block.type === 'quote' ? 'blockquote' : `h${block.level}`);
+      root.dir = 'auto';
       fillContent(root, block.content, ctx, block, reveal);
       break;
     case 'listItem': {
       root = el('div');
+      // The marker has no letters, so the item's text decides the side it sits on.
+      root.dir = 'auto';
       root.dataset.listType = block.listType;
       root.dataset.indent = String(block.indent);
       const marker = el('span', 'mbe-marker');
@@ -191,6 +194,7 @@ function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HT
         row.forEach((cell, c) => {
           const td = el(r === 0 ? 'th' : 'td');
           td.contentEditable = 'true';
+          td.dir = 'auto';
           td.dataset.row = String(r);
           td.dataset.col = String(c);
           const align = block.align[c];
@@ -235,7 +239,13 @@ function fillContent(
     return;
   }
   const decorations = decorated && ctx.decorate ? ctx.decorate(block, inline, cell) : [];
-  renderInline(inline, target, ctx, decorations, reveal, cell);
+  const only = inline.length === 1 ? inline[0]! : null;
+  if (only && decorations.length === 0 && only.marks.length === 0 && !only.link && !only.token && !only.image) {
+    // Plain text, the most common content: one text node.
+    target.appendChild(doc.createTextNode(only.text));
+  } else {
+    renderInline(inline, target, ctx, decorations, reveal, cell);
+  }
   // A trailing line break needs a <br> after it to show the empty last line.
   const last = inline[inline.length - 1];
   if (last && last.text.endsWith('\n')) target.appendChild(fill(doc));

@@ -1,7 +1,6 @@
 // Extension hooks and the default key bindings.
 
-import { expect, test } from '@playwright/test';
-import { blocks, md } from './helpers';
+import { blocks, expect, md, test } from './helpers';
 
 test('default keys: block types, strikethrough, and Escape selects the block, then blurs', async ({ page }) => {
   await page.goto('/?empty');
@@ -82,7 +81,7 @@ test('handlePaste can take over a paste; dropped text lands at the drop point', 
     page.evaluate((text) => {
       const data = new DataTransfer();
       data.setData('text/plain', text);
-      document.querySelector('#editor p')!.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+      document.querySelector('#editor p')!.dispatchEvent((window as any).clipboardEvent('paste', data));
     }, text);
   await page.locator('#editor').click();
   await page.keyboard.press('End');
@@ -248,7 +247,7 @@ test('fileHandler: pasted and dropped files reach the app; text paste still work
         const target = document.querySelector('#editor p')!;
         const event =
           type === 'paste'
-            ? new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true })
+            ? (window as any).clipboardEvent('paste', data)
             : new DragEvent('drop', { dataTransfer: data, clientX: point!.x, clientY: point!.y, bubbles: true, cancelable: true });
         target.dispatchEvent(event);
       },

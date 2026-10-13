@@ -13,6 +13,7 @@ export {
   type SlashItemId,
 } from './editor';
 export { DEFAULT_LABELS, type Labels } from './labels';
+export type { Icon, IconName, Icons } from './icons';
 export * from './model';
 export * as commands from './commands';
 export { parseMarkdown } from './markdown/parse';

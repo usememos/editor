@@ -1,7 +1,6 @@
 // The public Editor API: commands, state queries, selection, events and options.
 
-import { expect, test } from '@playwright/test';
-import { blocks, md } from './helpers';
+import { blocks, expect, md, test } from './helpers';
 
 const open = (page: import('@playwright/test').Page, markdown: string) => page.goto(`/?md=${encodeURIComponent(markdown)}`);
 

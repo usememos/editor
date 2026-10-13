@@ -94,6 +94,7 @@
   cursor: pointer;
 }
 .mbe-root.mbe-readonly .mbe-checkbox { cursor: default; }
+.mbe-root.mbe-readonly.mbe-tasks .mbe-checkbox { cursor: pointer; }
 
 /* Links: the text cursor while editing, so clicking places the caret. */
 .mbe-root a.mbe-link { cursor: text; }
@@ -135,7 +136,7 @@
   padding: 4px 8px;
   min-width: 4em;
   vertical-align: top;
-  text-align: left;
+  text-align: start;
   outline: none;
 }
 
@@ -165,6 +166,7 @@
    System colors keep menus readable when theme.css is not loaded. */
 
 .mbe-ui { z-index: 1000; }
+.mbe-icon { display: block; flex: none; width: 16px; height: 16px; }
 .mbe-ui[hidden] { display: none !important; }
 .mbe-menu,
 .mbe-toolbar,
@@ -196,8 +198,12 @@
   color: inherit;
   background: none;
   border: none;
-  padding: 4px 8px;
+  padding: 4px 6px;
   min-width: 28px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
 }
 .mbe-tool.mbe-active { background: Highlight; color: HighlightText; }
@@ -214,5 +220,8 @@
   border: none;
   background: none;
   color: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
 }

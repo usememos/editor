@@ -6,9 +6,13 @@ A block editor for standard Markdown, for React or any web app.
 - Block editing: slash menu, a formatting toolbar, Markdown shortcuts, and a block handle on tables and code blocks.
 - One package, `@usememos/editor`, with zero runtime dependencies. It works without a framework, and `@usememos/editor/react` is a thin React wrapper.
 
-Status: v0 in development, not published yet. [docs/syntax.md](docs/syntax.md) specifies the Markdown it reads and writes, and [docs/architecture.md](docs/architecture.md) explains how it works.
+Status: early releases, published to npm as [`@usememos/editor`](https://www.npmjs.com/package/@usememos/editor). Versions follow memos' CalVer (`26.10`, `26.10.1`) and do not signal breaking changes, so pin an exact version. [docs/syntax.md](docs/syntax.md) specifies the Markdown it reads and writes, and [docs/architecture.md](docs/architecture.md) explains how it works.
 
 ## Use it
+
+```sh
+npm install @usememos/editor
+```
 
 React:
 
@@ -49,21 +53,23 @@ The same names work in `new Editor(options)` and as React props, except that Rea
 | `extensions` | `Extension[]` | Adds syntax and behavior. Built in: `math()` (`$…$` and `$$` blocks), `footnotes()` (`[^1]` and `[^1]: …`), `tags()` (`#tag`) and `mentions()` (`@name`). Extension syntax is saved verbatim, and shown as source unless the extension renders it (see `views`). |
 | `placeholder` | `string` | Shown when the document is empty. |
 | `editable` | `boolean` | Default `true`. With `false`, no editing, and links open on click. |
+| `taskToggle` | `boolean` | Default `false`. While `editable` is `false`, lets the user tick and untick task items, for example for a memo's owner. Each tick emits `change` with Markdown in which only that item's `[ ]` or `[x]` changed. Ignored while `editable` is `true`. |
 | `autofocus` | `boolean \| 'start' \| 'end'` | Focuses the editor on creation, with the caret at the start or the end. |
 | `attributes` | `Record<string, string>` | Attributes for the editable root, such as `autocorrect`, `autocapitalize` or `aria-label`. |
 | `resolveImageSrc` | `(src) => string` | The URL to display for an image. The saved Markdown keeps the original `src`. |
 | `toolbar` | `boolean` | Shows the formatting toolbar on selection. Default `true`. |
 | `slashMenu` | `false \| string[]` | Built-in slash menu items to show, in order, or `false` for none: `text`, `heading1`, `heading2`, `heading3`, `bulletList`, `numberedList`, `todoList`, `quote`, `code`, `table`, `divider`. |
 | `labels` | `Partial<Labels>` | Overrides UI strings, for localization. See `src/labels.ts`. |
+| `icons` | `Partial<Record<IconName, string \| Element>>` | Replaces built-in icons, which are [Lucide](https://lucide.dev) icons. A string is shown as text; an element, such as an `<svg>`, is cloned for every place it appears. Names match the `labels` keys of the same controls: the slash menu items, `duplicate`, `delete`, the table actions, `bold`, `italic`, `strike`, `inlineCode`, `link` and `blockHandle`. |
 | `onChange` | `(markdown: string) => void` | Called after document changes, at most once per animation frame. |
 | `onSubmit` | `(markdown: string) => void` | Called on Mod+Enter or Ctrl+Enter with the current Markdown, for comment boxes and chat inputs. |
 | `onFocus`, `onBlur` | `() => void` | Focus events. |
 
 For note-style Markdown, as in the playground, use `markdown: { breaks: true, setext: false }` and `extensions: [math(), footnotes(), tags(), mentions()]`.
 
-`editor.setOptions({ placeholder, editable, attributes, resolveImageSrc })` changes those options while the editor runs. The other options are fixed for the editor's lifetime.
+`editor.setOptions({ placeholder, editable, taskToggle, attributes, resolveImageSrc })` changes those options while the editor runs. The other options are fixed for the editor's lifetime.
 
-In React, `placeholder`, `editable`, `attributes` and `resolveImageSrc` update live. A change to the names in `extensions` recreates the editor and keeps its Markdown, so an inline array is fine. Other props are read on mount; change the component's `key` to apply new values. A `ref` gives the core `Editor` instance. A `value` that arrives while an input method (IME) is composing text is applied when the composition ends.
+In React, `placeholder`, `editable`, `taskToggle`, `attributes` and `resolveImageSrc` update live. A change to the names in `extensions` recreates the editor and keeps its Markdown, so an inline array is fine. Other props are read on mount; change the component's `key` to apply new values. A `ref` gives the core `Editor` instance. A `value` that arrives while an input method (IME) is composing text is applied when the composition ends.
 
 For apps that manage the editor instance themselves, `useEditor(options, deps)` creates one and `<EditorContent editor={editor} />` shows it:
 
@@ -84,7 +90,7 @@ function Composer() {
 | `setMarkdown(markdown, { history? })` | Replaces the document. `history: 'clear'` (default) clears undo history; `'keep'` makes the replacement one undo step. Does not emit `change`. |
 | `isEmpty` | True when the document holds only empty paragraphs. |
 | `state` | The document and selection, immutable. |
-| `commands.*` | Edits. Each applies one change, records one undo step, and returns `true` if it did something: `toggleBold`, `toggleItalic`, `toggleStrike`, `toggleCode`, `setParagraph`, `toggleHeading({ level })`, `toggleBulletList`, `toggleOrderedList`, `toggleTaskList`, `toggleBlockquote`, `toggleCodeBlock({ language? })`, `setLink({ href })`, `unsetLink`, `insertText(text, { range? })`, `insertMarkdown(markdown, options?)`, `insertTable({ rows?, cols? })`, `insertDivider`, `indent`, `outdent`, `undo`, `redo`, `selectAll`, `selectBlocks`, `focus(position?)`, `blur`. `selectBlocks` selects the blocks the selection touches as whole blocks, as Escape does; it returns `false` when read-only. |
+| `commands.*` | Edits. Each applies one change, records one undo step, and returns `true` if it did something: `toggleBold`, `toggleItalic`, `toggleStrike`, `toggleCode`, `setParagraph`, `toggleHeading({ level })`, `toggleBulletList`, `toggleOrderedList`, `toggleTaskList`, `toggleBlockquote`, `toggleCodeBlock({ language? })`, `setLink({ href })`, `unsetLink`, `insertText(text, { range? })`, `insertMarkdown(markdown, options?)`, `insertTable({ rows?, cols? })`, `insertDivider`, `indent`, `outdent`, `undo`, `redo`, `selectAll`, `selectBlocks`, `focus(position?)`, `blur`, `scrollIntoView`. `selectBlocks` selects the blocks the selection touches as whole blocks, as Escape does; it returns `false` when read-only. `scrollIntoView` changes nothing in the document: it scrolls the caret into view in the editor's scrolling containers and the window, for example after an `insertMarkdown` from code. |
 | `run(fn)` | Applies a custom command: a function from state to a new state, or `null`. The pure commands are exported as `commands` from the package. |
 | `isActive(name, attrs?)` | `bold`, `italic`, `strike`, `code`, `link`, or the type of the block with the caret: `paragraph`, `heading`, `bulletList`, `orderedList`, `taskList`, `blockquote`, `codeBlock`, `table`, `divider`, `raw`. `attrs` narrows it, for example `isActive('heading', { level: 2 })`. |
 | `getAttributes(name)` | `href` of a link, `level` of a heading, `language` of a code block, `checked` of a task, `syntax` of a raw block. |

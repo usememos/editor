@@ -1,7 +1,6 @@
 // Rendered views: math shows as formulas, and its source shows at the caret.
 
-import { expect, test } from '@playwright/test';
-import { md } from './helpers';
+import { expect, md, test } from './helpers';
 
 const DOC = 'Euler $e^{i\\pi}+1=0$ here\n\n$$\n\\frac{1}{2}\n$$\n\nend';
 const open = (page: import('@playwright/test').Page) => page.goto(`/?md=${encodeURIComponent(DOC)}`);

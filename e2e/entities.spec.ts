@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { expect, test } from '@playwright/test';
+import { expect, test } from './helpers';
 
 const coreSrc = fileURLToPath(new URL('../packages/editor/src', import.meta.url));
 

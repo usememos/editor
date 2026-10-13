@@ -52,7 +52,7 @@ const write = (key: string, value: string) => {
     // Storage may be unavailable; the draft just is not kept.
   }
 };
-// Writes wait until typing pauses (a 100 KB draft on every keystroke is slow), and flush when the page goes away.
+// Draft writes wait until typing pauses (a 100 KB draft on every keystroke is slow), and flush when the page goes away.
 const pending = new Map<string, () => string>();
 let saveTimer = 0;
 const flush = () => {
@@ -186,8 +186,10 @@ if (caret) {
     // Ignore a broken value.
   }
 }
+// The caret is a few bytes, so it is saved at once. Firefox may not show a
+// write made while the page unloads to the page that replaces it.
 editor.on('selectionChange', () => {
-  if (!fromUrl) saveLater(CARET_KEY, () => JSON.stringify(editor.selectionToJSON()));
+  if (!fromUrl) saveNow(CARET_KEY, JSON.stringify(editor.selectionToJSON()));
 });
 
 // Formatting bar with active state: [label, title, command, isActive name, attributes].

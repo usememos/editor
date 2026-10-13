@@ -1,5 +1,4 @@
-import { expect, test } from '@playwright/test';
-import { md } from './helpers';
+import { expect, md, test } from './helpers';
 
 const open = (page: import('@playwright/test').Page, markdown: string) =>
   page.goto(`/?md=${encodeURIComponent(markdown)}`);

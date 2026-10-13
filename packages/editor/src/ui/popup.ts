@@ -4,6 +4,8 @@
 // container with `overflow: hidden` (a chat input, a card) does not clip
 // them. Theme variables are copied from the editor root when a popup opens.
 
+import { type Icon, iconNode } from '../icons';
+
 const THEME_VARS = [
   '--mbe-font',
   '--mbe-mono',
@@ -57,10 +59,31 @@ export class Popup {
     this.open = true;
 
     const view = doc.defaultView!;
-    const { offsetWidth: w, offsetHeight: h } = this.el;
-    let top = placement === 'below' ? rect.bottom + gap : rect.top - h - gap;
-    if (placement === 'below' && top + h > view.innerHeight - 8 && rect.top - h - gap > 8) top = rect.top - h - gap;
-    if (placement === 'above' && top < 8) top = rect.bottom + gap;
+    // Where it does not fit, it goes on the side with more room and scrolls,
+    // as on a phone with the keyboard open.
+    // Measured at full height; keep the scroll position when it shrinks again.
+    const scrolled = this.el.scrollTop;
+    this.el.style.maxHeight = '';
+    const w = this.el.offsetWidth;
+    let h = this.el.offsetHeight;
+    const below = view.innerHeight - 8 - (rect.bottom + gap);
+    const above = rect.top - gap - 8;
+    let side = placement;
+    if (side === 'below' && h > below && above > below) side = 'above';
+    else if (side === 'above' && h > above && below > above) side = 'below';
+    const room = side === 'below' ? below : above;
+    if (h > room) {
+      // With content-box sizing, max-height leaves out padding and borders.
+      const cs = view.getComputedStyle(this.el);
+      const extra =
+        cs.boxSizing === 'border-box'
+          ? 0
+          : ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth'].reduce((n, k) => n + parseFloat(cs[k as 'paddingTop']), 0);
+      this.el.style.maxHeight = `${Math.max(Math.floor(room - extra), 80)}px`;
+      h = this.el.offsetHeight;
+      this.el.scrollTop = scrolled;
+    }
+    const top = side === 'below' ? rect.bottom + gap : rect.top - h - gap;
     const left = Math.max(8, Math.min(rect.left, view.innerWidth - w - 8));
     this.el.style.left = `${Math.round(left)}px`;
     this.el.style.top = `${Math.round(top)}px`;
@@ -90,8 +113,8 @@ export class Popup {
 export interface MenuItem {
   id: string;
   label: string;
-  /** Short glyph shown before the label. */
-  icon?: string;
+  /** Shown before the label: text, or an element that is cloned. */
+  icon?: Icon;
   /** Extra words that match when filtering. */
   aliases?: string[];
   danger?: boolean;
@@ -156,7 +179,8 @@ export class Menu {
         if (item.danger) row.classList.add('mbe-danger');
         const icon = doc.createElement('span');
         icon.className = 'mbe-menu-icon';
-        icon.textContent = item.icon ?? '';
+        const content = iconNode(doc, item.icon);
+        if (content) icon.appendChild(content);
         const label = doc.createElement('span');
         label.className = 'mbe-menu-label';
         label.textContent = item.label;

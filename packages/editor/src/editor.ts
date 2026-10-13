@@ -16,6 +16,7 @@ import { docToHtml } from './clipboard/toHtml';
 import { htmlToDoc } from './clipboard/fromHtml';
 import { type ChangeKind, History } from './history';
 import { DEFAULT_LABELS, type Labels } from './labels';
+import { type Icon, type IconName, type Icons, builtinIcon } from './icons';
 import { parseMarkdown } from './markdown/parse';
 import { serializeBlocks, serializeMarkdown } from './markdown/serialize';
 import { type MarkdownSource, loadMarkdown } from './markdown/source';
@@ -33,6 +34,7 @@ import {
   type HeadingLevel,
   type Mark,
   type Position,
+  type RawBlock,
   type Selection,
   blockIndex,
   clampSelection,
@@ -55,6 +57,7 @@ import { BlockHandle } from './ui/handle';
 import { Menu, type MenuSection, isMac, isTouch, matches } from './ui/popup';
 import { BLOCK_ATTR, BlockRenderer, childIndex, contentElement, domText, domToPosition, positionToDom, safeHref } from './view/dom';
 import { revealedViews, sameRevealed, viewEntry } from './view/reveal';
+import { scrollRectIntoView } from './view/scroll';
 import { type Theme, mergeClasses, tokenProperties } from './theme';
 
 export interface EditorOptions {
@@ -70,6 +73,8 @@ export interface EditorOptions {
   placeholder?: string;
   /** Default true. */
   editable?: boolean;
+  /** While `editable` is false, lets the user tick and untick task items. Default false. */
+  taskToggle?: boolean;
   /** Focus on creation: `true` or `'start'` puts the caret at the start, `'end'` at the end. */
   autofocus?: boolean | 'start' | 'end';
   /** Attributes for the editable root, such as `autocorrect` or `aria-label`. */
@@ -80,6 +85,8 @@ export interface EditorOptions {
   theme?: Theme;
   /** Overrides UI strings. */
   labels?: Partial<Labels>;
+  /** Replaces built-in icons, by the `labels` key of the same control. A string is shown as text; an element is cloned. */
+  icons?: Icons;
   /** Shows the formatting toolbar on selection. Default true. */
   toolbar?: boolean;
   /** IDs of built-in slash menu items to show, in order, or false for no slash menu. See SLASH_ITEM_IDS. */
@@ -93,7 +100,7 @@ export interface EditorOptions {
 }
 
 /** Options that `setOptions` can change while the editor runs. */
-export type RuntimeOptions = Pick<EditorOptions, 'placeholder' | 'editable' | 'attributes' | 'resolveImageSrc' | 'theme'>;
+export type RuntimeOptions = Pick<EditorOptions, 'placeholder' | 'editable' | 'taskToggle' | 'attributes' | 'resolveImageSrc' | 'theme'>;
 
 export interface EditorEvents {
   /** After document changes, at most once per animation frame. */
@@ -177,6 +184,8 @@ export interface EditorCommands {
   selectBlocks(): boolean;
   focus(position?: 'start' | 'end' | Position): boolean;
   blur(): boolean;
+  /** Scrolls the caret (the selection's focus end) into view, in scrolling containers and the window. */
+  scrollIntoView(): boolean;
 }
 
 export const SLASH_ITEM_IDS = [
@@ -196,40 +205,42 @@ export type SlashItemId = (typeof SLASH_ITEM_IDS)[number];
 
 interface BlockItem {
   id: SlashItemId;
-  icon: string;
   aliases: string[];
   spec: cmd.BlockTypeSpec;
 }
 
 /** Block types for the slash menu. Each label is `labels[id]`. */
 const BLOCK_ITEMS: readonly BlockItem[] = [
-  { id: 'text', icon: 'T', aliases: ['paragraph', 'plain'], spec: { type: 'paragraph' } },
-  { id: 'heading1', icon: 'H1', aliases: ['h1', 'title'], spec: { type: 'heading', level: 1 } },
-  { id: 'heading2', icon: 'H2', aliases: ['h2', 'subtitle'], spec: { type: 'heading', level: 2 } },
-  { id: 'heading3', icon: 'H3', aliases: ['h3'], spec: { type: 'heading', level: 3 } },
-  { id: 'bulletList', icon: '•', aliases: ['ul', 'unordered', 'bullet'], spec: { type: 'listItem', listType: 'bullet' } },
-  { id: 'numberedList', icon: '1.', aliases: ['ol', 'ordered'], spec: { type: 'listItem', listType: 'ordered' } },
-  { id: 'todoList', icon: '☐', aliases: ['task', 'checkbox', 'checklist'], spec: { type: 'listItem', listType: 'task' } },
-  { id: 'quote', icon: '❝', aliases: ['blockquote', 'citation'], spec: { type: 'quote' } },
-  { id: 'code', icon: '</>', aliases: ['pre', 'snippet', 'fence'], spec: { type: 'code' } },
-  { id: 'table', icon: '⊞', aliases: ['grid'], spec: { type: 'table' } },
-  { id: 'divider', icon: '—', aliases: ['hr', 'separator', 'line', 'rule'], spec: { type: 'divider' } },
+  { id: 'text', aliases: ['paragraph', 'plain'], spec: { type: 'paragraph' } },
+  { id: 'heading1', aliases: ['h1', 'title'], spec: { type: 'heading', level: 1 } },
+  { id: 'heading2', aliases: ['h2', 'subtitle'], spec: { type: 'heading', level: 2 } },
+  { id: 'heading3', aliases: ['h3'], spec: { type: 'heading', level: 3 } },
+  { id: 'bulletList', aliases: ['ul', 'unordered', 'bullet'], spec: { type: 'listItem', listType: 'bullet' } },
+  { id: 'numberedList', aliases: ['ol', 'ordered'], spec: { type: 'listItem', listType: 'ordered' } },
+  { id: 'todoList', aliases: ['task', 'checkbox', 'checklist'], spec: { type: 'listItem', listType: 'task' } },
+  { id: 'quote', aliases: ['blockquote', 'citation'], spec: { type: 'quote' } },
+  { id: 'code', aliases: ['pre', 'snippet', 'fence'], spec: { type: 'code' } },
+  { id: 'table', aliases: ['grid'], spec: { type: 'table' } },
+  { id: 'divider', aliases: ['hr', 'separator', 'line', 'rule'], spec: { type: 'divider' } },
 ];
 
 /** Block menu actions for the table cell with the caret. Each label is `labels[id]`. */
-const TABLE_ITEMS: readonly { id: keyof Labels; icon: string; action: cmd.TableAction }[] = [
-  { id: 'addRowAbove', icon: '↑', action: { kind: 'addRowAbove' } },
-  { id: 'addRowBelow', icon: '↓', action: { kind: 'addRowBelow' } },
-  { id: 'addColumnLeft', icon: '←', action: { kind: 'addColumnLeft' } },
-  { id: 'addColumnRight', icon: '→', action: { kind: 'addColumnRight' } },
-  { id: 'alignLeft', icon: '⇤', action: { kind: 'align', align: 'left' } },
-  { id: 'alignCenter', icon: '↔', action: { kind: 'align', align: 'center' } },
-  { id: 'alignRight', icon: '⇥', action: { kind: 'align', align: 'right' } },
-  { id: 'deleteRow', icon: '✕', action: { kind: 'deleteRow' } },
-  { id: 'deleteColumn', icon: '✕', action: { kind: 'deleteColumn' } },
+const TABLE_ITEMS: readonly { id: IconName; action: cmd.TableAction }[] = [
+  { id: 'addRowAbove', action: { kind: 'addRowAbove' } },
+  { id: 'addRowBelow', action: { kind: 'addRowBelow' } },
+  { id: 'addColumnLeft', action: { kind: 'addColumnLeft' } },
+  { id: 'addColumnRight', action: { kind: 'addColumnRight' } },
+  { id: 'alignLeft', action: { kind: 'align', align: 'left' } },
+  { id: 'alignCenter', action: { kind: 'align', align: 'center' } },
+  { id: 'alignRight', action: { kind: 'align', align: 'right' } },
+  { id: 'deleteRow', action: { kind: 'deleteRow' } },
+  { id: 'deleteColumn', action: { kind: 'deleteColumn' } },
 ];
 
 const SLASH_CHARS = ['/', '／'];
+
+/** Keys that move the caret, which the browser handles unless the editor does. */
+const CARET_KEY = /^(Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown)$/;
 
 /** Input types of IME composition. The browser applies them; `input` reads them back. */
 const COMPOSITION_INPUT = new Set(['insertCompositionText', 'deleteCompositionText', 'insertFromComposition', 'deleteByComposition']);
@@ -262,6 +273,8 @@ export class Editor {
   private settleFrame: number | null = null;
   private readOnly: boolean;
   private wasReadOnly = false;
+  /** Task checkboxes stay usable while read-only. */
+  private taskToggle: boolean;
   private readonly options: EditorOptions;
   /** The extensions in priority order, ending with the default keymap unless one was given. */
   private readonly extensions: readonly Extension[];
@@ -280,6 +293,16 @@ export class Editor {
   private focused = false;
   /** A mouse button is down in the editor. Rendered views keep their state until it is released, so a drag is not disturbed. */
   private pointerDown = false;
+  /** The selection the formatting toolbar was closed for with Escape. It stays closed until the selection changes. */
+  private toolbarClosedFor: Selection | null = null;
+  /** Handling a key press, typed text, a paste or a drop: changes then scroll the caret into view. */
+  private typing = 0;
+  /**
+   * A caret key the browser is handling: the block the caret was in, the
+   * caret's x, and 1 or -1 for a plain ArrowDown or ArrowUp. The next
+   * selection change checks where the caret went (see `onSelectionChange`).
+   */
+  private caretKey: { from: number; x: number; vertical: 0 | 1 | -1 } | null = null;
 
   /** Suggestion menus from extensions, then the slash menu. */
   private readonly suggestions: { readonly config: SuggestionConfig; readonly menu: Menu }[];
@@ -307,6 +330,7 @@ export class Editor {
     this.runtime = {};
     this.labels = { ...DEFAULT_LABELS, ...options.labels };
     this.readOnly = options.editable === false;
+    this.taskToggle = options.taskToggle === true;
     const given = options.extensions ?? [];
     this.extensions = given.some((e) => e.name === 'defaultKeymap') ? given : [...given, defaultKeymap()];
     this.bindings = this.extensions.flatMap((ext) =>
@@ -357,19 +381,19 @@ export class Editor {
     this.toolbar = options.toolbar === false ? null : new FormatToolbar(this);
     this.handle = new BlockHandle(this);
 
-    this.listen(root, 'beforeinput', (e) => this.onBeforeInput(e as InputEvent));
-    this.listen(root, 'input', (e) => this.onInput(e as InputEvent));
+    this.listen(root, 'beforeinput', this.typed((e) => this.onBeforeInput(e as InputEvent)));
+    this.listen(root, 'input', this.typed((e) => this.onInput(e as InputEvent)));
     this.listen(root, 'compositionstart', (e) => this.onCompositionStart(e));
-    this.listen(root, 'compositionend', (e) => this.onCompositionEnd(e));
-    this.listen(root, 'keydown', (e) => this.onKeyDown(e as KeyboardEvent));
+    this.listen(root, 'compositionend', this.typed((e) => this.onCompositionEnd(e)));
+    this.listen(root, 'keydown', this.typed((e) => this.onKeyDown(e as KeyboardEvent)));
     this.listen(root, 'copy', (e) => this.onCopy(e as ClipboardEvent, false));
-    this.listen(root, 'cut', (e) => this.onCopy(e as ClipboardEvent, true));
-    this.listen(root, 'paste', (e) => this.onPaste(e as ClipboardEvent));
+    this.listen(root, 'cut', this.typed((e) => this.onCopy(e as ClipboardEvent, true)));
+    this.listen(root, 'paste', this.typed((e) => this.onPaste(e as ClipboardEvent)));
     this.listen(root, 'dragstart', (e) => e.preventDefault());
     this.listen(root, 'dragover', (e) => {
       if (!this.readOnly) e.preventDefault();
     });
-    this.listen(root, 'drop', (e) => this.onDrop(e as DragEvent));
+    this.listen(root, 'drop', this.typed((e) => this.onDrop(e as DragEvent)));
     this.listen(root, 'mousedown', (e) => this.onMouseDown(e as MouseEvent));
     this.listen(root, 'click', (e) => this.onClick(e as MouseEvent));
     this.listen(root, 'change', (e) => this.onControlChange(e));
@@ -576,13 +600,17 @@ export class Editor {
   // -------------------------------------------------------------------------
   // Options and events
 
-  /** Changes `placeholder`, `editable`, `attributes`, `resolveImageSrc` or `theme`. */
+  /** Changes `placeholder`, `editable`, `taskToggle`, `attributes`, `resolveImageSrc` or `theme`. */
   setOptions(options: RuntimeOptions): void {
+    const toggle = options.taskToggle !== undefined && options.taskToggle !== this.taskToggle;
+    if (toggle) this.taskToggle = options.taskToggle === true;
     if (options.editable !== undefined && options.editable === this.readOnly) {
       this.readOnly = !options.editable;
       this.refreshRevealed();
       this.applyReadOnly();
       this.hideUi();
+    } else if (toggle) {
+      this.applyReadOnly();
     }
     this.applyRuntime(options);
   }
@@ -648,6 +676,8 @@ export class Editor {
     if (this.readOnly) return false;
     let next = command(this.current);
     if (!next || next === this.current) return false;
+    next = cmd.dropBrokenTokens(next, this.current, this.markdown.inline);
+    next = cmd.clampListIndents(next, this.current);
     // A command that rebuilt the block list without changing any block changed nothing.
     if (next.doc !== this.current.doc && sameBlocks(next.doc, this.current.doc)) next = { ...next, doc: this.current.doc };
     if (next.doc === this.current.doc && next.selection === this.current.selection && next.storedMarks === this.current.storedMarks) {
@@ -725,6 +755,12 @@ export class Editor {
         this.blur();
         return had;
       },
+      scrollIntoView: () => {
+        const rect = this.caretRect();
+        if (!rect) return false;
+        scrollRectIntoView(this.root, rect);
+        return true;
+      },
     };
   }
 
@@ -765,6 +801,28 @@ export class Editor {
     return (content ?? el)?.getBoundingClientRect() ?? null;
   }
 
+  /** @internal The caret at the model's selection focus. Unlike `selectionRect`, works while the editor is not focused. */
+  caretRect(): DOMRect | null {
+    const pos = this.current.selection.focus;
+    const point = this.toDom(pos);
+    if (point) {
+      const range = this.root.ownerDocument.createRange();
+      range.setStart(point.node, point.offset);
+      const rects = range.getClientRects();
+      const rect = rects[rects.length - 1];
+      if (rect && rect.height > 0) return rect;
+    }
+    // An empty block, or a caret next to an atom, has no text to measure.
+    const el = this.renderer.elementFor(pos.blockId);
+    return ((el && contentElement(el, pos.cell)) ?? el)?.getBoundingClientRect() ?? null;
+  }
+
+  /** Scrolls the editor and the elements around it so the caret is visible. */
+  private scrollCaretIntoView(): void {
+    const rect = this.caretRect();
+    if (rect) scrollRectIntoView(this.root, rect);
+  }
+
   /** @internal The rendered element of a block. */
   blockElement(id: string): HTMLElement | undefined {
     return this.renderer.elementFor(id);
@@ -800,6 +858,7 @@ export class Editor {
 
   private commit(next: EditorState): void {
     const docChanged = next.doc !== this.state.doc;
+    const moved = next.selection !== this.state.selection;
     // Re-rendering a table replaces the focused cell, so remember focus first.
     const hadFocus = this.hasFocus();
     if (docChanged) this.relocateWidgets(this.current.doc, next.doc, false);
@@ -812,6 +871,9 @@ export class Editor {
     }
     this.paint(false, false, hadFocus);
     this.afterRender();
+    // Typing at the bottom of a scrolled editor keeps the caret in view. A
+    // change from code does not scroll; the app calls commands.scrollIntoView.
+    if (moved && hadFocus && this.typing > 0) this.scrollCaretIntoView();
     if (docChanged) this.scheduleChange();
     this.emit('selectionChange', { editor: this });
   }
@@ -862,14 +924,39 @@ export class Editor {
     if (this.root.contentEditable !== editable) this.root.contentEditable = editable;
     if (!this.readOnly && !this.wasReadOnly) return;
     this.wasReadOnly = this.readOnly;
+    const ticking = this.ticking;
     this.root.classList.toggle('mbe-readonly', this.readOnly);
+    this.root.classList.toggle('mbe-tasks', ticking);
     this.root.setAttribute('aria-readonly', String(this.readOnly));
     this.root.querySelectorAll<HTMLElement>('[data-row]').forEach((cell) => {
       cell.contentEditable = this.readOnly ? 'false' : 'true';
     });
     this.root.querySelectorAll<HTMLInputElement>('input').forEach((input) => {
-      input.disabled = this.readOnly;
+      const box = input.classList.contains('mbe-checkbox');
+      input.disabled = this.readOnly && !(box && ticking);
+      if (!box) return;
+      input.tabIndex = ticking ? 0 : -1;
+      if (ticking) input.setAttribute('aria-label', taskName(input, this.labels.task));
+      else input.removeAttribute('aria-label');
     });
+  }
+
+  /** True while read-only with task toggling on: only task checkboxes respond. */
+  private get ticking(): boolean {
+    return this.readOnly && this.taskToggle;
+  }
+
+  /** Toggles a task item from its checkbox, while editing or while read-only with `taskToggle`. */
+  private toggleTaskAt(box: HTMLElement): void {
+    const blockEl = box.closest<HTMLElement>('[data-block-id]');
+    if (!blockEl) return;
+    const id = blockEl.dataset.blockId!;
+    const focused = box === this.root.ownerDocument.activeElement;
+    if (!this.readOnly) this.run((s) => cmd.toggleTask(s, id));
+    else if (this.ticking && this.current.doc.blocks.some((b) => b.id === id)) this.apply(cmd.toggleTask(this.current, id), 'other');
+    else return;
+    // The item re-renders with a new checkbox; keep keyboard focus on it.
+    if (focused) this.root.querySelector<HTMLElement>(`[data-block-id="${id}"] .mbe-checkbox`)?.focus({ preventScroll: true });
   }
 
   /** Hints for empty blocks, and the UI that follows the selection. */
@@ -934,6 +1021,8 @@ export class Editor {
       if (!this.hasFocus()) this.updateUi();
       return;
     }
+    const key = this.caretKey;
+    this.caretKey = null;
     if (this.blockSel) {
       // Only the hidden caret moved: the browser may move it out of a block it
       // cannot hold a caret in (a divider). A click ends block selection on mousedown.
@@ -945,11 +1034,54 @@ export class Editor {
       this.updateUi();
       return;
     }
-    this.current = { ...this.state, selection, storedMarks: null };
-    this.history.breakGroup();
-    if (!this.pointerDown) this.refreshRevealed();
-    this.updateUi();
-    this.emit('selectionChange', { editor: this });
+    const skipped = key?.vertical ? this.skippedBlock(key.from, key.vertical, key.x, selection.focus) : null;
+    if (skipped) {
+      this.setSelection({ anchor: skipped, focus: skipped });
+    } else {
+      this.current = { ...this.state, selection, storedMarks: null };
+      this.history.breakGroup();
+      if (!this.pointerDown) this.refreshRevealed();
+      this.updateUi();
+      this.emit('selectionChange', { editor: this });
+    }
+    // Browsers scroll the caret into view, but not always clear of the editor's edge.
+    if (key) this.scrollCaretIntoView();
+  }
+
+  /**
+   * After the browser moved the caret from block `from` with ArrowDown
+   * (`dir` 1) or ArrowUp to `to`: the position in the first block it passed
+   * over that holds a caret, at `x`. Firefox passes over list items (they are
+   * flex boxes), WebKit over code blocks and tables. Null when no block was
+   * passed over.
+   */
+  private skippedBlock(from: number, dir: 1 | -1, x: number, to: Position): Position | null {
+    const blocks = this.state.doc.blocks;
+    const end = blockIndex(this.state.doc, to.blockId);
+    for (let i = from + dir; (end - i) * dir > 0; i += dir) {
+      const block = blocks[i]!;
+      if (block.type !== 'divider') return this.blockEntry(block, dir === 1, x);
+    }
+    return null;
+  }
+
+  /** Where the caret goes moving into `block` from above (`forward`) or below: its first or last line, at `x`. */
+  private blockEntry(block: Block, forward: boolean, x: number): Position {
+    const el = this.renderer.elementFor(block.id);
+    if (block.type === 'raw' && el?.classList.contains('mbe-view-block')) return viewEntry(block, forward);
+    if (el) {
+      const range = el.ownerDocument.createRange();
+      range.selectNodeContents(contentElement(el) ?? el);
+      const lines = Array.from(range.getClientRects()).filter((r) => r.height > 0);
+      const line = forward ? lines[0] : lines[lines.length - 1];
+      const pos = line ? this.positionAtPoint(x, line.top + line.height / 2) : null;
+      if (pos?.blockId === block.id) return pos;
+    }
+    if (block.type === 'table') {
+      const row = forward ? 0 : block.rows.length - 1;
+      return { blockId: block.id, offset: forward ? 0 : inlineLength(block.rows[row]![0]!), cell: { row, col: 0 } };
+    }
+    return forward ? startOf(block) : endOf(block);
   }
 
   /**
@@ -984,10 +1116,12 @@ export class Editor {
 
   /**
    * When an arrow key at the edge of a block would move past a rendered raw
-   * block next to it (the browser skips non-editable blocks), the position in
-   * that block's source to move to instead.
+   * block or a table next to it, the position inside that block to move to
+   * instead: the browser skips non-editable blocks, and sometimes a table
+   * (its cells are separate editing hosts). A table is entered in its first
+   * column.
    */
-  private viewBlockPast(key: string): Position | null {
+  private blockPast(key: string): Position | null {
     const sel = this.state.selection;
     if (!isCollapsed(sel) || sel.focus.cell) return null;
     const pos = sel.focus;
@@ -995,18 +1129,77 @@ export class Editor {
     const index = blockIndex(this.state.doc, pos.blockId);
     const forward = key === 'ArrowDown' || key === 'ArrowRight';
     const next = blocks[index + (forward ? 1 : -1)];
-    if (next?.type !== 'raw' || !this.renderer.elementFor(next.id)?.classList.contains('mbe-view-block')) return null;
+    const view = next?.type === 'raw' && this.renderer.elementFor(next.id)?.classList.contains('mbe-view-block');
+    if (!next || (!view && next.type !== 'table')) return null;
     const current = blocks[index]!;
     if (!isTextBlock(current)) return null;
     if (key === 'ArrowRight' && pos.offset !== endOf(current).offset) return null;
     if (key === 'ArrowLeft' && pos.offset !== 0) return null;
     if (key === 'ArrowDown' || key === 'ArrowUp') {
       // Only from the first or last line of text.
-      const caret = this.selectionRect();
-      const box = contentElement(this.renderer.elementFor(current.id)!)?.getBoundingClientRect();
-      if (caret && box && caret.height > 0 && (forward ? box.bottom - caret.bottom : caret.top - box.top) > caret.height / 2) return null;
+      const content = contentElement(this.renderer.elementFor(current.id)!);
+      if (content && !this.onEdgeLine(content, forward)) return null;
     }
-    return viewEntry(next, forward);
+    if (next.type === 'table') {
+      const row = forward ? 0 : next.rows.length - 1;
+      return { blockId: next.id, offset: forward ? 0 : inlineLength(next.rows[row]![0]!), cell: { row, col: 0 } };
+    }
+    return viewEntry(next as RawBlock, forward);
+  }
+
+  /**
+   * ArrowUp or ArrowDown on the first or last line of a table cell: the
+   * position in the cell above or below (same column), or past the table in
+   * the next block that holds a caret. Null when the caret is not on that
+   * line, or when the table ends the document that way (`exitBlock` adds a
+   * paragraph there).
+   */
+  private tableCellPast(dir: 1 | -1): Position | null {
+    const sel = this.state.selection;
+    const pos = sel.focus;
+    if (!isCollapsed(sel) || !pos.cell) return null;
+    const blocks = this.state.doc.blocks;
+    const index = blockIndex(this.state.doc, pos.blockId);
+    const table = blocks[index];
+    if (table?.type !== 'table') return null;
+    const content = contentElement(this.renderer.elementFor(table.id)!, pos.cell);
+    if (content && !this.onEdgeLine(content, dir === 1)) return null;
+    const { row, col } = pos.cell;
+    const target = table.rows[row + dir];
+    if (target) {
+      const offset = Math.min(pos.offset, inlineLength(target[col]!));
+      return { blockId: table.id, offset, cell: { row: row + dir, col } };
+    }
+    for (let i = index + dir; i >= 0 && i < blocks.length; i += dir) {
+      const next = blocks[i]!;
+      if (next.type === 'divider') continue;
+      if (next.type === 'table') {
+        const r = dir === 1 ? 0 : next.rows.length - 1;
+        const c = Math.min(col, next.align.length - 1);
+        return { blockId: next.id, offset: dir === 1 ? 0 : inlineLength(next.rows[r]![c]!), cell: { row: r, col: c } };
+      }
+      if (next.type === 'raw' && this.renderer.elementFor(next.id)?.classList.contains('mbe-view-block')) return viewEntry(next, dir === 1);
+      return dir === 1 ? startOf(next) : endOf(next);
+    }
+    return null;
+  }
+
+  /**
+   * Whether the caret is on the last (`forward`) or first line of the text in
+   * `content`. Lines are measured from the text, not the element's box, which
+   * has padding (a table cell) and may be taller than its text.
+   */
+  private onEdgeLine(content: HTMLElement, forward: boolean): boolean {
+    const caret = this.selectionRect();
+    if (!caret || caret.height === 0) return true;
+    const range = content.ownerDocument.createRange();
+    range.selectNodeContents(content);
+    const lines = Array.from(range.getClientRects()).filter((r) => r.height > 0);
+    if (lines.length === 0) return true;
+    const half = caret.height / 2;
+    return forward
+      ? Math.max(...lines.map((r) => r.bottom)) - caret.bottom <= half
+      : caret.top - Math.min(...lines.map((r) => r.top)) <= half;
   }
 
   /** A click on a rendered view puts the caret in its source: at the end of a token, or of a block's formula. */
@@ -1327,6 +1520,7 @@ export class Editor {
   }
 
   private onKeyDown(e: KeyboardEvent): void {
+    this.caretKey = null;
     if (this.fromControl(e)) return;
     if (e.isComposing || e.keyCode === 229) return;
     const mod = isMac ? e.metaKey : e.ctrlKey;
@@ -1349,7 +1543,12 @@ export class Editor {
       if (e.key === 'Escape') return handled(() => (menu !== this.blockMenu ? this.closeSuggestion() : this.closeBlockMenu()));
     }
 
-    if (e.key === 'Escape' && this.toolbar?.isOpen) return handled(() => this.toolbar!.hide());
+    if (e.key === 'Escape' && this.toolbar?.isOpen) {
+      return handled(() => {
+        this.toolbarClosedFor = this.state.selection;
+        this.toolbar!.hide();
+      });
+    }
     if (this.readOnly) return;
     if (this.blockSel && this.onBlockKey(e)) {
       e.preventDefault();
@@ -1368,6 +1567,19 @@ export class Editor {
       }
     }
 
+    // Backspace at the start of a block changes blocks: a heading becomes a
+    // paragraph, a divider above is removed. WebKit sends no beforeinput when
+    // no editable text comes before the caret, so this is handled here.
+    if (e.key === 'Backspace' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      this.refreshSelection();
+      const { selection } = this.state;
+      if (isCollapsed(selection) && selection.focus.offset === 0) {
+        e.preventDefault();
+        this.run(cmd.deleteBackward);
+        return;
+      }
+    }
+
     if (mod && !e.altKey) {
       if (e.key === '/' && !e.shiftKey && this.hasBlockMenu(this.state.selection.focus.blockId)) {
         return handled(() => this.openBlockMenu(this.state.selection.focus.blockId));
@@ -1380,22 +1592,52 @@ export class Editor {
     }
     if (e.key.startsWith('Arrow') && !mod && !e.shiftKey && !e.altKey) {
       this.refreshSelection();
-      // Step into the source of a rendered block, which the browser would skip.
-      const into = this.renderer.views ? this.viewBlockPast(e.key) : null;
+      // Step into the source of a rendered block, or into a table, which the browser may skip.
+      const into = this.blockPast(e.key);
       if (into) {
         e.preventDefault();
         this.setSelection({ anchor: into, focus: into });
         return;
       }
+      const vertical = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+      // In a table, up and down go to the cell above or below; the browser would go to the next cell in the row.
+      const cell = vertical ? this.tableCellPast(vertical) : null;
+      if (cell) {
+        e.preventDefault();
+        this.setSelection({ anchor: cell, focus: cell });
+        return;
+      }
       // On the last line of a final code block or table (or the first line of
       // a first one), add a paragraph past it. Elsewhere the browser moves the caret.
-      const vertical = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
       const next = vertical ? cmd.exitBlock(this.state, vertical) : this.state;
       if (next !== this.state) {
         e.preventDefault();
         this.run(() => next);
+        return;
       }
     }
+    if (CARET_KEY.test(e.key)) {
+      // The browser moves the caret.
+      this.refreshSelection();
+      const plain = !mod && !e.shiftKey && !e.altKey;
+      const vertical = !plain ? 0 : e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+      const from = blockIndex(this.state.doc, this.state.selection.focus.blockId);
+      this.caretKey = { from, x: this.selectionRect()?.left ?? 0, vertical };
+    }
+  }
+
+  /** Selects all the text of the block (or table cell) holding `target`. False if it holds none. */
+  private selectBlockText(target: HTMLElement): boolean {
+    const blockEl = target.closest?.<HTMLElement>(`[${BLOCK_ATTR}]`);
+    if (!blockEl || !this.root.contains(blockEl)) return false;
+    const block = getBlock(this.state.doc, blockEl.getAttribute(BLOCK_ATTR)!);
+    const cellEl = target.closest<HTMLElement>('[data-row]');
+    const cell = block.type === 'table' && cellEl ? { row: Number(cellEl.dataset.row), col: Number(cellEl.dataset.col) } : undefined;
+    const content = containerContent(block, cell);
+    if (!content || (block.type === 'raw' && blockEl.classList.contains('mbe-view-block'))) return false;
+    const at = (offset: number): Position => (cell ? { blockId: block.id, offset, cell } : { blockId: block.id, offset });
+    this.setSelection({ anchor: at(0), focus: at(inlineLength(content)) });
+    return true;
   }
 
   private moveMenu(menu: Menu, delta: number): void {
@@ -1404,6 +1646,7 @@ export class Editor {
   }
 
   private onMouseDown(e: MouseEvent): void {
+    this.caretKey = null;
     const target = e.target as HTMLElement;
     this.dropBlockSelection();
     if (target === this.root && e.button === 0 && !this.readOnly && this.clickBelowLastBlock(e)) return;
@@ -1413,12 +1656,17 @@ export class Editor {
       this.revealView(view);
       return;
     }
+    // A triple click selects the text of one block (or cell), not the line break after it,
+    // so typing replaces that block instead of joining it with the next.
+    if (e.button === 0 && e.detail === 3 && !this.readOnly && this.selectBlockText(target)) {
+      e.preventDefault();
+      return;
+    }
     if (e.button === 0) this.pointerDown = true;
     if (target.classList?.contains('mbe-checkbox')) {
       // Toggle in the model; keep the caret where it is.
       e.preventDefault();
-      const blockEl = target.closest<HTMLElement>('[data-block-id]');
-      if (blockEl && !this.readOnly) this.run((s) => cmd.toggleTask(s, blockEl.dataset.blockId!));
+      if (e.button === 0) this.toggleTaskAt(target);
     }
   }
 
@@ -1443,7 +1691,9 @@ export class Editor {
   private onClick(e: MouseEvent): void {
     const target = e.target as HTMLElement;
     if (target.classList?.contains('mbe-checkbox')) {
+      // Mouse presses toggle on mousedown. A click with no pointer comes from Space on a focused checkbox.
       e.preventDefault();
+      if (e.detail === 0) this.toggleTaskAt(target);
       return;
     }
     const link = target.closest?.<HTMLAnchorElement>('a.mbe-link');
@@ -1712,7 +1962,7 @@ export class Editor {
     const items: SlashItem[] = ids
       .map((id) => BLOCK_ITEMS.find((b) => b.id === id))
       .filter((b): b is BlockItem => !!b)
-      .map((b) => ({ id: b.id, label: this.labels[b.id], icon: b.icon, aliases: b.aliases, spec: b.spec }));
+      .map((b) => ({ id: b.id, label: this.labels[b.id], icon: this.icon(b.id), aliases: b.aliases, spec: b.spec }));
     return {
       char: SLASH_CHARS,
       allowSpaces: true,
@@ -1881,24 +2131,29 @@ export class Editor {
   // -------------------------------------------------------------------------
   // Block menu
 
+  /** The icon for a UI control: the `icons` option's entry, or the built-in Lucide icon. */
+  icon(name: IconName): Icon {
+    return this.options.icons?.[name] ?? builtinIcon(this.root.ownerDocument, name);
+  }
+
   private blockMenuSections(blockId: string): MenuSection[] {
     const block = getBlock(this.state.doc, blockId);
     const sections: MenuSection[] = [];
     if (block.type === 'table' && this.state.selection.focus.blockId === blockId && this.state.selection.focus.cell) {
       sections.push({
         title: this.labels.tableSection,
-        items: TABLE_ITEMS.map(({ id, icon, action }) => ({
+        items: TABLE_ITEMS.map(({ id, action }) => ({
           id,
           label: this.labels[id],
-          icon,
+          icon: this.icon(id),
           run: () => this.run((s) => cmd.tableAction(s, action)),
         })),
       });
     }
     sections.push({
       items: [
-        { id: 'duplicate', label: this.labels.duplicate, icon: '⧉', run: () => this.run((s) => cmd.duplicateBlock(s, blockId)) },
-        { id: 'delete', label: this.labels.delete, icon: '🗑', danger: true, run: () => this.run((s) => cmd.deleteBlock(s, blockId)) },
+        { id: 'duplicate', label: this.labels.duplicate, icon: this.icon('duplicate'), run: () => this.run((s) => cmd.duplicateBlock(s, blockId)) },
+        { id: 'delete', label: this.labels.delete, icon: this.icon('delete'), danger: true, run: () => this.run((s) => cmd.deleteBlock(s, blockId)) },
       ],
     });
     return sections;
@@ -1988,7 +2243,10 @@ export class Editor {
     // Formatting toolbar.
     if (this.toolbar) {
       const block = this.state.doc.blocks.find((b) => b.id === pos.blockId);
+      const closed = this.toolbarClosedFor;
+      if (closed && !(samePosition(closed.anchor, this.state.selection.anchor) && samePosition(closed.focus, pos))) this.toolbarClosedFor = null;
       const show =
+        !this.toolbarClosedFor &&
         focused &&
         !this.readOnly &&
         !this.composing &&
@@ -2030,6 +2288,18 @@ export class Editor {
     this.handle.hide();
     this.hintEl?.classList.remove('mbe-show-hint');
     this.hintEl = null;
+  }
+
+  /** Wraps an input event handler so the changes it makes keep the caret in view. */
+  private typed(fn: (e: Event) => void): (e: Event) => void {
+    return (e) => {
+      this.typing++;
+      try {
+        fn(e);
+      } finally {
+        this.typing--;
+      }
+    };
   }
 
   private listen(target: EventTarget, type: string, fn: (e: Event) => void, capture = false): void {
@@ -2096,4 +2366,10 @@ function triggers(config: SuggestionConfig): readonly string[] {
 
 function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
   return typeof (value as Promise<T>)?.then === 'function';
+}
+
+/** Accessible name of a task checkbox: its item's text, or `fallback` when the item is empty. */
+function taskName(box: HTMLElement, fallback: string): string {
+  const text = box.closest('[data-block-id]')?.querySelector('.mbe-content')?.textContent?.trim();
+  return text || fallback;
 }

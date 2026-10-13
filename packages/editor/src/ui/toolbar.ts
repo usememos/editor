@@ -2,6 +2,7 @@
 
 import type { Editor } from '../editor';
 import { toggleMark } from '../commands';
+import { type IconName, iconNode } from '../icons';
 import type { Mark } from '../model';
 import { Popup, isMac, isTouch } from './popup';
 
@@ -9,16 +10,16 @@ const mod = (key: string) => (isMac ? `⌘${key}` : `Ctrl+${key}`);
 
 interface MarkButton {
   mark: Mark;
-  label: 'bold' | 'italic' | 'strike' | 'inlineCode';
-  text: string;
+  /** The `labels` and `icons` key. */
+  name: 'bold' | 'italic' | 'strike' | 'inlineCode';
   shortcut: string;
 }
 
 const MARK_BUTTONS: MarkButton[] = [
-  { mark: 'bold', label: 'bold', text: 'B', shortcut: mod('B') },
-  { mark: 'italic', label: 'italic', text: 'I', shortcut: mod('I') },
-  { mark: 'strike', label: 'strike', text: 'S', shortcut: isMac ? '⌘⇧X' : 'Ctrl+Shift+X' },
-  { mark: 'code', label: 'inlineCode', text: '</>', shortcut: mod('E') },
+  { mark: 'bold', name: 'bold', shortcut: mod('B') },
+  { mark: 'italic', name: 'italic', shortcut: mod('I') },
+  { mark: 'strike', name: 'strike', shortcut: isMac ? '⌘⇧X' : 'Ctrl+Shift+X' },
+  { mark: 'code', name: 'inlineCode', shortcut: mod('E') },
 ];
 
 export class FormatToolbar {
@@ -32,11 +33,12 @@ export class FormatToolbar {
     const el = this.popup.el;
     el.setAttribute('role', 'toolbar');
 
-    const button = (text: string, label: string, className: string, onClick: () => void) => {
+    const button = (icon: IconName, label: string, className: string, onClick: () => void) => {
       const b = doc.createElement('button');
       b.type = 'button';
       b.className = `mbe-tool ${className}`;
-      b.textContent = text;
+      const content = iconNode(doc, editor.icon(icon));
+      if (content) b.appendChild(content);
       b.title = label;
       b.setAttribute('aria-label', label);
       b.addEventListener('click', onClick);
@@ -46,7 +48,7 @@ export class FormatToolbar {
 
     const labels = editor.labels;
     for (const b of MARK_BUTTONS) {
-      const btn = button(b.text, `${labels[b.label]} (${b.shortcut})`, `mbe-tool-${b.mark}`, () => {
+      const btn = button(b.name, `${labels[b.name]} (${b.shortcut})`, `mbe-tool-${b.mark}`, () => {
         editor.run((s) => toggleMark(s, b.mark));
         this.update();
       });
@@ -54,7 +56,7 @@ export class FormatToolbar {
       this.markButtons.set(b.mark, btn);
     }
     el.appendChild(separator(doc));
-    this.linkButton = button(labels.link, `${labels.link} (${mod('K')})`, 'mbe-tool-link', () => editor.openLinkPopover());
+    this.linkButton = button('link', `${labels.link} (${mod('K')})`, 'mbe-tool-link', () => editor.openLinkPopover());
   }
 
   get isOpen(): boolean {

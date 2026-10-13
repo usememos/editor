@@ -58,6 +58,28 @@ describe('autolink literals', () => {
     expect(serializeMarkdown(parseMarkdown('<https://y.org>'), { autolinks: false })).toBe('<https://y.org>\n');
   });
 
+  it('saves a URL that is plain text so it does not read back as a link', () => {
+    const doc = { blocks: [paragraph([{ text: 'see https://x.com and www.y.org, not xhttps://z.com', marks: [] }])] };
+    const md = serializeMarkdown(doc);
+    expect(md).toBe('see https\\://x.com and www\\.y.org, not xhttps://z.com\n');
+    expect(describeSpans(content(md))).toEqual(['see https://x.com and www.y.org, not xhttps://z.com']);
+    // Link text and code are never read as literals, and without autolinks nothing is escaped.
+    expect(rewrite('[https://x.com](https://y.org) `www.z.org`')).toBe('[https://x.com](https://y.org) `www.z.org`\n');
+    expect(serializeMarkdown(doc, { autolinks: false })).toBe('see https://x.com and www.y.org, not xhttps://z.com\n');
+  });
+
+  it('saves an e-mail address that is plain text so it does not read back as a link', () => {
+    const doc = { blocks: [paragraph([{ text: 'mail bob@x.com or a_b@y.org', marks: [] }])] };
+    expect(serializeMarkdown(doc)).toBe('mail bob\\@x.com or a_b\\@y.org\n');
+    expect(describeSpans(content(serializeMarkdown(doc)))).toEqual(['mail bob@x.com or a_b@y.org']);
+    // With mentions, which read `\\@` as written, the "@" is an entity instead.
+    const md = serializeMarkdown(doc, TAGS);
+    expect(md).toBe('mail bob&#64;x.com or a_b&#64;y.org\n');
+    expect(describeSpans(content(md, TAGS))).toEqual(['mail bob@x.com or a_b@y.org']);
+    // Linked addresses still save as links.
+    expect(rewrite('mail bob@x.com')).toBe('mail bob@x.com\n');
+  });
+
   it('links a typed URL or e-mail address when a space follows it', () => {
     const type = (text: string) => {
       const block = paragraph();

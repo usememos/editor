@@ -43,8 +43,14 @@ jobs:
           path: test-results
           retention-days: 7
 
+  # Each browser in two shards, so the four jobs run side by side.
   e2e-firefox-webkit:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [firefox, webkit]
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -52,11 +58,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps firefox webkit
-      - run: npx playwright test --project=firefox --project=webkit
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      - run: npx playwright test --project=${{ matrix.browser }} --shard=${{ matrix.shard }}/2
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: playwright-results-firefox-webkit
+          name: playwright-results-${{ matrix.browser }}-${{ matrix.shard }}
           path: test-results
           retention-days: 7

@@ -3,6 +3,7 @@
 // with the caret. Other blocks have no handle.
 
 import type { Editor } from '../editor';
+import { iconNode } from '../icons';
 import { BLOCK_ATTR } from '../view/dom';
 
 export class BlockHandle {
@@ -17,7 +18,8 @@ export class BlockHandle {
     this.el = doc.createElement('button');
     this.el.type = 'button';
     this.el.className = 'mbe-ui mbe-handle';
-    this.el.textContent = '⋮⋮';
+    const icon = iconNode(doc, editor.icon('blockHandle'));
+    if (icon) this.el.appendChild(icon);
     this.el.setAttribute('aria-label', editor.labels.blockHandle);
     this.el.setAttribute('aria-haspopup', 'menu');
     this.el.tabIndex = -1;

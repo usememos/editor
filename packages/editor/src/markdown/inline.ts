@@ -33,6 +33,9 @@ export function parseInline(src: string, options?: MarkdownOptions): Inline {
  * trimmed. `autolinks` turns on GFM autolink literals.
  */
 export function parseInlines(src: string, refs: RefMap, syntax: readonly InlineSyntax[] = [], autolinks = false): InlineNode[] {
+  // Most headings, list items and short paragraphs are plain text, which the
+  // parser would return as one text node. Skip it for those.
+  if (isPlain(src, syntax, autolinks)) return src ? [{ type: 'text', value: src }] : [];
   const nodes = new InlineParser(src, refs, syntax, autolinks).parse();
   return autolinks ? linkEmails(nodes) : nodes;
 }
@@ -42,6 +45,17 @@ export function parseInlines(src: string, refs: RefMap, syntax: readonly InlineS
  * cmark-gfm does), so a local part may hold "_" that the parser saw as a
  * possible delimiter.
  */
+/** No character that can start CommonMark inline syntax. */
+const rePlain = /^[^\n`[\]\\!<&*_~]*$/;
+/** What can start a GFM autolink literal: `www.`, a scheme, or an e-mail's `@`. */
+const reLiteralStart = /www\.|:\/\/|@/i;
+
+function isPlain(src: string, syntax: readonly InlineSyntax[], autolinks: boolean): boolean {
+  if (!rePlain.test(src) || (autolinks && reLiteralStart.test(src))) return false;
+  for (const s of syntax) for (const ch of s.triggers) if (src.includes(ch)) return false;
+  return true;
+}
+
 function linkEmails(nodes: InlineNode[]): InlineNode[] {
   let changed = false;
   const out: InlineNode[] = [];
@@ -188,6 +202,8 @@ class Node {
   depth = 0;
   destination = '';
   title = '';
+  /** An escaped "@": kept apart from the text around it, so it does not join an e-mail literal. */
+  apart = false;
   parent: Node | null = null;
   first: Node | null = null;
   last: Node | null = null;
@@ -247,16 +263,25 @@ function innerDepth(from: Node, to: Node | null): number {
   return depth;
 }
 
+/** Text written as a backslash escape or an entity. As in cmark-gfm, `a\@b.com` and `a&#64;b.com` are not e-mail links. */
+function escapedText(value: string): Node {
+  const text = new Node('text', value);
+  text.apart = value === '@';
+  return text;
+}
+
 /** Converts the mutable tree to plain AST nodes, merging adjacent text nodes. */
 function toAst(parent: Node): InlineNode[] {
   const out: InlineNode[] = [];
+  let apart = false;
   for (let n = parent.first; n; n = n.next) {
     switch (n.type) {
       case 'text': {
         if (n.value === '') break;
         const prev = out[out.length - 1];
-        if (prev?.type === 'text') out[out.length - 1] = { type: 'text', value: prev.value + n.value };
+        if (prev?.type === 'text' && !apart && !n.apart) out[out.length - 1] = { type: 'text', value: prev.value + n.value };
         else out.push({ type: 'text', value: n.value });
+        apart = n.apart;
         break;
       }
       case 'softBreak':
@@ -492,7 +517,7 @@ class InlineParser {
       block.append(new Node('hardBreak'));
       this.skipLineStart();
     } else if (c !== -1 && reEscapable.test(this.subject[this.pos]!)) {
-      block.append(new Node('text', this.subject[this.pos]!));
+      block.append(escapedText(this.subject[this.pos]!));
       this.pos += 1;
     } else {
       block.append(new Node('text', '\\'));
@@ -570,7 +595,7 @@ class InlineParser {
     if (m) {
       const decoded = decodeEntity(m[0]);
       if (decoded !== null) {
-        block.append(new Node('text', decoded));
+        block.append(escapedText(decoded));
         return true;
       }
       this.pos = start;

@@ -35,7 +35,7 @@ import {
   setMarkInRange,
 } from '../model';
 import { AUTOLINK_EMAIL, AUTOLINK_URI, isUnicodePunctuation, isUnicodeWhitespace, parseInline } from './inline';
-import { literalHref } from './autolink';
+import { emailLiterals, isLiteralBoundary, literalHref, urlLiteralAt } from './autolink';
 import { type InlineSyntax, type MarkdownOptions, type ResolvedMarkdown, resolveMarkdown } from './options';
 import { type MarkdownSource, saveWithSource } from './source';
 
@@ -342,7 +342,8 @@ export function representableInline(inline: Inline): Span[] {
 // -- Tokens -----------------------------------------------------------------
 
 type Token =
-  | { kind: 'text'; text: string; encodeFirst: boolean; encodeLast: boolean }
+  /** `inLink`: link text, where GFM does not look for autolink literals. */
+  | { kind: 'text'; text: string; encodeFirst: boolean; encodeLast: boolean; inLink?: boolean }
   | { kind: 'delim'; ch: string; count: number; open: boolean }
   /** Output that is final: code spans, raw HTML, images, link syntax. */
   | { kind: 'raw'; text: string };
@@ -401,7 +402,7 @@ function tokenize(spans: readonly Span[], ctx: InlineContext, italic: '*' | '_',
   };
 
   /** Closes marks the span does not have (above `base`) and opens the ones it adds. */
-  const emitSpan = (span: Span, base: number, index: number, limit: number) => {
+  const emitSpan = (span: Span, base: number, index: number, limit: number, inLink = false) => {
     const target = emphasisMarks(span);
     closeExcept(target, base);
     openMarks(target, index, limit);
@@ -412,7 +413,7 @@ function tokenize(spans: readonly Span[], ctx: InlineContext, italic: '*' | '_',
     } else if (span.marks.includes('code')) {
       tokens.push({ kind: 'raw', text: codeSpan(span.text) });
     } else {
-      tokens.push({ kind: 'text', text: span.text, encodeFirst: false, encodeLast: false });
+      tokens.push({ kind: 'text', text: span.text, encodeFirst: false, encodeLast: false, inLink });
     }
   };
 
@@ -438,7 +439,7 @@ function tokenize(spans: readonly Span[], ctx: InlineContext, italic: '*' | '_',
     } else {
       tokens.push({ kind: 'raw', text: '[' });
       const base = stack.length;
-      for (let k = i; k < j; k++) emitSpan(spans[k]!, base, k, j);
+      for (let k = i; k < j; k++) emitSpan(spans[k]!, base, k, j, true);
       closeTo(base);
       tokens.push({ kind: 'raw', text: `](${linkDestination(span.link)})` });
     }
@@ -569,7 +570,7 @@ function entity(ch: string): string {
  * and ends the inline content.
  */
 function escapeText(
-  tok: { text: string; encodeFirst: boolean; encodeLast: boolean },
+  tok: { text: string; encodeFirst: boolean; encodeLast: boolean; inLink?: boolean },
   ctx: InlineContext,
   edges: { before: string | undefined; after: string | undefined; lineStart: boolean; atEnd: boolean },
 ): string {
@@ -610,6 +611,7 @@ function escapeText(
       blockSyntax: ctx.lineStart && startsLine,
       escape: ctx.options.escape,
       inline: ctx.options.inline,
+      autolinks: ctx.options.autolinks && !tok.inLink,
     });
   });
   return out;
@@ -629,6 +631,8 @@ function escapeLine(
     escape?: string;
     /** Inline syntax extensions, some of which may read a backslash escape as a token. */
     inline?: readonly InlineSyntax[];
+    /** GFM autolink literals are on: plain text that looks like a URL must not read back as a link. */
+    autolinks?: boolean;
   },
 ): string {
   if (line === '') return '';
@@ -643,6 +647,7 @@ function escapeLine(
   if (o.encodeFirst || (o.startsLine && (line[0] === ' ' || line[0] === '\t'))) encodeAt.add(0);
   if (o.encodeLast || (o.endsLine && (line[lastIndex] === ' ' || line[lastIndex] === '\t'))) encodeAt.add(lastIndex);
   const blockEscape = o.blockSyntax && !encodeAt.has(0) ? blockSyntaxEscapeIndex(line) : -1;
+  const urlEscapes = o.autolinks ? literalEscapes(line, o.before) : null;
 
   let out = '';
   for (let i = 0; i < line.length; i++) {
@@ -656,7 +661,7 @@ function escapeLine(
     // Neighbours as written: an encoded character starts with "&" and ends with ";".
     const prev = i > 0 ? (encodeAt.has(i - 1) ? ';' : line[i - 1]) : o.before;
     const next = i < line.length - 1 ? (encodeAt.has(i + 1) ? '&' : line[i + 1]) : o.after;
-    if (i === blockEscape) {
+    if (i === blockEscape || urlEscapes?.has(i)) {
       out += bs(ch);
       continue;
     }
@@ -692,6 +697,24 @@ function escapeLine(
         out += o.escape && o.escape.includes(ch) ? bs(ch) : ch;
     }
   }
+  return out;
+}
+
+/**
+ * Indexes of characters to backslash-escape so that URLs and e-mail addresses
+ * in plain text do not read back as autolink literals: the ":" of `https://`,
+ * the "." of `www.` or the "@" of an address.
+ */
+function literalEscapes(line: string, before: string | undefined): Set<number> | null {
+  const emails = emailLiterals(line);
+  if (!emails.length && !/www\.|:\/\//i.test(line)) return null;
+  const out = new Set<number>();
+  for (const c of line.matchAll(/www\.|(?:https?|ftp):\/\//gi)) {
+    const at = c.index!;
+    if (!isLiteralBoundary(at > 0 ? line[at - 1] : before) || !urlLiteralAt(line, at)) continue;
+    out.add(at + c[0].indexOf(c[0].startsWith('w') || c[0].startsWith('W') ? '.' : ':'));
+  }
+  for (const { from } of emails) out.add(line.indexOf('@', from));
   return out;
 }
 
