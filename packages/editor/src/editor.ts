@@ -25,6 +25,7 @@ import type { Extension } from './extension';
 import { defaultKeymap } from './extensions/keymap';
 import { decorationContext } from './decorations';
 import type { SuggestionConfig, SuggestionItem } from './extensions/suggestion';
+import { SuggestionController, type SuggestionState } from './suggest/controller';
 import { type Widget, WidgetImpl, type WidgetRender } from './widgets';
 import { type Binding, matchesKey, parseKeyName } from './keymap';
 import {
@@ -54,7 +55,7 @@ import {
 } from './model';
 import { FormatToolbar, LinkPopover } from './ui/toolbar';
 import { BlockHandle } from './ui/handle';
-import { Menu, type MenuSection, isMac, isTouch, matches } from './ui/popup';
+import { Menu, type MenuSection, isMac, isSafari, isTouch, matches, setPopupContainer } from './ui/popup';
 import { BLOCK_ATTR, BlockRenderer, childIndex, contentElement, domText, domToPosition, positionToDom, safeHref } from './view/dom';
 import { revealedViews, sameRevealed, viewEntry } from './view/reveal';
 import { scrollRectIntoView } from './view/scroll';
@@ -89,6 +90,12 @@ export interface EditorOptions {
   icons?: Icons;
   /** Shows the formatting toolbar on selection. Default true. */
   toolbar?: boolean;
+  /**
+   * The element menus, the toolbar and other popups are appended to.
+   * Default: the nearest open `<dialog>` or `aria-modal` ancestor of
+   * `element`, else `document.body`.
+   */
+  popupContainer?: HTMLElement;
   /** IDs of built-in slash menu items to show, in order, or false for no slash menu. See SLASH_ITEM_IDS. */
   slashMenu?: false | readonly SlashItemId[];
   /** Shortcut for `on('change')`, with the new Markdown. */
@@ -100,7 +107,7 @@ export interface EditorOptions {
 }
 
 /** Options that `setOptions` can change while the editor runs. */
-export type RuntimeOptions = Pick<EditorOptions, 'placeholder' | 'editable' | 'taskToggle' | 'attributes' | 'resolveImageSrc' | 'theme'>;
+export type RuntimeOptions = Pick<EditorOptions, 'placeholder' | 'editable' | 'taskToggle' | 'attributes' | 'resolveImageSrc' | 'theme' | 'extensions'>;
 
 export interface EditorEvents {
   /** After document changes, at most once per animation frame. */
@@ -111,6 +118,25 @@ export interface EditorEvents {
   blur: { editor: Editor; event: FocusEvent };
   /** Mod-Enter or Ctrl-Enter. */
   submit: { editor: Editor };
+  /** The autocomplete popup opened, closed, or changed its query, items, highlight or loading state. */
+  suggestionChange: { editor: Editor; state: SuggestionState | null };
+}
+
+export interface SuggestionApi {
+  /** The open suggestion: its query, range, items and highlighted item. Null when none is open. */
+  readonly state: SuggestionState | null;
+  /**
+   * Opens the popup for the token at the caret, as Ctrl+Space does, even
+   * where typing would not open it. With `name`, only that suggestion.
+   * Returns false when there is no token at the caret.
+   */
+  open(name?: string): boolean;
+  /** Closes the popup and keeps it closed for this token, as Escape does. */
+  close(): void;
+  /** Moves the highlight by `delta` items, wrapping around, as the arrow keys do. */
+  move(delta: number): void;
+  /** Picks the item at `index`, or the highlighted one, as Enter does. Returns false when there is none. */
+  accept(index?: number): boolean;
 }
 
 /** Names `isActive` and `getAttributes` understand. */
@@ -252,9 +278,13 @@ interface SlashItem extends SuggestionItem {
 }
 
 export class Editor {
+  /** The editable element the editor renders into: `options.element`, or for `useEditor`, the element `<EditorContent>` mounts. */
   readonly root: HTMLElement;
+  /** @internal The UI strings: the defaults with the `labels` option applied. */
   readonly labels: Labels;
   readonly commands: EditorCommands;
+  /** The autocomplete popup of `suggestion()` extensions and the slash menu. */
+  readonly suggestion: SuggestionApi;
   private current: EditorState;
   /** The Markdown the document was loaded from; unchanged blocks are saved as this text. */
   private source: MarkdownSource;
@@ -268,6 +298,8 @@ export class Editor {
    * block, the marks for composed text, and whether it has an undo step yet.
    */
   private composition: { blockId: string; marks: EditorState['storedMarks']; recorded: boolean } | null = null;
+  /** When the last composition ended (Safari only): the next key may be the Enter that committed it. */
+  private compositionEndedAt = 0;
   /** Blocks the browser edited during a composition that ended, rendered again on the next frame. */
   private readonly unsettled = new Set<string>();
   private settleFrame: number | null = null;
@@ -304,10 +336,8 @@ export class Editor {
    */
   private caretKey: { from: number; x: number; vertical: 0 | 1 | -1 } | null = null;
 
-  /** Suggestion menus from extensions, then the slash menu. */
-  private readonly suggestions: { readonly config: SuggestionConfig; readonly menu: Menu }[];
-  /** The open suggestion: which one, where its trigger is, and the last query shown. */
-  private suggest: { index: number; blockId: string; from: number; query?: string; request: number } | null = null;
+  /** Suggestion menus from extensions, then the slash menu (see suggest/controller.ts). */
+  private readonly suggestions: SuggestionController;
   private readonly blockMenu: Menu;
   private readonly toolbar: FormatToolbar | null;
   private readonly linkPopover: LinkPopover;
@@ -369,12 +399,30 @@ export class Editor {
     this.renderer.resolveImageSrc = options.resolveImageSrc;
     this.applyTheme(options.theme);
 
+    setPopupContainer(root, options.popupContainer);
     const configs = this.extensions.flatMap((e) => (e.suggestion ? [e.suggestion] : []));
     if (options.slashMenu !== false) configs.push(this.slashSuggestion() as unknown as SuggestionConfig);
-    this.suggestions = configs.map((config) => ({
-      config,
-      menu: new Menu(root, `mbe-suggestion-menu ${config.className ?? ''}`.trim(), 'listbox'),
-    }));
+    this.suggestions = new SuggestionController(
+      {
+        editor: this,
+        root,
+        syncActiveDescendant: () => this.syncActiveDescendant(),
+        refresh: () => this.updateUi(),
+        endComposition: () => this.endComposition(),
+        changed: (state) => this.emit('suggestionChange', { editor: this, state }),
+      },
+      configs,
+    );
+    const suggestions = this.suggestions;
+    this.suggestion = {
+      get state() {
+        return suggestions.state;
+      },
+      open: (name) => !this.destroyed && (this.refreshSelection(), suggestions.open(name)),
+      close: () => suggestions.dismiss(),
+      move: (delta) => suggestions.move(delta),
+      accept: (index) => !this.destroyed && suggestions.accept(index),
+    };
     this.blockMenu = new Menu(root, 'mbe-block-menu', 'menu');
     this.blockMenu.onPicked = () => this.blockMenu.hide();
     this.linkPopover = new LinkPopover(this);
@@ -425,11 +473,13 @@ export class Editor {
    * undo history; with `history: 'keep'` the replacement is one undo step.
    */
   setMarkdown(markdown: string, options: { history?: 'clear' | 'keep' } = {}): void {
+    if (this.destroyed) return;
     if (options.history === 'keep') this.history.record(this.current, 'other');
     else this.history.clear();
     const loaded = loadMarkdown(markdown, this.markdown);
     this.source = loaded.source;
     this.blockSel = null;
+    this.suggestions.reset();
     const next = createState(loaded.doc);
     this.relocateWidgets(this.current.doc, next.doc, true);
     this.current = next;
@@ -457,7 +507,12 @@ export class Editor {
   }
 
   get isEditable(): boolean {
-    return !this.readOnly;
+    return !this.readOnly && !this.destroyed;
+  }
+
+  /** True after `destroy()`. The editor then ignores every call that would change it; `getMarkdown()` still returns its last Markdown. */
+  get isDestroyed(): boolean {
+    return this.destroyed;
   }
 
   /** True if `name` applies at the selection: a mark on the selected text, or the type of the block with the caret. */
@@ -512,6 +567,7 @@ export class Editor {
    * a value that is not a selection at all is ignored and returns false.
    */
   setSelection(selection: Selection | SelectionJSON): boolean {
+    if (this.destroyed) return false;
     const sel = isSelection(selection) ? clampSelection(this.current.doc, selection) : selectionFromJSON(this.current.doc, selection);
     if (!sel) return false;
     this.dropBlockSelection();
@@ -548,6 +604,12 @@ export class Editor {
    * block is deleted, it moves to the nearest remaining block.
    */
   addWidget(options: { at: Position | 'end'; render: WidgetRender }): Widget {
+    if (this.destroyed) {
+      // A widget that was never shown, so a late upload's code can still call it.
+      const widget = new WidgetImpl(this.root.ownerDocument.createElement('div'), '', () => {}, () => {});
+      widget.remove();
+      return widget;
+    }
     const blocks = this.current.doc.blocks;
     const at = options.at === 'end' ? endOf(blocks[blocks.length - 1]!) : options.at;
     const blockId = clampSelection(this.current.doc, { anchor: at, focus: at }).focus.blockId;
@@ -586,6 +648,7 @@ export class Editor {
 
   /** Focuses the editor at the current selection. */
   focus(): void {
+    if (this.destroyed) return;
     const pos = this.current.selection.focus;
     const el = this.renderer.elementFor(pos.blockId);
     const host = pos.cell && el ? contentElement(el, pos.cell) : this.root;
@@ -600,8 +663,15 @@ export class Editor {
   // -------------------------------------------------------------------------
   // Options and events
 
-  /** Changes `placeholder`, `editable`, `taskToggle`, `attributes`, `resolveImageSrc` or `theme`. */
+  /**
+   * Changes `placeholder`, `editable`, `taskToggle`, `attributes`,
+   * `resolveImageSrc` or `theme`. `extensions` only updates the callbacks of
+   * `suggestion()` extensions (`items`, `command`, `match`, `allow`), matched
+   * by name; other changes to extensions need a new editor.
+   */
   setOptions(options: RuntimeOptions): void {
+    if (this.destroyed) return;
+    if (options.extensions) this.suggestions.setConfigs(options.extensions.flatMap((e) => (e.suggestion ? [e.suggestion] : [])));
     const toggle = options.taskToggle !== undefined && options.taskToggle !== this.taskToggle;
     if (toggle) this.taskToggle = options.taskToggle === true;
     if (options.editable !== undefined && options.editable === this.readOnly) {
@@ -673,7 +743,7 @@ export class Editor {
 
   /** Applies a command (a pure function of the state), records history, re-renders, and emits events. */
   run(command: (state: EditorState) => EditorState | null, kind: ChangeKind = 'other'): boolean {
-    if (this.readOnly) return false;
+    if (this.readOnly || this.destroyed) return false;
     let next = command(this.current);
     if (!next || next === this.current) return false;
     next = cmd.dropBrokenTokens(next, this.current, this.markdown.inline);
@@ -690,7 +760,7 @@ export class Editor {
   private createCommands(): EditorCommands {
     const run = (fn: (s: EditorState) => EditorState | null) => this.run(fn);
     const block = (spec: cmd.BlockTypeSpec) => run((s) => cmd.toggleBlockType(s, spec));
-    return {
+    const commands: EditorCommands = {
       toggleBold: () => run((s) => cmd.toggleMark(s, 'bold')),
       toggleItalic: () => run((s) => cmd.toggleMark(s, 'italic')),
       toggleStrike: () => run((s) => cmd.toggleMark(s, 'strike')),
@@ -762,6 +832,13 @@ export class Editor {
         return true;
       },
     };
+    // After destroy every command does nothing, so late callbacks (an upload
+    // that finishes after the editor closed) cannot render into the element.
+    for (const name of Object.keys(commands) as (keyof EditorCommands)[]) {
+      const fn = commands[name] as (...args: unknown[]) => boolean;
+      (commands as unknown as Record<string, (...args: unknown[]) => boolean>)[name] = (...args) => !this.destroyed && fn(...args);
+    }
+    return commands;
   }
 
   private toggleMark(mark: Mark): boolean {
@@ -817,6 +894,21 @@ export class Editor {
     return ((el && contentElement(el, pos.cell)) ?? el)?.getBoundingClientRect() ?? null;
   }
 
+  /** @internal The viewport rectangle of the text from `from` to `to` in one block or cell (its first line), and whether that text is right-to-left. */
+  textRect(from: Position, to: Position): { rect: DOMRect; rtl: boolean } | null {
+    const start = this.toDom(from);
+    const end = this.toDom(to);
+    if (!start || !end) return null;
+    const range = this.root.ownerDocument.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+    const rect = range.getClientRects()[0];
+    if (!rect) return null;
+    const el = start.node.nodeType === 1 ? (start.node as Element) : start.node.parentElement;
+    const rtl = !!el && this.root.ownerDocument.defaultView!.getComputedStyle(el).direction === 'rtl';
+    return { rect, rtl };
+  }
+
   /** Scrolls the editor and the elements around it so the caret is visible. */
   private scrollCaretIntoView(): void {
     const rect = this.caretRect();
@@ -829,16 +921,18 @@ export class Editor {
   }
 
   destroy(): void {
+    if (this.destroyed) return;
     this.destroyed = true;
     if (this.changeFrame !== null) cancelAnimationFrame(this.changeFrame);
     if (this.settleFrame !== null) cancelAnimationFrame(this.settleFrame);
     for (const fn of this.cleanup) fn();
-    for (const { menu } of this.suggestions) menu.destroy();
+    this.suggestions.destroy();
     for (const widget of [...this.widgets]) widget.remove();
     this.blockMenu.destroy();
     this.toolbar?.destroy();
     this.linkPopover.destroy();
     this.handle.destroy();
+    setPopupContainer(this.root, undefined);
     for (const name of Object.keys(this.runtime.attributes ?? {})) this.root.removeAttribute(name);
     for (const name of this.tokenNames) this.root.style.removeProperty(name);
     this.root.style.colorScheme = '';
@@ -907,6 +1001,7 @@ export class Editor {
    * this). Returns false, doing nothing, when no one listens for submit.
    */
   submit(): boolean {
+    if (this.destroyed) return false;
     if (!this.options.onSubmit && !this.listeners.get('submit')?.size) return false;
     this.flushChange();
     this.options.onSubmit?.(this.getMarkdown(), this);
@@ -1275,12 +1370,8 @@ export class Editor {
       }
       case 'insertParagraph': {
         // Android keyboards send Enter as keyCode 229, which keydown ignores,
-        // so an open suggestion menu takes it here.
-        const menu = this.openMenu();
-        if (menu && menu !== this.blockMenu && menu.count > 0) {
-          menu.pick();
-          return;
-        }
+        // so an open suggestion popup takes it here.
+        if (this.suggestions.isOpen && this.suggestions.accept()) return;
         this.run(cmd.splitBlock);
         return;
       }
@@ -1365,7 +1456,7 @@ export class Editor {
     if (text.length === 1 && '*_`~'.includes(text)) this.run((s) => cmd.applyInlineInputRules(s));
     if (this.markdown.inline.length > 0) this.run((s) => cmd.applyTokenInputRules(s, this.markdown.inline) ?? s);
     if (text === ' ' && this.markdown.autolinks) this.run((s) => cmd.applyAutolinkInputRule(s) ?? s);
-    if ([...text].length === 1) this.maybeOpenSuggestion(text);
+    if (!text.includes('\n')) this.typedForSuggestion();
   }
 
   private onCompositionStart(e: Event): void {
@@ -1392,6 +1483,7 @@ export class Editor {
     // Read the committed text while still composing, so nothing moves the browser selection yet.
     this.syncComposition();
     this.composing = false;
+    if (isSafari) this.compositionEndedAt = Date.now();
     this.unsettled.add(this.composition.blockId);
     // Render the block from the model once the browser is done with it: after
     // input that follows in the same task (Firefox sends the last one after
@@ -1415,20 +1507,18 @@ export class Editor {
     this.unsettled.clear();
     this.paint();
     this.afterRender();
-    if (!composed) return;
-    // A full-width slash typed with an IME opens the slash menu too.
-    const pos = this.state.selection.focus;
-    if (!isCollapsed(this.state.selection) || !this.state.doc.blocks.some((b) => b.id === pos.blockId)) return;
-    const content = containerContent(getBlock(this.state.doc, pos.blockId), pos.cell);
-    const ch = content ? inlineText(content)[pos.offset - 1] : undefined;
-    if (ch) this.maybeOpenSuggestion(ch);
+    // Composed text opens a popup as typing does: a full-width slash opens the slash menu.
+    if (composed) this.typedForSuggestion();
   }
 
   private onInput(e: InputEvent): void {
     if (this.fromControl(e)) return;
     // Composition input, and the last of it when it arrives after compositionend.
     if (this.composing || (this.composition && COMPOSITION_INPUT.has(e.inputType))) {
+      const before = this.composedLength();
       this.syncComposition();
+      // Composed text that grew opens a popup as typing does (Android composes every word).
+      if (this.composing && this.composedLength() > before) this.typedForSuggestion();
       return;
     }
     if (e.isComposing) return;
@@ -1436,6 +1526,29 @@ export class Editor {
     const before = this.state;
     this.reconcileFromDom('typing');
     if (e.inputType === 'insertText' && e.data && this.state !== before) this.afterTyping(e.data);
+  }
+
+  /** The length of the composed block's or cell's text. */
+  private composedLength(): number {
+    const pos = this.state.selection.focus;
+    const block = this.state.doc.blocks.find((b) => b.id === this.composition?.blockId);
+    const content = block && containerContent(block, block.id === pos.blockId ? pos.cell : undefined);
+    return content ? inlineLength(content) : 0;
+  }
+
+  /**
+   * Ends the composition on purpose: reads the composed text into the model
+   * and renders the block from it, which ends the browser's composition.
+   * Picking a suggestion item while composing does this first.
+   */
+  private endComposition(): void {
+    if (!this.composing || !this.composition) return;
+    this.syncComposition();
+    this.composing = false;
+    this.unsettled.add(this.composition.blockId);
+    if (this.settleFrame !== null) cancelAnimationFrame(this.settleFrame);
+    this.settleFrame = null;
+    this.settleComposition();
   }
 
   /**
@@ -1531,16 +1644,24 @@ export class Editor {
       fn();
     };
 
+    // Safari sends the Enter that commits a composition after compositionend, with keyCode 229 in
+    // shipped versions; as extra protection, the first key within 100 ms of it never reaches the popup.
+    const justComposed = Date.now() - this.compositionEndedAt < 100;
+    this.compositionEndedAt = 0;
     // Open menus take the navigation keys.
-    const menu = this.openMenu();
+    if (this.suggestions.isOpen && !justComposed) {
+      this.refreshSelection();
+      if (this.suggestions.keydown(e)) {
+        e.preventDefault();
+        return;
+      }
+    }
+    const menu = this.blockMenu.isOpen ? this.blockMenu : null;
     if (menu) {
       if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) return handled(() => this.moveMenu(menu, 1));
       if (e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey)) return handled(() => this.moveMenu(menu, -1));
-      if (e.key === 'Enter') {
-        if (menu.count > 0) return handled(() => menu.pick());
-        if (menu !== this.blockMenu) this.closeSuggestion();
-      }
-      if (e.key === 'Escape') return handled(() => (menu !== this.blockMenu ? this.closeSuggestion() : this.closeBlockMenu()));
+      if (e.key === 'Enter' && menu.count > 0) return handled(() => menu.pick());
+      if (e.key === 'Escape') return handled(() => this.closeBlockMenu());
     }
 
     if (e.key === 'Escape' && this.toolbar?.isOpen) {
@@ -1744,7 +1865,7 @@ export class Editor {
 
   private onScroll(): void {
     this.handle.hide();
-    if (this.suggest || this.toolbar?.isOpen || this.blockMenu.isOpen) this.updateUi();
+    if (this.suggestions.isActive || this.toolbar?.isOpen || this.blockMenu.isOpen) this.updateUi();
   }
 
   // -------------------------------------------------------------------------
@@ -1856,104 +1977,11 @@ export class Editor {
   }
 
   // -------------------------------------------------------------------------
-  // Suggestion menus (see extensions/suggestion.ts)
+  // Suggestion menus (see suggest/controller.ts)
 
-  /** Opens the suggestion menu whose trigger was just typed, if any. */
-  private maybeOpenSuggestion(ch: string): void {
-    const index = this.suggestions.findIndex(({ config }) => triggers(config).includes(ch));
-    if (index < 0) return;
-    const config = this.suggestions[index]!.config;
-    const pos = this.current.selection.focus;
-    const block = getBlock(this.current.doc, pos.blockId);
-    if (!isTextBlock(block) || isPlainTextBlock(block) || pos.cell || !isCollapsed(this.current.selection)) return;
-    const before = inlineText(block.content)[pos.offset - 2];
-    // By default only at the start of a line or after a space, so URLs and paths do not open it.
-    if (!config.allowAnywhere && before !== undefined && !/\s/.test(before)) return;
-    this.closeSuggestion();
-    this.suggest = { index, blockId: block.id, from: pos.offset - 1, request: 0 };
-    this.updateUi();
-  }
-
-  private closeSuggestion(): void {
-    if (this.suggest) this.suggestions[this.suggest.index]!.menu.hide();
-    this.suggest = null;
-    this.root.removeAttribute('aria-activedescendant');
-    this.root.removeAttribute('aria-controls');
-  }
-
-  /** The text typed after the trigger, or null when the suggestion should close. */
-  private suggestionQuery(): string | null {
-    const active = this.suggest;
-    if (!active || !isCollapsed(this.current.selection)) return null;
-    const { config } = this.suggestions[active.index]!;
-    const pos = this.current.selection.focus;
-    if (pos.blockId !== active.blockId || pos.cell || pos.offset <= active.from) return null;
-    const block = this.current.doc.blocks.find((b) => b.id === active.blockId);
-    if (!block || !isTextBlock(block)) return null;
-    const text = inlineText(block.content);
-    if (!triggers(config).includes(text[active.from] ?? '')) return null;
-    const query = text.slice(active.from + 1, pos.offset);
-    if (query.includes('\n') || query.length > (config.maxLength ?? 30)) return null;
-    if (config.allowSpaces ? /\s\s/.test(query) : /\s/.test(query)) return null;
-    return query;
-  }
-
-  /** Asks for items when the query changed, and shows them when they arrive. */
-  private refreshSuggestion(query: string): void {
-    const active = this.suggest!;
-    const { config, menu } = this.suggestions[active.index]!;
-    if (active.query === query) {
-      // Same query: only follow the caret. Rebuilding would reset the item the user moved to.
-      if (menu.isOpen) this.placeSuggestion(menu);
-      return;
-    }
-    active.query = query;
-    const request = ++active.request;
-    const result = config.items({ query, editor: this });
-    const show = (items: readonly SuggestionItem[]) => {
-      if (this.suggest !== active || active.request !== request || this.destroyed) return;
-      if (items.length === 0 && (!config.emptyLabel || query.length > 3)) {
-        menu.hide();
-        this.syncActiveDescendant();
-        return;
-      }
-      menu.setSections(
-        [
-          {
-            items: items.map((item, i) => ({
-              id: item.id ?? `${i}`,
-              label: item.label,
-              icon: item.icon,
-              run: () => this.pickSuggestion(item),
-            })),
-          },
-        ],
-        config.emptyLabel,
-      );
-      this.placeSuggestion(menu);
-    };
-    if (isPromise(result)) result.then(show, () => undefined);
-    else show(result);
-  }
-
-  private placeSuggestion(menu: Menu): void {
-    const rect = this.selectionRect();
-    if (rect) menu.popup.show(rect, 'below');
-    this.root.setAttribute('aria-controls', menu.el.id);
-    this.syncActiveDescendant();
-  }
-
-  private pickSuggestion(item: SuggestionItem): void {
-    const active = this.suggest;
-    if (!active) return;
-    const { config } = this.suggestions[active.index]!;
-    const query = active.query ?? '';
-    const range = {
-      from: { blockId: active.blockId, offset: active.from },
-      to: { blockId: active.blockId, offset: active.from + 1 + query.length },
-    };
-    this.closeSuggestion();
-    config.command({ editor: this, range, item, query });
+  /** After typing: opens the suggestion whose token is at the caret, if any. */
+  private typedForSuggestion(): void {
+    if (this.suggestions.typed()) this.updateUi();
   }
 
   /** The slash menu, as a suggestion. */
@@ -1964,9 +1992,11 @@ export class Editor {
       .filter((b): b is BlockItem => !!b)
       .map((b) => ({ id: b.id, label: this.labels[b.id], icon: this.icon(b.id), aliases: b.aliases, spec: b.spec }));
     return {
-      char: SLASH_CHARS,
+      name: 'slash',
+      trigger: SLASH_CHARS,
       allowSpaces: true,
       emptyLabel: this.labels.noResults,
+      label: this.labels.commands,
       className: 'mbe-slash-menu',
       items: ({ query }) => items.filter((item) => matches(item, query)),
       command: ({ range, item }) => {
@@ -2008,7 +2038,7 @@ export class Editor {
     this.blockSel = { anchor, head };
     this.current = { ...this.current, selection: cmd.spanBlocks(this.current.doc.blocks, this.blockRange()!), storedMarks: null };
     this.history.breakGroup();
-    this.closeSuggestion();
+    this.suggestions.close();
     this.toolbar?.hide();
     this.blockMenu.hide();
     this.refreshRevealed();
@@ -2131,7 +2161,7 @@ export class Editor {
   // -------------------------------------------------------------------------
   // Block menu
 
-  /** The icon for a UI control: the `icons` option's entry, or the built-in Lucide icon. */
+  /** @internal The icon for a UI control: the `icons` option's entry, or the built-in Lucide icon. */
   icon(name: IconName): Icon {
     return this.options.icons?.[name] ?? builtinIcon(this.root.ownerDocument, name);
   }
@@ -2160,6 +2190,7 @@ export class Editor {
   }
 
   /**
+   * @internal
    * Only large blocks get the handle and block menu: tables and code blocks.
    * Other blocks change type through the slash menu or Markdown shortcuts.
    */
@@ -2168,10 +2199,11 @@ export class Editor {
     return block?.type === 'table' || block?.type === 'code';
   }
 
+  /** @internal Opens the block menu of a table or code block, as the block handle and Mod+/ do. */
   openBlockMenu(blockId: string, anchor?: DOMRect): void {
     if (this.readOnly || !this.hasBlockMenu(blockId)) return;
     this.dropBlockSelection();
-    this.closeSuggestion();
+    this.suggestions.close();
     this.toolbar?.hide();
     // Keep the caret in the table cell for table actions; otherwise move it into the block.
     if (this.state.selection.focus.blockId !== blockId) {
@@ -2194,6 +2226,7 @@ export class Editor {
   // -------------------------------------------------------------------------
   // Toolbar and link popover (see ui/toolbar.ts)
 
+  /** @internal Opens the link popover for the selection, as Mod+K does. */
   openLinkPopover(): void {
     if (this.readOnly) return;
     const block = getBlock(this.state.doc, this.state.selection.focus.blockId);
@@ -2231,14 +2264,7 @@ export class Editor {
       this.hintEl = nextHint;
     }
 
-    // Suggestion menu.
-    // A menu stays open while composing and follows the composed text (Android composes every word).
-    const query = focused ? this.suggestionQuery() : null;
-    if (query === null) {
-      if (this.suggest) this.closeSuggestion();
-    } else {
-      this.refreshSuggestion(query);
-    }
+    this.suggestions.update(focused);
 
     // Formatting toolbar.
     if (this.toolbar) {
@@ -2252,7 +2278,7 @@ export class Editor {
         !this.composing &&
         !isCollapsed(this.state.selection) &&
         !this.blockSel &&
-        !this.suggest &&
+        !this.suggestions.isActive &&
         !this.blockMenu.isOpen &&
         !!block &&
         !isPlainTextBlock(block) &&
@@ -2269,20 +2295,15 @@ export class Editor {
     this.syncActiveDescendant();
   }
 
-  private openMenu(): Menu | null {
-    const suggestion = this.suggest ? this.suggestions[this.suggest.index]!.menu : null;
-    return suggestion?.isOpen ? suggestion : this.blockMenu.isOpen ? this.blockMenu : null;
-  }
-
   private syncActiveDescendant(): void {
-    const id = this.openMenu()?.activeDescendant;
+    const id = this.suggestions.activeDescendant ?? (this.blockMenu.isOpen ? this.blockMenu.activeDescendant : null);
     if (id) this.root.setAttribute('aria-activedescendant', id);
     else this.root.removeAttribute('aria-activedescendant');
   }
 
   private hideUi(): void {
     this.dropBlockSelection();
-    this.closeSuggestion();
+    this.suggestions.close();
     this.blockMenu.hide();
     this.toolbar?.hide();
     this.handle.hide();
@@ -2358,14 +2379,6 @@ function selectionFromJSON(doc: Doc, value: unknown): Selection | null {
   const focus = read((value as Record<string, unknown>).focus);
   if (!anchor || !focus) return null;
   return clampSelection(doc, { anchor, focus });
-}
-
-function triggers(config: SuggestionConfig): readonly string[] {
-  return typeof config.char === 'string' ? [config.char] : config.char;
-}
-
-function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
-  return typeof (value as Promise<T>)?.then === 'function';
 }
 
 /** Accessible name of a task checkbox: its item's text, or `fallback` when the item is empty. */

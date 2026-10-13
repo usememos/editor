@@ -1,8 +1,11 @@
 // Floating UI: a positioned layer and a keyboard-navigable menu.
 //
-// Popups are appended to document.body with `position: fixed`, so a host
+// Popups use `position: fixed` and are appended to document.body, so a host
 // container with `overflow: hidden` (a chat input, a card) does not clip
-// them. Theme variables are copied from the editor root when a popup opens.
+// them. Inside an open <dialog> or an `aria-modal` element they are appended
+// there instead, so they show above the modal and stay usable; the
+// `popupContainer` option picks the element. Theme variables are copied from
+// the editor root when a popup opens.
 
 import { type Icon, iconNode } from '../icons';
 
@@ -19,11 +22,51 @@ const THEME_VARS = [
   '--mbe-accent',
   '--mbe-danger',
   '--mbe-radius',
+  '--mbe-popup-z',
 ];
 
-type Placement = 'below' | 'above';
+export type Placement = 'below' | 'above';
+
+const containers = new WeakMap<HTMLElement, HTMLElement>();
+
+/** Sets the element an editor's popups are appended to (the `popupContainer` option). */
+export function setPopupContainer(owner: HTMLElement, container: HTMLElement | undefined): void {
+  if (container) containers.set(owner, container);
+  else containers.delete(owner);
+}
+
+/** Where the popups of the editor `owner` go: `popupContainer`, else the nearest open dialog or `aria-modal` ancestor, else the body. */
+export function popupContainer(owner: HTMLElement): HTMLElement {
+  return containers.get(owner) ?? owner.closest<HTMLElement>('dialog[open], [aria-modal="true"]') ?? owner.ownerDocument.body;
+}
+
+/**
+ * Appends a shown `position: fixed` element to its container, and returns
+ * the offset of its containing block. The offset is not zero when an
+ * ancestor has a `transform`, `filter` or `contain` style, which makes
+ * `position: fixed` relative to that ancestor instead of the viewport.
+ */
+export function attach(el: HTMLElement, owner: HTMLElement): { x: number; y: number } {
+  const container = popupContainer(owner);
+  if (el.parentElement !== container) container.appendChild(el);
+  el.style.left = '0px';
+  el.style.top = '0px';
+  const rect = el.getBoundingClientRect();
+  return { x: rect.left, y: rect.top };
+}
+
+/** The visible part of the layout viewport, which the on-screen keyboard can shrink. */
+export function visibleViewport(view: Window): { left: number; top: number; width: number; height: number } {
+  const vv = view.visualViewport;
+  return vv
+    ? { left: vv.offsetLeft, top: vv.offsetTop, width: vv.width, height: vv.height }
+    : { left: 0, top: 0, width: view.innerWidth, height: view.innerHeight };
+}
 
 export const isMac = typeof navigator !== 'undefined' && /Mac|iP(hone|ad|od)/.test(navigator.platform);
+
+/** Safari, which sends the Enter that commits a composition after `compositionend`. */
+export const isSafari = typeof navigator !== 'undefined' && /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|CriOS|Edg|Android/.test(navigator.userAgent);
 
 /** True on touch devices, which have no hover and show their own menu over a selection. */
 export const isTouch = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
@@ -31,6 +74,7 @@ export const isTouch = () => typeof matchMedia === 'function' && matchMedia('(po
 export class Popup {
   readonly el: HTMLElement;
   private open = false;
+  private placed: Placement = 'below';
 
   constructor(
     private readonly owner: HTMLElement,
@@ -50,15 +94,30 @@ export class Popup {
     return this.open;
   }
 
-  /** Shows the popup next to `rect` (viewport coordinates), flipping to stay on screen. */
-  show(rect: { left: number; top: number; bottom: number; right?: number }, placement: Placement = 'below', gap = 6): void {
+  /** The side of the anchor the popup was last shown on. */
+  get side(): Placement {
+    return this.placed;
+  }
+
+  /**
+   * Shows the popup next to `rect` (viewport coordinates), flipping to stay
+   * on screen. With `align: 'end'`, its right edge lines up with `rect.right`
+   * (for right-to-left text).
+   */
+  show(
+    rect: { left: number; top: number; bottom: number; right?: number },
+    placement: Placement = 'below',
+    gap = 6,
+    align: 'start' | 'end' = 'start',
+  ): void {
     const doc = this.owner.ownerDocument;
-    if (!this.el.isConnected) doc.body.appendChild(this.el);
     if (!this.open) this.copyTheme();
     this.el.hidden = false;
     this.open = true;
+    const offset = attach(this.el, this.owner);
 
     const view = doc.defaultView!;
+    const vp = visibleViewport(view);
     // Where it does not fit, it goes on the side with more room and scrolls,
     // as on a phone with the keyboard open.
     // Measured at full height; keep the scroll position when it shrinks again.
@@ -66,8 +125,8 @@ export class Popup {
     this.el.style.maxHeight = '';
     const w = this.el.offsetWidth;
     let h = this.el.offsetHeight;
-    const below = view.innerHeight - 8 - (rect.bottom + gap);
-    const above = rect.top - gap - 8;
+    const below = vp.top + vp.height - 8 - (rect.bottom + gap);
+    const above = rect.top - gap - 8 - vp.top;
     let side = placement;
     if (side === 'below' && h > below && above > below) side = 'above';
     else if (side === 'above' && h > above && below > above) side = 'below';
@@ -83,10 +142,12 @@ export class Popup {
       h = this.el.offsetHeight;
       this.el.scrollTop = scrolled;
     }
+    this.placed = side;
     const top = side === 'below' ? rect.bottom + gap : rect.top - h - gap;
-    const left = Math.max(8, Math.min(rect.left, view.innerWidth - w - 8));
-    this.el.style.left = `${Math.round(left)}px`;
-    this.el.style.top = `${Math.round(top)}px`;
+    const start = align === 'end' ? (rect.right ?? rect.left) - w : rect.left;
+    const left = Math.max(vp.left + 8, Math.min(start, vp.left + vp.width - w - 8));
+    this.el.style.left = `${Math.round(left - offset.x)}px`;
+    this.el.style.top = `${Math.round(top - offset.y)}px`;
   }
 
   hide(): void {
@@ -113,6 +174,10 @@ export class Popup {
 export interface MenuItem {
   id: string;
   label: string;
+  /** Secondary text after the label. */
+  detail?: string;
+  /** Text in the label to mark (the query): its first case-insensitive occurrence. */
+  mark?: string;
   /** Shown before the label: text, or an element that is cloned. */
   icon?: Icon;
   /** Extra words that match when filtering. */
@@ -136,6 +201,8 @@ export class Menu {
   private readonly id = `mbe-menu-${++menuCounter}`;
   /** Called after an item runs. */
   onPicked: (() => void) | null = null;
+  /** Called when the highlight moves, by key, by mouse or because the items changed. */
+  onHighlight: ((index: number) => void) | null = null;
 
   constructor(owner: HTMLElement, className: string, role: 'listbox' | 'menu' = 'listbox') {
     this.popup = new Popup(owner, `mbe-menu ${className}`);
@@ -183,8 +250,14 @@ export class Menu {
         if (content) icon.appendChild(content);
         const label = doc.createElement('span');
         label.className = 'mbe-menu-label';
-        label.textContent = item.label;
+        setMarked(label, item.label, item.mark);
         row.append(icon, label);
+        if (item.detail) {
+          const detail = doc.createElement('span');
+          detail.className = 'mbe-menu-detail';
+          detail.textContent = item.detail;
+          row.appendChild(detail);
+        }
         row.addEventListener('mousemove', () => this.highlight(i));
         row.addEventListener('click', () => this.pick(i));
         this.el.appendChild(row);
@@ -199,8 +272,45 @@ export class Menu {
     this.highlight(0);
   }
 
+  /** Replaces the items with a line of text that is not an option, such as "Loading…". */
+  setMessage(text: string, className: string): void {
+    const doc = this.el.ownerDocument;
+    const line = doc.createElement('div');
+    line.className = className;
+    line.textContent = text;
+    this.el.replaceChildren(line);
+    this.items = [];
+    this.index = 0;
+  }
+
+  /** Marks the list as waiting for newer items (`aria-busy`). */
+  set busy(busy: boolean) {
+    if (busy) this.el.setAttribute('aria-busy', 'true');
+    else this.el.removeAttribute('aria-busy');
+  }
+
   get count(): number {
     return this.items.length;
+  }
+
+  /** The ID of the highlighted item. */
+  get activeId(): string | null {
+    return this.items[this.index]?.id ?? null;
+  }
+
+  /** Highlights the item with this ID. Returns false when there is none. */
+  highlightId(id: string): boolean {
+    const i = this.items.findIndex((item) => item.id === id);
+    if (i < 0) return false;
+    this.highlight(i);
+    return true;
+  }
+
+  /** Moves the highlight by a page: the number of items that fit in the list's height. Stops at the ends. */
+  page(direction: 1 | -1): void {
+    const row = this.el.querySelector<HTMLElement>('.mbe-menu-item');
+    const perPage = row && row.offsetHeight > 0 ? Math.max(1, Math.floor(this.el.clientHeight / row.offsetHeight) - 1) : 8;
+    this.highlight(Math.max(0, Math.min(this.items.length - 1, this.index + direction * perPage)));
   }
 
   highlight(i: number): void {
@@ -211,6 +321,12 @@ export class Menu {
       row.setAttribute('aria-selected', String(k === this.index));
     });
     this.el.querySelector(`#${this.id}-${this.index}`)?.scrollIntoView?.({ block: 'nearest' });
+    this.onHighlight?.(this.index);
+  }
+
+  /** The index of the highlighted item. */
+  get activeIndex(): number {
+    return this.items.length ? this.index : -1;
   }
 
   move(delta: number): void {
@@ -231,6 +347,21 @@ export class Menu {
   destroy(): void {
     this.popup.destroy();
   }
+}
+
+/** Sets `el`'s text to `text`, with the first case-insensitive occurrence of `mark` in a `<mark>`. */
+function setMarked(el: HTMLElement, text: string, mark: string | undefined): void {
+  const at = mark ? text.toLowerCase().indexOf(mark.toLowerCase()) : -1;
+  // Lower-casing can change the length of some characters; then mark nothing.
+  if (at < 0 || text.toLowerCase().length !== text.length) {
+    el.textContent = text;
+    return;
+  }
+  const doc = el.ownerDocument;
+  const m = doc.createElement('mark');
+  m.className = 'mbe-menu-match';
+  m.textContent = text.slice(at, at + mark!.length);
+  el.replaceChildren(text.slice(0, at), m, text.slice(at + mark!.length));
 }
 
 /** Case-insensitive match of a query against an item's label and aliases (a substring, also with spaces ignored). */

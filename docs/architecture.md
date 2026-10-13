@@ -25,7 +25,7 @@ Other products confirm the split behind rules 1 and 2. Editors that keep Markdow
 | Rendering | Keyed reconciliation. A block whose object did not change keeps its DOM element. |
 | Undo | Whole-document snapshots. They are cheap because unchanged blocks are shared. |
 | Markdown | Our own CommonMark 0.31.2 + GFM parser and a normalizing serializer. Saving is stable: `serialize(parse(md))` is a fixed point. |
-| Public API | Modeled on Tiptap and ProseMirror: `editor.commands`, `isActive`, `getAttributes`, `on()` events, JSON-safe selections, and extensions as plain objects that add syntax, keys, decorations, suggestion menus and input hooks. Markdown is the only content format. |
+| Public API | Modeled on Tiptap and ProseMirror: `editor.commands`, `isActive`, `getAttributes`, `on()` events, JSON-safe selections, and extensions as plain objects that add syntax, keys, decorations, autocomplete popups and input hooks. Markdown is the only content format. |
 | UI | Slash menu, block handle and block menu, formatting toolbar, link popover. All plain DOM, styled with CSS custom properties. |
 | Icons | Lucide icons, copied into the source as SVG data rather than imported from a package, so the core keeps zero runtime dependencies. The `icons` option replaces any of them. |
 
@@ -42,6 +42,7 @@ Other products confirm the split behind rules 1 and 2. Editors that keep Markdow
 | `packages/editor/src/view/dom.ts` | Rendering blocks to DOM, and mapping DOM points to model positions and back. |
 | `packages/editor/src/view/reveal.ts` | Which rendered views show their source for a given selection. |
 | `packages/editor/src/ui/` | `Popup` and `Menu`, the toolbar and link popover, the block handle. |
+| `packages/editor/src/suggest/` | The autocomplete popup: the session and keys (`controller.ts`), finding the token at the caret (`match.ts`), item requests (`source.ts`) and placement (`anchor.ts`). |
 | `packages/editor/src/markdown/` | Parser (`blocks.ts`, `inline.ts`, `autolink.ts`, `lower.ts`), serializer (`serialize.ts`), source-preserving save (`source.ts`), dialect options and syntax extensions (`options.ts`), entity tables, and an HTML renderer used only by the spec tests (`html.ts`). |
 | `packages/editor/src/clipboard/` | Document to HTML for copy (`toHtml.ts`), pasted HTML to document (`fromHtml.ts`). |
 | `packages/editor/src/extension.ts`, `packages/editor/src/extensions/` | The `Extension` interface, and the built-in extensions: `math()`, `footnotes()`, `tags()`, `mentions()`, `suggestion()`, `textDecorator()`, `fileHandler()` and `defaultKeymap()`. |
@@ -49,7 +50,7 @@ Other products confirm the split behind rules 1 and 2. Editors that keep Markdow
 | `packages/editor/src/base.css`, `theme.css`, `style.css` | Layout and block spacing; the default look; both together. |
 | `packages/editor/src/labels.ts` | Every UI string, for localization. |
 | `packages/editor/src/icons.ts` | Every built-in icon, as Lucide SVG data, and building them into elements. |
-| `packages/editor/src/react/index.tsx` | `<MarkdownEditor>`, `useEditor` and `<EditorContent>`. |
+| `packages/editor/src/react/index.tsx` | `<MarkdownEditor>`, `useEditor`, `<EditorContent>` and `useSuggestion`. |
 
 ## Document model
 
@@ -74,8 +75,8 @@ One `contentEditable` root, not one per block, so native selection crosses block
 
 ## Input pipeline
 
-1. **`beforeinput`, cancelled.** `insertText`, `insertParagraph`, `insertLineBreak`, all `delete*` types, `historyUndo`/`historyRedo` and `format*` map to commands. Word and line deletes use the browser's `getTargetRanges()`, so they follow the platform's word boundaries. So does `insertText` when its target range covers text while the selection is a caret: that is how mobile autocorrect and word suggestions replace a word. `insertParagraph` picks the item of an open suggestion menu, because Android keyboards send Enter with keyCode 229, which `keydown` ignores.
-2. **IME composition, not cancelled.** While composing, the editor does not re-render the composed block or move the selection, and hides the toolbar. On each `input` it compares the block's DOM text with the model and applies the difference as one delete and one insert, so `change`, `getMarkdown()`, `isEmpty` and an open suggestion menu follow the composed text (on Android every word is a composition). The renderer adopts the browser's DOM for the new block object instead of rebuilding it, and only updates its empty state, so the placeholder does not cover composed text. Marks stored before composing (Mod+B, then compose) apply to all of the composed text. The first change records one undo step for the whole composition. On `compositionend` the committed text is read once more; the block is rendered from the model on the next frame, so input that arrives after `compositionend` in the same task (Firefox sends the last `input` then) still counts as the composition, and nothing is re-rendered between two compositions in one keystroke (Korean syllables). A cross-block selection is deleted when composition starts, so a composition always stays inside one block.
+1. **`beforeinput`, cancelled.** `insertText`, `insertParagraph`, `insertLineBreak`, all `delete*` types, `historyUndo`/`historyRedo` and `format*` map to commands. Word and line deletes use the browser's `getTargetRanges()`, so they follow the platform's word boundaries. So does `insertText` when its target range covers text while the selection is a caret: that is how mobile autocorrect and word suggestions replace a word. `insertParagraph` picks the item of an open autocomplete popup, because Android keyboards send Enter with keyCode 229, which `keydown` ignores.
+2. **IME composition, not cancelled.** While composing, the editor does not re-render the composed block or move the selection, and hides the toolbar. On each `input` it compares the block's DOM text with the model and applies the difference as one delete and one insert, so `change`, `getMarkdown()`, `isEmpty` and an open autocomplete popup follow the composed text (on Android every word is a composition). The renderer adopts the browser's DOM for the new block object instead of rebuilding it, and only updates its empty state, so the placeholder does not cover composed text. Marks stored before composing (Mod+B, then compose) apply to all of the composed text. The first change records one undo step for the whole composition. On `compositionend` the committed text is read once more; the block is rendered from the model on the next frame, so input that arrives after `compositionend` in the same task (Firefox sends the last `input` then) still counts as the composition, and nothing is re-rendered between two compositions in one keystroke (Korean syllables). A cross-block selection is deleted when composition starts, so a composition always stays inside one block.
 3. **Fallback.** An `input` event the editor did not cancel goes through the same read-back, and typed text then runs the Markdown shortcuts. A `beforeinput` that cannot be cancelled (from some Android keyboards) for typed text, a replacement, or a deletion inside one text container is left to the browser and read back, so it is not applied twice.
 4. **`keydown`**: an open menu takes the navigation keys first. A block selection takes its own keys next (see "Block selection"). Then extension key bindings run in order, ending with `defaultKeymap()` (marks, block types, Mod+K, undo/redo, Tab, submit, Escape). A binding that returns true stops the rest and prevents the browser default. Mod+/ (block menu) and Mod+Shift+V (plain paste) are handled by the editor itself.
    ArrowDown on the last line of a code block, table or divider that ends the document adds an empty paragraph below it, and ArrowUp on the first line of one that starts the document adds one above it (`exitBlock`). Elsewhere the browser moves the caret. When it passes over a block that holds a caret (Firefox skips list items, which are flex boxes, and WebKit skips code blocks and tables), the editor moves the caret into that block at the same horizontal position. After any caret key the editor keeps the caret 8 px clear of the scroll container's edge. Backspace at the start of a block is handled on `keydown`, because WebKit sends no `beforeinput` there when no editable text comes before the caret. A click in the empty space below such a final block also adds a paragraph. Enter three times at the end of a code block still leaves it.
@@ -118,11 +119,36 @@ Each history entry is a snapshot of `{ doc, selection }` from before a change. T
 
 ## UI
 
-- **Popups** are appended to `document.body` with `position: fixed`, so a parent with `overflow: hidden` (a chat input, a modal) does not clip them. They copy the editor's theme variables and flip above the anchor when there is no room below.
-- **Suggestion menus** (`suggestion()`) open when their trigger character is typed at the start of a block or after a space, and track the query typed after it. Items may be async; results for an outdated query are dropped. A menu with no items hides but keeps tracking, so it comes back when the query matches again. Suggestions do not open in table cells, code or raw blocks.
-- **Slash menu** is a suggestion menu. It opens on `/` (or the full-width `／` from Japanese IMEs) at the start of a block or after a space. Typing filters it. Picking a text type (paragraph, heading, list, quote, code) converts the current block in place and keeps its text; a table or divider goes below the block, or replaces it if empty. It shows "No results" until the query passes three characters with no match, then hides. The menu is a listbox wired to the editor with `aria-activedescendant`. It rebuilds only when the query changes, so a late `selectionchange` does not reset the highlighted item.
+- **Popups** use `position: fixed` and are appended to `document.body`, so a parent with `overflow: hidden` (a chat input, a card) does not clip them. Inside an open `<dialog>` or an `aria-modal` element they are appended there instead, so they show above the modal and are not inert; the `popupContainer` option picks the element. When an ancestor of the container has a `transform`, `filter` or `contain` style, `position: fixed` is relative to that ancestor: each popup measures its offset at `left: 0; top: 0` and subtracts it, as Floating UI does. Popups copy the editor's theme variables, stay inside the visual viewport (the on-screen keyboard shrinks it), and flip above the anchor when there is no room below. Their z-index is `var(--mbe-popup-z, 1000)`.
+- **Autocomplete** (`suggestion()`); see [Autocomplete](#autocomplete).
+- **Slash menu** is a suggestion. It opens on `/` (or the full-width `／` from Japanese IMEs) at the start of a block or after a space. Typing filters it. Picking a text type (paragraph, heading, list, quote, code) converts the current block in place and keeps its text; a table or divider goes below the block, or replaces it if empty. It shows "No results" until the query passes three characters with no match, then hides. The menu is a listbox wired to the editor with `aria-activedescendant`. It rebuilds only when the query changes, so a late `selectionchange` does not reset the highlighted item.
 - **Block handle** is a grip icon. It appears on hover next to tables and code blocks only, and follows the caret into them on touch devices. It opens the block menu: Duplicate, Delete and, with the caret in a table cell, row, column and alignment actions. Mod+/ opens the same menu from the keyboard inside those blocks. Other blocks have no handle; they change type through the slash menu or Markdown shortcuts.
 - **Formatting toolbar** appears over a non-empty selection: bold, italic, strikethrough, code and link, each an icon button named by its label (`aria-label` and a tooltip with the shortcut). It does not change block types. Buttons show their state with `aria-pressed`. On touch devices it sits below the selection, away from the native selection menu.
+
+## Autocomplete
+
+One general popup; the caller owns the syntax. The editor implements the behavior once: opening and closing, keys, async items, placement, IME and accessibility. Each `suggestion()` brings its triggers, how to find its token (`match`), where it may open (`allow`), its items and what a pick writes (`command`). The slash menu is the only built-in caller.
+
+**Finding the token.** A matcher gets the text of the block or cell, the caret offset, the formatted content and the triggers, and returns `{ from, to, query }` or null. The default matcher reproduces the original rules for any trigger string: the nearest trigger before the caret at the start of a line or after whitespace, then a query without whitespace (single spaces with `allowSpaces`); the token ends at the next whitespace. `matchToken(scan)` builds a matcher from the scanner used for highlighting: it inserts a probe letter at the caret, scans the line around it, and takes the token that covers the probe. The probe lets a scanner see a token the user is still typing (`#`, or `#work/`) without a "partial token" mode. It scans other triggers of the same length as the first, so a scanner for `#` also finds `＃`. A caret inside a character cluster (before a variation selector, as in the keycap `#️⃣`) is in no token. The controller then checks that the token starts with a trigger, that the query is within `maxLength`, and `allow` (by default, not in code, links, images, raw HTML or tokens). Code and raw blocks never run matchers. When two suggestions match, the token that starts closest to the caret wins; on a tie, the earlier extension.
+
+**Session.** There is at most one session: a suggestion, its block and cell, and its trigger offset. Opening is driven by events and staying open by state, as in CodeMirror:
+
+- Typed text, and composed text that grows, run the matchers; a match opens a session. Moving the caret into a token, pasting and deleting do not open one. Ctrl+Space (`editor.suggestion.open`) opens one for the token at the caret even where `allow` refused, and tells `allow` and `items` that the open was explicit.
+- After every change of the document, the selection or focus, the controller finds the session's token again. It stays open while the token is in the same block or cell with the same trigger offset; a text change before the trigger may move the offset. Otherwise, or when the selection is not collapsed, the editor loses focus, becomes read-only, blocks are selected or `setMarkdown` runs, it closes.
+- Escape closes it and records the token as dismissed: typing in that token does not open it again until the caret leaves it.
+- A pick closes the session, then runs `command` with the range from the trigger to the token end. Without a command it writes the first trigger, the item's value and a space, as one `insertText`, so it is one undo step.
+
+**Items.** `SourceRunner` (`source.ts`) owns one request per suggestion. A new query aborts the previous request's `AbortSignal`, waits out `debounce`, and calls `items`. Each request has a number; a result is shown only if it is still the latest. While a newer request is pending, the items shown stay usable and the listbox has `aria-busy`. With nothing shown after 300 ms, a "Loading…" row appears; it is not an option. A rejection counts as no items. With no items, the popup hides but the session keeps tracking, so it comes back when the query matches again; with `emptyLabel` it shows that label for queries up to three characters. The editor never filters or sorts; at most `limit` items are shown. When new items arrive, the highlight stays on the item with the same `id`.
+
+**Keys.** The controller sees `keydown` before block selection and extension key bindings, and only while the popup shows something: ArrowUp and ArrowDown (wrapping; Ctrl+P and Ctrl+N on macOS), Page Up and Page Down, Enter and Tab to pick, Escape. Shift+Tab, Space, ArrowLeft and ArrowRight keep their meaning, and the session follows the caret. With a loading row or the empty label, Enter closes the popup and splits the block. For 75 ms after a popup appears because async items arrived, only Escape is taken, so a key pressed before the user saw it does not pick (CodeMirror's `interactionDelay`). Ctrl+Space, and Option+Escape on macOS, where Ctrl+Space usually switches input sources and Cmd+I is italic, are bindings in `defaultKeymap()`.
+
+**Placement** (`anchor.ts`). The popup's start edge lines up with the trigger's (its right edge in right-to-left text), 4 px below the caret's line, so it does not move sideways while the query is typed. When the token wraps, it lines up with the caret. It keeps its side while open unless it no longer fits. It follows scrolling of any ancestor (the document `scroll` listener in the capture phase), and window and `visualViewport` resizes once per animation frame. It hides while the trigger is outside every clipping or scrolling ancestor.
+
+**IME.** `keydown` with `isComposing` or keyCode 229 never reaches the popup. On Safari, which sends the Enter that commits a composition after `compositionend`, the first key within 100 ms after it does not either. While composing, the model follows the composed text, so the query does too; `items` gets `composing: true`, and an empty result does not hide a list that is shown (a Pinyin reading matches nothing until it is converted). The query is asked again once the composition ends. Showing or moving the popup never touches the composed block: the popup is outside the editor root. A click on an item while composing first reads the composition into the model and renders the block, which ends the browser's composition, then picks: the one place the editor ends a composition on purpose.
+
+**Accessibility.** The root keeps `role="textbox"` and has `aria-autocomplete="list"` when any suggestion exists. While the popup shows something, the root also has `aria-haspopup="listbox"`, `aria-controls` (the listbox) and `aria-activedescendant` (the highlighted option). `aria-expanded` is not supported on a textbox, so, as in CodeMirror, the listbox carries `aria-expanded="true"`. The listbox is named by the suggestion's `label`.
+
+**Headless.** With `render: false` there is no `Menu`. The controller keeps the items and the highlighted index itself and reports them through `editor.suggestion.state` and the `suggestionChange` event; an app draws the popup with the listbox and option IDs from the state, so the root's ARIA attributes point at it. `setOptions({ extensions })` swaps the callbacks of suggestions with the same names, so React apps can pass callbacks that close over state.
 
 ## Icons
 
@@ -151,6 +177,8 @@ Every icon in the editor's UI comes from [Lucide](https://lucide.dev), the icon 
 | Block handle | `blockHandle` | `grip-vertical` |
 
 That is 28 places and 26 distinct icons.
+
+**The playground** is an app built on the editor, so it imports Lucide the way an app would: its formatting bar uses the `lucide` package (a root `devDependency`, pinned to the same version as `icons.ts`) and builds each button's icon with `createElement`. Each button is named by its title (`aria-label`). Buttons that are words (Read-only, Theme, Save) stay text. The package never imports `lucide`.
 
 **Not icons.** The bullet list marker (`•`) is part of the rendered document, styled like the text, and stays a character. The checkmark in a checked task box is already Lucide's `check` path; it stays a data URI in `theme.css` because it is drawn as the checkbox's background.
 
@@ -216,20 +244,44 @@ Paragraphs, headings, quotes, list items and table cells have `dir="auto"`, so e
 
 ## React wrapper
 
-`<MarkdownEditor>` creates one `Editor` per mount and forwards its `ref` to it. `onChange` fires at most once per animation frame. The wrapper keeps a short queue of the values it emitted, and calls `setMarkdown` only when a new `value` prop is not one of them, so a parent that re-renders with a slightly stale value does not overwrite newer typing. It calls `onChange` inside `flushSync`, so the parent renders each emitted value at once, as React does for a native input's `onChange`. Otherwise the update could still be queued when the parent sets a value that equals the one it last rendered, such as clearing the box right after fast typing and Mod+Enter, and the wrapper would not see a new `value` and would keep the typed text. A new `value` that arrives while an IME is composing is held and applied on `compositionend`. `placeholder`, `editable`, `taskToggle`, `attributes` and `resolveImageSrc` go through `setOptions`. The editor is recreated, keeping its Markdown, only when the names of its extensions change. `onSubmit(markdown)` receives the current Markdown after flushing pending changes.
+`<MarkdownEditor>` creates one `Editor` per mount and forwards its `ref` to it. `onChange` fires at most once per animation frame. The wrapper keeps a short queue of the values it emitted, and calls `setMarkdown` only when a new `value` prop is not one of them, so a parent that re-renders with a slightly stale value does not overwrite newer typing. It calls `onChange` inside `flushSync`, so the parent renders each emitted value at once, as React does for a native input's `onChange`. Otherwise the update could still be queued when the parent sets a value that equals the one it last rendered, such as clearing the box right after fast typing and Mod+Enter, and the wrapper would not see a new `value` and would keep the typed text. A new `value` that arrives while an IME is composing is held and applied on `compositionend`. `placeholder`, `editable`, `taskToggle`, `attributes`, `resolveImageSrc` and `theme` go through `setOptions`, and so does `extensions`, which updates the callbacks of `suggestion()` extensions. The editor is recreated, keeping its Markdown, only when the names of its extensions change. `useSuggestion(editor, name?)` subscribes to `suggestionChange` for apps that draw their own popup. `onSubmit(markdown)` receives the current Markdown after flushing pending changes.
 
 `useEditor(options, deps)` creates an editor on a detached element and `<EditorContent>` moves that element into the page, as in Tiptap. Autofocus waits until the element is mounted.
 
 ## Performance
 
-Measured on 2026-10-12 in headless Chromium in the development container (`npm run test:perf`; sizes with esbuild, minified, gzip -9, every export):
+Measured on 2026-10-12 in headless Chromium in the development container (`npm run test:perf`):
 
 | Gate (spec) | Result |
 | --- | --- |
 | Keystroke handling under 16 ms at p95 in a 2,000-block document | 13.4 ms p95, 8.7 ms median, with a frame between keystrokes. Pass. |
 | 100 KB of Markdown parsed and rendered in under 100 ms | 211–221 ms on a cold first load. Fail. It was 101–125 ms at v0. |
 
-Bundle size has no fixed limit. The goal is a normal size for a Markdown editor, not the smallest possible one, so check the size when a change adds a lot of code. Today the core is 45.9 KB min+gzip for browsers plus 3.0 KB of CSS (33.8 KB at v0, before the extensions, theme and autolinks), and the React entry is 1.2 KB.
+**Bundle size** has no fixed limit (decided 2026-10-12). The goal is a normal size for a Markdown editor, not the smallest possible one. `npm run size` prints what each published entry adds to an app, bundled for browsers with esbuild, minified and gzipped (1 KB = 1,000 bytes); CI writes the same table to each run's summary. Check it when a change adds a lot of code.
+
+| Entry (2026-10-13) | Minified and gzipped |
+| --- | --- |
+| Core, `Editor` only | 54.4 KB |
+| Core, every export | 57.0 KB |
+| React entry, on top of the core | 1.3 KB |
+| `style.css` | 3.4 KB |
+
+The core was 33.8 KB at v0, before the extensions, theme, autolinks, icons and the autocomplete popup. Nearly all of it is editing code: `editor.ts` (26%), the commands (11%), the Markdown parser (18%) and serializer (6%), rendering (6%), the autocomplete popup (7%) and HTML paste (5%). The 26 Lucide icons are 2.8 KB minified.
+
+For comparison, the same measurement of other editors set up for Markdown with tables, task lists and undo (versions from npm on 2026-10-13, React not included):
+
+| Setup | Minified and gzipped |
+| --- | --- |
+| This editor, `Editor` only | 54 KB |
+| Milkdown 7.22 (`@milkdown/kit`: core, CommonMark and GFM presets, history, listener) | 141 KB |
+| Tiptap 3.31 (StarterKit, `@tiptap/markdown`, tables, task lists) | 155 KB |
+| Lexical 0.52 (rich text, history, Markdown, lists, links, code, tables) | 160 KB |
+| CodeMirror 6, as memos sets it up today (`lang-markdown` with GFM, which also loads the HTML, CSS and JavaScript parsers; autocomplete, history, highlighting) | 185 KB |
+| memos' read view today (`react-markdown`, `remark-gfm`, `remark-breaks`, `remark-math`, `rehype-raw`, `rehype-sanitize`) | 104 KB |
+
+memos plans to use this editor for both editing and viewing memos, so it can drop both of the last two rows.
+
+Many read-only editors on one page are cheap: in the same container, creating 200 read-only editors with `taskToggle`, each showing a 12-line memo with a task list, a table, tags and math, took 2.5 ms per editor. Typing in another editor on the same page took 2 ms longer per keystroke at the median and 4 ms longer at p95 than with no read-only editors.
 
 What made the difference:
 
@@ -249,7 +301,8 @@ The cold-load result depends on the JavaScript engine warming up: about half of 
 | `npm run test:e2e:themed` | The same browser tests with a class on every `theme.classes` key, to show theme classes change no behavior. |
 | `npm run test:perf` | The two timing gates, run alone. |
 | `npm run typecheck` | TypeScript in strict mode. |
-| `npm run build` | The published files in `packages/editor/dist`: ES modules bundled with esbuild (`index.js`, `react.js`, the two entity files), the stylesheets, and type declarations from `tsc`. |
+| `npm run build` | The published files in `packages/editor/dist`: ES modules bundled with esbuild (`index.js`, `react.js`, the two entity files), the stylesheets, and type declarations from `tsc`. Members marked `@internal` are left out of the declarations. |
+| `npm run size` | The size table under "Performance". A report, not a gate. |
 
 CI (`.github/workflows/ci.yml`) runs the typecheck, unit tests, build and the browser tests in Chromium (plain and themed), Firefox and WebKit on every push to main and every pull request. Firefox and WebKit each run in two shards, as four jobs side by side. Tests that drive IME through the Chrome DevTools Protocol run in Chromium only. The timing gates are left out because shared runners are too noisy for them.
 
@@ -259,5 +312,5 @@ IME is simulated through the Chrome DevTools Protocol. Real input methods are co
 
 - **Firefox and WebKit are Playwright's builds**, not the Firefox and Safari people use. They run the whole browser suite in CI, but on Linux, so macOS and iOS key bindings (Cmd+arrows, Option+Backspace) are not covered.
 - **IME was simulated**, not typed with a real IME. `e2e/ime.spec.ts` drives composition through the Chrome DevTools Protocol and dispatches the events mobile keyboards send; `docs/ime-checklist.md` lists what still needs a real device. The manual checklist needs an owner before release.
-- **Spellcheck and autocorrect** replacements (`insertReplacementText`) are handled but not tested.
+- **Spellcheck and autocorrect** replacements (`insertReplacementText`, and `insertText` over a word) are tested with script-made events in Chromium and Firefox. WebKit drops the target ranges of such events, so its test is skipped; real devices are on the IME checklist.
 - **The load-time gate fails** (see "Performance"). Load time should be measured on a laptop before deciding what to optimize.

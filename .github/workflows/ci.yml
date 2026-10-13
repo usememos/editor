@@ -20,9 +20,15 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Fails when npm install would change package-lock.json. npm 11 is
+      # stricter than the npm 10 that ships with Node 22: it also drops
+      # stale entries, such as workspaces that no longer exist.
+      - run: npx -y npm@11 install --package-lock-only --ignore-scripts --no-audit --no-fund && git diff --exit-code package-lock.json
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # A report in the run summary, not a gate: there is no size limit.
+      - run: node packages/editor/scripts/size.mjs >> "$GITHUB_STEP_SUMMARY"
       - run: npm pack --dry-run -w @usememos/editor
 
   e2e:

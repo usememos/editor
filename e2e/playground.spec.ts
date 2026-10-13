@@ -3,6 +3,9 @@
 import { SAMPLE } from '../playground/sample';
 import { expect, md, test } from './helpers';
 
+/** A formatting bar button, by its accessible name. Most show a Lucide icon. */
+const bar = (page: import('@playwright/test').Page, name: string) => page.locator('#bar').getByRole('button', { name, exact: true });
+
 // Every test gets a new browser context, so storage starts empty. Each test
 // loads its page once: WebKit sometimes never sends a navigation request made
 // right after another page load, which leaves the test waiting until it times out.
@@ -19,8 +22,8 @@ test('playground: tags, formatting bar, image upload, caret restore, submit', as
   expect(await md(page)).toBe('Plan #work/planning today\n');
 
   // The bar shows the active format at the caret.
-  await page.locator('#bar button', { hasText: 'H2' }).click();
-  await expect(page.locator('#bar button', { hasText: 'H2' })).toHaveClass(/on/);
+  await bar(page, 'Heading 2').click();
+  await expect(bar(page, 'Heading 2')).toHaveClass(/on/);
 
   // A pasted image shows an upload placeholder, then becomes Markdown.
   await page.keyboard.press('End');
@@ -107,17 +110,17 @@ test('the sample shows every kind of block and saves byte for byte', async ({ pa
 });
 
 const BAR: [label: string, markdown: string][] = [
-  ['B', '**hello**'],
-  ['I', '*hello*'],
-  ['S', '~~hello~~'],
-  ['`', '`hello`'],
-  ['H1', '# hello'],
-  ['H2', '## hello'],
-  ['•', '- hello'],
-  ['1.', '1. hello'],
-  ['☐', '- [ ] hello'],
-  ['❝', '> hello'],
-  ['{ }', '```\nhello\n```'],
+  ['Bold', '**hello**'],
+  ['Italic', '*hello*'],
+  ['Strikethrough', '~~hello~~'],
+  ['Inline code', '`hello`'],
+  ['Heading 1', '# hello'],
+  ['Heading 2', '## hello'],
+  ['Bullet list', '- hello'],
+  ['Numbered list', '1. hello'],
+  ['Task list', '- [ ] hello'],
+  ['Quote', '> hello'],
+  ['Code block', '```\nhello\n```'],
 ];
 
 for (const [label, markdown] of BAR) {
@@ -126,7 +129,8 @@ for (const [label, markdown] of BAR) {
     await page.locator('#editor p').click();
     await page.keyboard.press('Home');
     await page.keyboard.press('Shift+End');
-    const button = page.locator('#bar button', { hasText: new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) });
+    const button = bar(page, label);
+    await expect(button.locator('svg')).toHaveCount(1);
     await expect(button).not.toHaveClass(/\bon\b/);
     await button.click();
     expect(await md(page)).toBe(`${markdown}\n`);
@@ -144,7 +148,7 @@ test('bar: Link asks for a URL, links the selection, and an empty answer removes
   await page.locator('#editor p').click();
   await page.keyboard.press('Home');
   await page.keyboard.press('Shift+End');
-  const link = page.locator('#bar button', { hasText: 'Link' });
+  const link = bar(page, 'Link');
   page.once('dialog', (d) => d.accept('https://example.com'));
   await link.click();
   expect(await md(page)).toBe('[hello](https://example.com)\n');
@@ -240,4 +244,23 @@ test('the other playground pages load: empty, plain CommonMark, base.css only, R
   expect(await md(page)).toBe('');
   await page.goto('/react.html');
   await expect(page.locator('.mbe-root')).toHaveCount(1);
+});
+
+test('playground: @people from an async search and [[ page links', async ({ page }) => {
+  await page.goto('/?empty');
+  await page.locator('#editor').click();
+  await page.keyboard.type('Ask @gr');
+  const people = page.locator('.mbe-suggestion-menu[aria-label="People"]');
+  await expect(people.locator('.mbe-menu-item')).toHaveText(['GGrace Hopper@grace']);
+  // The popup appeared late (async), so keys wait 75 ms.
+  await page.waitForTimeout(100);
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('see [[proj');
+  const pages = page.locator('.mbe-suggestion-menu[aria-label="Pages"]');
+  await expect(pages.locator('.mbe-menu-title')).toHaveText(['Pages']);
+  await expect(pages.locator('.mbe-menu-label')).toHaveText(['Project plan']);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#editor .mention')).toHaveText(['@grace']);
+  await expect(page.locator('#editor a')).toHaveText(['Project plan']);
+  expect(await md(page)).toBe('Ask @grace see [Project plan](#project-plan)\n');
 });

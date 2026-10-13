@@ -33,7 +33,11 @@ export function defaultKeymap(): Extension {
     'Shift-Tab': ({ editor }) => tab(editor, -1),
     // The first Escape selects the block; Escape in a block selection leaves the editor.
     Escape: ({ editor }) => editor.commands.selectBlocks() || editor.commands.blur(),
+    // Opens the autocomplete popup for the token at the caret.
+    'Ctrl-Space': ({ editor }) => editor.suggestion.open(),
   };
+  // On macOS, Ctrl+Space usually switches the input source and Cmd+I is italic, so Option+Escape opens it too.
+  if (isMac) keymap['Alt-Escape'] = ({ editor }) => editor.suggestion.open();
   // Ctrl+Y is redo on Windows and Linux; on macOS it is a text editing key.
   if (!isMac) keymap['Ctrl-y'] = ({ editor }) => editor.commands.redo() || true;
   return { name: 'defaultKeymap', keymap };

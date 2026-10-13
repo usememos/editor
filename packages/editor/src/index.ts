@@ -9,6 +9,7 @@ export {
   type PositionJSON,
   type RuntimeOptions,
   type SelectionJSON,
+  type SuggestionApi,
   SLASH_ITEM_IDS,
   type SlashItemId,
 } from './editor';
@@ -32,6 +33,19 @@ export type { BlockSyntax, BlockSyntaxMatcher, InlineSyntax, MarkdownSyntax } fr
 export { textDecorator, type TextDecoratorOptions } from './extensions/textDecorator';
 export { mentions, scanMentions, scanTags, tags, type TagScanner, type TagsOptions } from './extensions/tags';
 export type { Decoration, DecorationContext, Decorator, TextRange } from './decorations';
-export { suggestion, type SuggestionConfig, type SuggestionItem, type SuggestionRange } from './extensions/suggestion';
+export {
+  suggestion,
+  type SuggestionAllowContext,
+  type SuggestionCommandContext,
+  type SuggestionConfig,
+  type SuggestionItem,
+  type SuggestionItemsContext,
+  type SuggestionMatch,
+  type SuggestionMatchContext,
+  type SuggestionMatcher,
+  type SuggestionRange,
+} from './extensions/suggestion';
+export { matchToken, type MatchTokenOptions } from './suggest/match';
+export type { SuggestionState } from './suggest/controller';
 export type { Widget, WidgetRender } from './widgets';
 export { fileHandler, type FileHandlerOptions } from './extensions/fileHandler';

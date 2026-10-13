@@ -6,19 +6,19 @@ import { blocks, expect, md, test } from './helpers';
 test.beforeEach(async ({ page }) => {
   await page.goto('/?empty');
   await page.evaluate(() => {
-    const { Editor, tags, mentions } = (window as any).core;
+    const { Editor, tags, mentions, suggestion } = (window as any).core;
     (window as any).editor.destroy();
     (window as any).editor = new Editor({
       element: document.getElementById('editor'),
       extensions: [
-        tags({
-          suggestion: {
-            className: 'tag-menu',
-            items: ({ query }: { query: string }) => ['work', 'reading'].filter((t) => t.startsWith(query)).map((t) => ({ id: t, label: `#${t}` })),
-            command: ({ editor, range, item }: any) => editor.commands.insertText(`#${item.id} `, { range }),
-          },
-        }),
+        tags(),
         mentions(),
+        suggestion({
+          name: 'tags',
+          trigger: '#',
+          className: 'tag-menu',
+          items: ({ query }: { query: string }) => ['work', 'reading'].filter((t) => t.startsWith(query)).map((t) => ({ id: t, label: `#${t}` })),
+        }),
       ],
     });
   });
@@ -67,7 +67,7 @@ test('# then a space at the start of a paragraph makes a heading, and the menu c
   await expect(page.locator('#editor .mbe-tag')).toHaveText(['#work']);
 });
 
-test('the # menu does not open in code blocks or table cells', async ({ page }) => {
+test('the # menu does not open in code blocks, but does in table cells', async ({ page }) => {
   const menu = page.locator('.tag-menu');
   await page.evaluate(() => (window as any).editor.setMarkdown('```\ncode\n```\n\n| a |\n| - |\n| b |'));
   await page.locator('#editor pre code').click();
@@ -77,9 +77,11 @@ test('the # menu does not open in code blocks or table cells', async ({ page }) 
   await page.locator('#editor td').click();
   await page.keyboard.press('End');
   await page.keyboard.type(' #w');
+  await expect(menu.locator('.mbe-menu-item')).toHaveText(['#work']);
+  await page.keyboard.press('Enter');
   await expect(menu).toBeHidden();
-  // Tags in table cells are still highlighted.
-  await expect(page.locator('#editor td .mbe-tag')).toHaveText(['#w']);
+  expect(await blocks(page)).toEqual(['code():code #w', 'table:a/b #work ']);
+  await expect(page.locator('#editor td .mbe-tag')).toHaveText(['#work']);
   await expect(page.locator('#editor pre .mbe-tag')).toHaveCount(0);
 });
 

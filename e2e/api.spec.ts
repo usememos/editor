@@ -143,3 +143,49 @@ test("setMarkdown with history: 'keep' can be undone", async ({ page }) => {
   });
   expect(result).toEqual(['new', 'old']);
 });
+
+test('after destroy, the editor ignores calls and keeps its last Markdown', async ({ page }) => {
+  await open(page, 'hello');
+  const result = await page.evaluate(() => {
+    const editor = (window as any).editor;
+    const root: HTMLElement = editor.root;
+    const changes: string[] = [];
+    editor.on('change', () => changes.push('change'));
+    editor.destroy();
+    const calls = [
+      editor.commands.insertMarkdown('late upload'),
+      editor.commands.toggleBold(),
+      editor.commands.undo(),
+      editor.commands.selectAll(),
+      editor.commands.focus('end'),
+      editor.commands.scrollIntoView(),
+      editor.setSelection({ anchor: { block: 0, offset: 1 }, focus: { block: 0, offset: 1 } }),
+      editor.submit(),
+      editor.suggestion.open(),
+    ];
+    editor.setMarkdown('replaced');
+    editor.setOptions({ editable: true, placeholder: 'x' });
+    const widget = editor.addWidget({ at: 'end', render: (el: HTMLElement) => (el.textContent = 'uploading') });
+    editor.focus();
+    editor.destroy();
+    return {
+      calls,
+      isDestroyed: editor.isDestroyed,
+      markdown: editor.getMarkdown(),
+      children: root.childElementCount,
+      editable: root.isContentEditable,
+      widgetRemoved: widget.isRemoved,
+      changes,
+    };
+  });
+  await page.waitForTimeout(50);
+  expect(result).toEqual({
+    calls: [false, false, false, false, false, false, false, false, false],
+    isDestroyed: true,
+    markdown: 'hello',
+    children: 0,
+    editable: false,
+    widgetRemoved: true,
+    changes: [],
+  });
+});

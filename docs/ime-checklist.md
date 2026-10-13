@@ -40,6 +40,11 @@ The last column names the automated test that covers the same behavior in Chromi
 | 17 | iOS: use dictation for one sentence. The output matches the screen. | No |
 | 18 | macOS: hold a letter key and pick an accented letter from the menu (é). The output shows only the accented letter. | No |
 | 19 | Firefox: compose and commit a word with a candidate that differs from the reading (Japanese かんじ → 漢字). Undo removes it in one step. | the last input after compositionend (Firefox order, events only) |
+| 20 | Japanese: type a full-width `＃` after a space. The tag popup opens. Pick a tag: the output has an ASCII `#`. | a full-width ＃ opens the popup and a pick writes # |
+| 21 | Pinyin: type `#`, then `riji` and convert it to `日记`. The tag list stays shown while the reading is underlined, then shows `#日记`. | a reading that matches nothing keeps the list until it is converted |
+| 22 | With the tag popup open, compose a word and commit it with Enter. The commit does not pick an item; a second Enter does. On Safari, also press the second Enter quickly. | the Enter that commits a composition does not pick |
+| 23 | Android and iOS: with the tag popup open and a word still underlined, tap an item. The output has the picked tag once, and the underlined word is not added again. | a click on an item while composing commits the composed text once, then picks |
+| 24 | Android: type `#wor` in a word that already exists (`#wor` then `k`, all underlined by the keyboard). The popup opens as you type. | composed text in a token opens the popup and filters it |
 
 ## Not handled yet
 

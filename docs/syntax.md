@@ -130,7 +130,7 @@ const x = 1;
 
 - Fenced code (backticks or tildes) and indented code both load as `code`.
 - Only the first word of the info string is kept as `language`: ` ```js title ` is saved as ` ```js `.
-- The content is plain text. No inline syntax, decorations or suggestion menus apply inside.
+- The content is plain text. No inline syntax, decorations or autocomplete popups apply inside.
 
 ### Tables
 
@@ -317,23 +317,25 @@ A claim that needs a source[^1].
 
 ## Tags and mentions
 
-`#tag` and `@mention` are not Markdown syntax. They are plain text in the document and are saved exactly as typed. The `tags()` and `mentions()` extensions add three things:
+`#tag` and `@mention` are not Markdown syntax. They are plain text in the document and are saved exactly as typed. The `tags()` and `mentions()` extensions add two things:
 
 1. **Highlighting**: each tag or mention gets a class (`mbe-tag`, `mbe-mention`, or the `class` option). It is a decoration: computed while rendering and never saved.
 2. **Escapes**: `\#` and `\@` are kept as written, as `escape` tokens, so an escaped character survives edits and is never highlighted.
-3. **Autocomplete**: with the `suggestion` option, typing `#` or `@` opens a suggestion menu.
+
+Autocomplete is a separate `suggestion()` extension. With `matchToken` and the same scanner, the popup opens exactly where the text is highlighted:
 
 ```ts
-import { mentions, tags } from '@usememos/editor';
+import { matchToken, mentions, scanTags, suggestion, tags } from '@usememos/editor';
 
 const extensions = [
-  tags({
-    suggestion: {
-      items: ({ query }) => findTags(query).map((t) => ({ id: t, label: `#${t}` })),
-      command: ({ editor, range, item }) => editor.commands.insertText(`#${item.id} `, { range }),
-    },
-  }),
+  tags(),
   mentions(),
+  suggestion({
+    name: 'tags',
+    trigger: ['#', '＃'],
+    match: matchToken(scanTags),
+    items: ({ query }) => findTags(query).map((t) => ({ id: t, label: `#${t}` })),
+  }),
 ];
 ```
 
@@ -344,7 +346,6 @@ const extensions = [
 | `class` | The class on each match, instead of `mbe-tag` or `mbe-mention`. |
 | `attributes` | Attributes added to each match. |
 | `scan` | Replaces the default grammar. See [Custom grammar](#custom-grammar). |
-| `suggestion` | An autocomplete menu opened by `#` or `@`. See [Suggestion menus](#suggestion-menus). |
 
 ### Tag grammar
 
@@ -409,12 +410,21 @@ Highlighting runs in paragraphs, headings, list items, quotes and table cells. T
 - Without these extensions, `\#` follows CommonMark: it loads as `#`, and an edited block saves it as `#`.
 - With `tags()`, a lone `#` at the start of a line that needs escaping is saved as `&#35;`, because `\#` would load back as an escape token. For example, `#` followed by bold `work` is saved as `&#35;**work**`.
 
-### Suggestion menus
+### Autocomplete
 
-- A menu opens when its trigger (`#` or `@`) is typed at the start of a block or after whitespace, in a paragraph, heading, list item or quote.
-- A menu does not open inside a word, in table cells, in code blocks or in raw blocks.
-- A space closes the menu, unless the suggestion sets `allowSpaces`.
-- At the start of a paragraph, `#` followed by a space closes the menu and makes a heading.
+The rules of `suggestion()` (see the README's Autocomplete section), as they apply to tags and mentions:
+
+- With `match: matchToken(scanTags)`, the popup opens where typing leaves the caret in a tag, or right after a `#` that the grammar would accept as a tag start. So it does not open after `a#` or `C#`. The query is the text between `#` and the caret: `#work/` gives `work/`.
+- Without `match`, the default matcher opens after a trigger at the start of a line or after whitespace, and a space closes the popup unless the suggestion sets `allowSpaces`.
+- It opens in paragraphs, headings, list items, quotes and table cells. It does not open in code blocks, raw blocks, inline code, links, images, inline HTML or tokens, unless `allow` says otherwise.
+- At the start of a paragraph, `#` followed by a space closes the popup and makes a heading. An `allow` rule can keep a bare `#` there from opening the popup at all; Ctrl+Space still opens it:
+
+```ts
+allow: ({ block, query, textBefore, excluded, explicit }) =>
+  !excluded && (explicit || query !== '' || block.type !== 'paragraph' || textBefore !== ''),
+```
+
+- A pick replaces the whole tag, also the part after the caret, and is one undo step.
 
 ### Custom grammar
 

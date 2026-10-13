@@ -54,6 +54,40 @@ test('typing latency in a 2,000-block document', async ({ page }) => {
   expect(p95).toBeLessThan(16);
 });
 
+test('finding the autocomplete token at the caret in a 2,000-block document', async ({ page }) => {
+  // The playground has four suggestions: #tags, @people, [[ pages and the slash menu.
+  await page.goto('/?empty');
+  const line = 'Notes on #work/planning with @ada and [[Meeting notes]] see /path #a #b @c '.repeat(6);
+  await page.evaluate(
+    ([doc, line]) => {
+      const editor = (window as any).editor;
+      editor.setMarkdown(`${doc}\n${line}#wor`);
+    },
+    [bigDoc(1600), line] as const,
+  );
+  await page.locator('#editor').click();
+  const times = await page.evaluate(() => {
+    const editor = (window as any).editor;
+    const blocks = editor.state.doc.blocks;
+    const last = blocks.length - 1;
+    const text = blocks[last].content.map((s: any) => s.text).join('');
+    editor.setSelection({ anchor: { block: last, offset: text.length }, focus: { block: last, offset: text.length } });
+    // The step that runs on every keystroke: each suggestion's matcher and allow rule.
+    const controller = editor.suggestions;
+    const out: number[] = [];
+    for (let i = 0; i < 500; i++) {
+      const t0 = performance.now();
+      controller.find(false);
+      out.push(performance.now() - t0);
+    }
+    return out;
+  });
+  const sorted = times.slice().sort((a, b) => a - b);
+  const p95 = sorted[Math.floor(sorted.length * 0.95)]!;
+  console.log(`find token p95: ${p95.toFixed(3)} ms, median: ${sorted[250]!.toFixed(3)} ms`);
+  expect(p95).toBeLessThan(1);
+});
+
 test('100 KB of Markdown parsed and rendered', async ({ page }) => {
   await page.goto('/?empty');
   let md = '';

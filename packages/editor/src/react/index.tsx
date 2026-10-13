@@ -1,8 +1,8 @@
-import { Editor, type EditorOptions } from '@usememos/editor';
+import { Editor, type EditorOptions, type SuggestionState } from '@usememos/editor';
 import { type CSSProperties, type ForwardedRef, forwardRef, useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 
-export type { Editor } from '@usememos/editor';
+export type { Editor, SuggestionState } from '@usememos/editor';
 
 /** Constructor options that the React components take as props. */
 type EditorProps = Pick<
@@ -37,8 +37,8 @@ export interface MarkdownEditorProps extends EditorProps {
   style?: CSSProperties;
 }
 
-/** Options that `setOptions` applies without recreating the editor. */
-const LIVE = ['placeholder', 'editable', 'taskToggle', 'attributes', 'resolveImageSrc', 'theme'] as const;
+/** Options that `setOptions` applies without recreating the editor. `extensions` updates suggestion callbacks only. */
+const LIVE = ['placeholder', 'editable', 'taskToggle', 'attributes', 'resolveImageSrc', 'theme', 'extensions'] as const;
 
 /** The extension list's identity for recreating the editor: names, so an inline array does not recreate it on every render. */
 const extensionKey = (extensions: EditorOptions['extensions']) => (extensions ?? []).map((e) => e.name).join('\n');
@@ -48,8 +48,9 @@ const extensionKey = (extensions: EditorOptions['extensions']) => (extensions ??
  *
  * `placeholder`, `editable`, `taskToggle`, `attributes`, `resolveImageSrc` and `theme` update live.
  * A change to the names in `extensions` recreates the editor, keeping its
- * Markdown. Other props are read when the editor is created; change the
- * component's `key` to apply new values.
+ * Markdown; with the same names, the callbacks of `suggestion()` extensions
+ * (`items`, `command`, `match`, `allow`) update live. Other props are read
+ * when the editor is created; change the component's `key` to apply new values.
  *
  * A `value` that arrives while an input method is composing text is applied
  * when the composition ends, so it does not break the composition.
@@ -164,12 +165,17 @@ function useLiveOptions(editorRef: { current: Editor | null }, props: EditorProp
  * `<EditorContent editor={editor} />`, which shows it.
  *
  * Callbacks in `options` are read when called, so they may change between
- * renders without recreating the editor.
+ * renders without recreating the editor. So do the callbacks of
+ * `suggestion()` extensions, matched by name.
  */
 export function useEditor(options: Omit<EditorOptions, 'element'>, deps: readonly unknown[] = []): Editor | null {
   const [editor, setEditor] = useState<Editor | null>(null);
   const latest = useRef(options);
   latest.current = options;
+
+  useEffect(() => {
+    if (editor && options.extensions) editor.setOptions({ extensions: options.extensions });
+  }, [editor, options.extensions]);
 
   useEffect(() => {
     const o = latest.current;
@@ -194,6 +200,28 @@ export function useEditor(options: Omit<EditorOptions, 'element'>, deps: readonl
   }, deps);
 
   return editor;
+}
+
+/**
+ * The open autocomplete popup of `editor`, or of its suggestion `name`, and
+ * a re-render on each change. With `render: false` on a suggestion, draw your
+ * own popup from it: put it at `state.anchorRect()`, give the listbox
+ * `id={state.listboxId}` and each option `id={state.optionId(i)}`, highlight
+ * `state.active`, and call `editor.suggestion.accept(i)` on click.
+ */
+export function useSuggestion(editor: Editor | null, name?: string): SuggestionState | null {
+  const select = (state: SuggestionState | null | undefined) => (state && (name === undefined || state.name === name) ? state : null);
+  const [state, setState] = useState<SuggestionState | null>(() => select(editor?.suggestion.state));
+  useEffect(() => {
+    if (!editor) {
+      setState(null);
+      return;
+    }
+    setState(select(editor.suggestion.state));
+    return editor.on('suggestionChange', ({ state }) => setState(select(state)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor, name]);
+  return state;
 }
 
 export interface EditorContentProps {

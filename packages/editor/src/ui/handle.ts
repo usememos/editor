@@ -5,6 +5,7 @@
 import type { Editor } from '../editor';
 import { iconNode } from '../icons';
 import { BLOCK_ATTR } from '../view/dom';
+import { attach } from './popup';
 
 export class BlockHandle {
   private readonly el: HTMLButtonElement;
@@ -57,16 +58,16 @@ export class BlockHandle {
     const blockEl = this.editor.blockElement(blockId);
     if (!blockEl) return this.hide();
     const doc = this.editor.root.ownerDocument;
-    if (!this.el.isConnected) doc.body.appendChild(this.el);
     this.blockId = blockId;
     this.el.hidden = false;
+    const offset = attach(this.el, this.editor.root);
     const rect = blockEl.getBoundingClientRect();
     // Center on the first line of the block.
     const lineHeight = parseFloat(doc.defaultView!.getComputedStyle(blockEl).lineHeight) || 24;
     const firstLine = Math.min(rect.height, lineHeight);
     const size = this.el.offsetHeight || 22;
-    this.el.style.left = `${Math.round(rect.left - (this.el.offsetWidth || 20) - 6)}px`;
-    this.el.style.top = `${Math.round(rect.top + firstLine / 2 - size / 2)}px`;
+    this.el.style.left = `${Math.round(rect.left - (this.el.offsetWidth || 20) - 6 - offset.x)}px`;
+    this.el.style.top = `${Math.round(rect.top + firstLine / 2 - size / 2 - offset.y)}px`;
   }
 
   hide(): void {

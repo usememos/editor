@@ -244,6 +244,67 @@ test.describe('input method through the DevTools Protocol', () => {
     expect(await blocks(page)).toEqual([expect.stringMatching(/^table:/)]);
   });
 
+  test.describe('the tag popup', () => {
+    const tagMenu = (page: Page) => page.locator('.mbe-suggestion-menu:not(.mbe-slash-menu)');
+    const labels = (page: Page) => tagMenu(page).locator('.mbe-menu-label');
+
+    test('composed text in a token opens the popup and filters it', async ({ page }) => {
+      await page.evaluate(() => (window as any).editor.setMarkdown('see #'));
+      await page.keyboard.press('End');
+      await expect(tagMenu(page)).toBeHidden();
+      const ime = await startComposing(page, ['w', 'wo']);
+      await expect(labels(page)).toHaveText(['#work', '#work/meeting', '#work/planning']);
+      await ime.commit('wo');
+      await expect(labels(page)).toHaveText(['#work', '#work/meeting', '#work/planning']);
+    });
+
+    test('a reading that matches nothing keeps the list until it is converted', async ({ page }) => {
+      await page.keyboard.type('a #');
+      await expect(labels(page)).toHaveCount(7);
+      const ime = await startComposing(page, ['r', 'ri', 'riji']);
+      // "riji" matches no tag, but the list stays while composing.
+      await expect(tagMenu(page)).toBeVisible();
+      await ime.commit('日记');
+      await expect(labels(page)).toHaveText(['#日记']);
+      await page.keyboard.press('Enter');
+      expect(await md(page)).toBe('a #日记&#32;\n');
+    });
+
+    test('a full-width ＃ opens the popup and a pick writes #', async ({ page }) => {
+      await page.keyboard.type('a ');
+      await compose(page, ['＃'], '＃');
+      await expect(labels(page)).toHaveCount(7);
+      await page.keyboard.type('re');
+      await expect(labels(page)).toHaveText(['#reading']);
+      await page.keyboard.press('Enter');
+      expect(await md(page)).toBe('a #reading&#32;\n');
+    });
+
+    test('the Enter that commits a composition does not pick, and the block is not re-rendered while composing', async ({ page }) => {
+      await page.keyboard.type('a #');
+      await expect(tagMenu(page)).toBeVisible();
+      await page.evaluate(() => ((window as any).composedBlock = document.querySelector('#editor [data-block-id]')));
+      const ime = await startComposing(page, ['w', 'wo']);
+      await expect(labels(page)).toHaveText(['#work', '#work/meeting', '#work/planning']);
+      expect(await page.evaluate(() => (window as any).composedBlock === document.querySelector('#editor [data-block-id]'))).toBe(true);
+      await ime.imeKey('Enter');
+      await ime.commit('wo');
+      await expect(tagMenu(page)).toBeVisible();
+      expect(await md(page)).toBe('a #wo\n');
+    });
+
+    test('a click on an item while composing commits the composed text once, then picks', async ({ page }) => {
+      await page.keyboard.type('a #');
+      await startComposing(page, ['w', 'wo']);
+      await expect(labels(page)).toHaveText(['#work', '#work/meeting', '#work/planning']);
+      await tagMenu(page).locator('.mbe-menu-item', { hasText: '#work/planning' }).click();
+      await frame(page);
+      expect(await md(page)).toBe('a #work/planning&#32;\n');
+      await page.keyboard.type('x');
+      expect(await md(page)).toBe('a #work/planning x\n');
+    });
+  });
+
   test('React: a controlled value follows the composition without breaking it', async ({ page }) => {
     await page.goto('/react.html?demo=api');
     const root = page.locator('#controlled .mbe-root');

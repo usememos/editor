@@ -137,7 +137,7 @@ test('suggestion: #tag autocomplete with async items, picked with the keyboard',
       extensions: [
         suggestion({
           name: 'tags',
-          char: '#',
+          trigger: '#',
           className: 'tag-menu',
           items: async ({ query }: { query: string }) => {
             await new Promise((r) => setTimeout(r, 20));
@@ -159,6 +159,8 @@ test('suggestion: #tag autocomplete with async items, picked with the keyboard',
   await page.keyboard.press('Backspace');
   await expect(menu).toBeVisible(); // matches again
   await expect(menu.locator('.mbe-menu-item')).toHaveCount(2);
+  // A popup that appears late (async items) takes keys after 75 ms.
+  await page.waitForTimeout(100);
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
   await expect(menu).toBeHidden();

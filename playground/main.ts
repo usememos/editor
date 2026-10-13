@@ -1,6 +1,8 @@
 // The playground: a note composer built only on the public API. It uses
-// line breaks, no setext headings, math rendered with KaTeX and footnotes; #tag suggestions and
-// highlighting; a formatting bar with active state; upload placeholders for
+// line breaks, no setext headings, math rendered with KaTeX and footnotes;
+// #tag and @mention highlighting; three autocomplete popups as examples of
+// callers (#tags, @people from a fake async search, and [[ page links);
+// a formatting bar with active state; upload placeholders for
 // pasted and dropped images; the draft and caret kept across reloads; and
 // Mod+Enter to save.
 //
@@ -8,6 +10,22 @@
 // focuses on load, ?plain uses plain CommonMark with no extensions.
 
 import katex from 'katex';
+import {
+  Bold,
+  Code,
+  Heading1,
+  Heading2,
+  type IconNode,
+  Italic,
+  Link,
+  List,
+  ListOrdered,
+  ListTodo,
+  SquareCode,
+  Strikethrough,
+  TextQuote,
+  createElement,
+} from 'lucide';
 import 'katex/dist/katex.min.css';
 import * as core from '@usememos/editor';
 import {
@@ -18,7 +36,11 @@ import {
   fileHandler,
   footnotes,
   math,
+  matchToken,
   mentions,
+  scanMentions,
+  scanTags,
+  suggestion,
   tags,
 } from '@usememos/editor';
 import style from '../packages/editor/src/style.css?inline';
@@ -26,6 +48,26 @@ import baseStyle from '../packages/editor/src/base.css?inline';
 import { SAMPLE } from './sample';
 
 const TAGS = ['work', 'work/meeting', 'work/planning', 'reading', 'ideas', 'journal', '日记'];
+const PEOPLE = [
+  { username: 'ada', name: 'Ada Lovelace' },
+  { username: 'alan', name: 'Alan Turing' },
+  { username: 'grace', name: 'Grace Hopper' },
+  { username: 'katherine', name: 'Katherine Johnson' },
+  { username: 'linus', name: 'Linus Torvalds' },
+];
+const PAGES = ['Meeting notes', 'Project plan', 'Reading list', 'Weekly review'];
+
+/** A fake people search that answers after a delay, as a server would, and stops when aborted. */
+function searchPeople(query: string, signal: AbortSignal): Promise<typeof PEOPLE> {
+  return new Promise((resolve, reject) => {
+    const q = query.toLowerCase();
+    const timer = setTimeout(() => resolve(PEOPLE.filter((p) => p.username.startsWith(q) || p.name.toLowerCase().includes(q))), 150);
+    signal.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    });
+  });
+}
 const DRAFT_KEY = 'mbe-playground-draft';
 const CARET_KEY = 'mbe-playground-caret';
 
@@ -114,17 +156,42 @@ const composer: Partial<EditorOptions> = {
   extensions: [
     math({ render: (tex, el, options) => katex.render(tex, el, { ...options, throwOnError: false }) }),
     footnotes(),
-    tags({
-      class: 'tag',
-      suggestion: {
-        items: ({ query }) =>
-          TAGS.filter((t) => t.toLowerCase().includes(query.toLowerCase()))
-            .slice(0, 8)
-            .map((t) => ({ id: t, label: `#${t}` })),
-        command: ({ editor, range, item }) => editor.commands.insertText(`#${item.id} `, { range }),
+    tags({ class: 'tag' }),
+    mentions({ class: 'mention' }),
+    // #tags: opens where a tag is highlighted, and lists known tags. A pick writes "#tag ".
+    suggestion({
+      name: 'tags',
+      trigger: ['#', '＃'],
+      match: matchToken(scanTags),
+      label: 'Tags',
+      items: ({ query }) =>
+        TAGS.filter((t) => t.toLowerCase().includes(query.toLowerCase()))
+          .slice(0, 8)
+          .map((t) => ({ id: t, label: `#${t}` })),
+    }),
+    // @people: an async search with a debounce, details and icons. A pick writes "@username ".
+    suggestion({
+      name: 'people',
+      trigger: ['@', '＠'],
+      match: matchToken(scanMentions),
+      label: 'People',
+      debounce: 80,
+      items: async ({ query, signal }) =>
+        (await searchPeople(query, signal)).map((p) => ({ id: p.username, label: p.name, detail: `@${p.username}`, icon: p.name[0] })),
+    }),
+    // [[ links: titles with spaces, written as a Markdown link.
+    suggestion({
+      name: 'pages',
+      trigger: '[[',
+      allowSpaces: true,
+      label: 'Pages',
+      items: ({ query }) =>
+        PAGES.filter((p) => p.toLowerCase().includes(query.toLowerCase())).map((p) => ({ id: p, label: p, section: 'Pages' })),
+      command: ({ editor, range, item }) => {
+        editor.setSelection({ anchor: range.from, focus: range.to });
+        editor.commands.insertMarkdown(`[${item.label}](#${item.label.toLowerCase().replace(/\s+/g, '-')})`);
       },
     }),
-    mentions({ class: 'mention' }),
     fileHandler({
       accept: ['image/*'],
       onPaste: ({ editor, files }) => {
@@ -192,22 +259,23 @@ editor.on('selectionChange', () => {
   if (!fromUrl) saveNow(CARET_KEY, JSON.stringify(editor.selectionToJSON()));
 });
 
-// Formatting bar with active state: [label, title, command, isActive name, attributes].
+// Formatting bar with active state: [Lucide icon, title, command, isActive name, attributes].
+// The icons match the editor's own, which are Lucide too.
 type Name = Parameters<Editor['isActive']>[0];
 const commands = editor.commands;
-const marks: [string, string, () => unknown, Name, Record<string, unknown>?][] = [
-  ['B', 'Bold', () => commands.toggleBold(), 'bold'],
-  ['I', 'Italic', () => commands.toggleItalic(), 'italic'],
-  ['S', 'Strikethrough', () => commands.toggleStrike(), 'strike'],
-  ['`', 'Inline code', () => commands.toggleCode(), 'code'],
-  ['H1', 'Heading 1', () => commands.toggleHeading({ level: 1 }), 'heading', { level: 1 }],
-  ['H2', 'Heading 2', () => commands.toggleHeading({ level: 2 }), 'heading', { level: 2 }],
-  ['•', 'Bullet list', () => commands.toggleBulletList(), 'bulletList'],
-  ['1.', 'Numbered list', () => commands.toggleOrderedList(), 'orderedList'],
-  ['☐', 'Task list', () => commands.toggleTaskList(), 'taskList'],
-  ['❝', 'Quote', () => commands.toggleBlockquote(), 'blockquote'],
-  ['{ }', 'Code block', () => commands.toggleCodeBlock(), 'codeBlock'],
-  ['Link', 'Link', () => {
+const marks: [IconNode, string, () => unknown, Name, Record<string, unknown>?][] = [
+  [Bold, 'Bold', () => commands.toggleBold(), 'bold'],
+  [Italic, 'Italic', () => commands.toggleItalic(), 'italic'],
+  [Strikethrough, 'Strikethrough', () => commands.toggleStrike(), 'strike'],
+  [Code, 'Inline code', () => commands.toggleCode(), 'code'],
+  [Heading1, 'Heading 1', () => commands.toggleHeading({ level: 1 }), 'heading', { level: 1 }],
+  [Heading2, 'Heading 2', () => commands.toggleHeading({ level: 2 }), 'heading', { level: 2 }],
+  [List, 'Bullet list', () => commands.toggleBulletList(), 'bulletList'],
+  [ListOrdered, 'Numbered list', () => commands.toggleOrderedList(), 'orderedList'],
+  [ListTodo, 'Task list', () => commands.toggleTaskList(), 'taskList'],
+  [TextQuote, 'Quote', () => commands.toggleBlockquote(), 'blockquote'],
+  [SquareCode, 'Code block', () => commands.toggleCodeBlock(), 'codeBlock'],
+  [Link, 'Link', () => {
     const href = prompt('URL', String(editor.getAttributes('link').href ?? 'https://'));
     if (href === null) return;
     if (href) commands.setLink({ href });
@@ -216,10 +284,15 @@ const marks: [string, string, () => unknown, Name, Record<string, unknown>?][] =
 ];
 
 const bar = document.getElementById('bar')!;
-function button(label: string, title: string, onClick: () => unknown, className = ''): HTMLButtonElement {
+/** A bar button showing text, or a Lucide icon named by its title. */
+function button(label: string | IconNode, title: string, onClick: () => unknown, className = ''): HTMLButtonElement {
   const el = document.createElement('button');
   el.type = 'button';
-  el.textContent = label;
+  if (typeof label === 'string') el.textContent = label;
+  else {
+    el.append(createElement(label, { width: 16, height: 16, 'aria-hidden': 'true' }));
+    el.setAttribute('aria-label', title);
+  }
   el.title = title;
   el.className = className;
   // Keep focus and the selection in the editor.
@@ -228,7 +301,7 @@ function button(label: string, title: string, onClick: () => unknown, className 
   bar.appendChild(el);
   return el;
 }
-const els = marks.map(([label, title, run]) => button(label, title, () => (run(), commands.focus())));
+const els = marks.map(([icon, title, run]) => button(icon, title, () => (run(), commands.focus())));
 bar.appendChild(Object.assign(document.createElement('span'), { className: 'spacer' }));
 const readOnly = button('Read-only', 'Switch between editing and read-only. Both look the same.', () => {
   editor.setOptions({ editable: !editor.isEditable });

@@ -5,6 +5,7 @@ A block editor for standard Markdown, for React or any web app.
 - Markdown in, Markdown out: CommonMark plus GFM tables, task lists, strikethrough and autolinks. Blocks you did not edit are saved byte for byte.
 - Block editing: slash menu, a formatting toolbar, Markdown shortcuts, and a block handle on tables and code blocks.
 - One package, `@usememos/editor`, with zero runtime dependencies. It works without a framework, and `@usememos/editor/react` is a thin React wrapper.
+- About 55 KB minified and gzipped, plus 3 KB of CSS: a third of what a comparable CodeMirror 6, Tiptap or Lexical setup adds (see [Performance](docs/architecture.md#performance)).
 
 Status: early releases, published to npm as [`@usememos/editor`](https://www.npmjs.com/package/@usememos/editor). Versions follow memos' CalVer (`26.10`, `26.10.1`) and do not signal breaking changes, so pin an exact version. [docs/syntax.md](docs/syntax.md) specifies the Markdown it reads and writes, and [docs/architecture.md](docs/architecture.md) explains how it works.
 
@@ -57,19 +58,22 @@ The same names work in `new Editor(options)` and as React props, except that Rea
 | `autofocus` | `boolean \| 'start' \| 'end'` | Focuses the editor on creation, with the caret at the start or the end. |
 | `attributes` | `Record<string, string>` | Attributes for the editable root, such as `autocorrect`, `autocapitalize` or `aria-label`. |
 | `resolveImageSrc` | `(src) => string` | The URL to display for an image. The saved Markdown keeps the original `src`. |
+| `theme` | `{ classes?, tokens?, colorScheme? }` | Your own classes on rendered elements, colors and fonts, and light or dark. See [Theming](#theming). |
 | `toolbar` | `boolean` | Shows the formatting toolbar on selection. Default `true`. |
+| `popupContainer` | `HTMLElement` | Where menus, the toolbar and the autocomplete popup are appended. Default: the nearest open `<dialog>` or `aria-modal` ancestor of `element`, else `document.body`. |
 | `slashMenu` | `false \| string[]` | Built-in slash menu items to show, in order, or `false` for none: `text`, `heading1`, `heading2`, `heading3`, `bulletList`, `numberedList`, `todoList`, `quote`, `code`, `table`, `divider`. |
 | `labels` | `Partial<Labels>` | Overrides UI strings, for localization. See `src/labels.ts`. |
 | `icons` | `Partial<Record<IconName, string \| Element>>` | Replaces built-in icons, which are [Lucide](https://lucide.dev) icons. A string is shown as text; an element, such as an `<svg>`, is cloned for every place it appears. Names match the `labels` keys of the same controls: the slash menu items, `duplicate`, `delete`, the table actions, `bold`, `italic`, `strike`, `inlineCode`, `link` and `blockHandle`. |
-| `onChange` | `(markdown: string) => void` | Called after document changes, at most once per animation frame. |
-| `onSubmit` | `(markdown: string) => void` | Called on Mod+Enter or Ctrl+Enter with the current Markdown, for comment boxes and chat inputs. |
-| `onFocus`, `onBlur` | `() => void` | Focus events. |
+| `onChange` | `(markdown: string, editor) => void` | Called after document changes, at most once per animation frame. |
+| `onSubmit` | `(markdown: string, editor) => void` | Called on Mod+Enter or Ctrl+Enter with the current Markdown, for comment boxes and chat inputs. |
+| `onFocus`, `onBlur` | `(editor) => void` | Focus events. |
+| `className`, `style` | | React only. Set on the element that holds the editor. |
 
 For note-style Markdown, as in the playground, use `markdown: { breaks: true, setext: false }` and `extensions: [math(), footnotes(), tags(), mentions()]`.
 
-`editor.setOptions({ placeholder, editable, taskToggle, attributes, resolveImageSrc })` changes those options while the editor runs. The other options are fixed for the editor's lifetime.
+`editor.setOptions({ placeholder, editable, taskToggle, attributes, resolveImageSrc, theme })` changes those options while the editor runs. `setOptions({ extensions })` takes new callbacks for `suggestion()` extensions of the same names. The other options are fixed for the editor's lifetime.
 
-In React, `placeholder`, `editable`, `taskToggle`, `attributes` and `resolveImageSrc` update live. A change to the names in `extensions` recreates the editor and keeps its Markdown, so an inline array is fine. Other props are read on mount; change the component's `key` to apply new values. A `ref` gives the core `Editor` instance. A `value` that arrives while an input method (IME) is composing text is applied when the composition ends.
+In React, `placeholder`, `editable`, `taskToggle`, `attributes`, `resolveImageSrc` and `theme` update live. A change to the names in `extensions` recreates the editor and keeps its Markdown, so an inline array is fine; with the same names, the callbacks of `suggestion()` extensions update live, so `items` may read React state. Other props are read on mount; change the component's `key` to apply new values. A `ref` gives the core `Editor` instance. A `value` that arrives while an input method (IME) is composing text is applied when the composition ends.
 
 For apps that manage the editor instance themselves, `useEditor(options, deps)` creates one and `<EditorContent editor={editor} />` shows it:
 
@@ -97,10 +101,15 @@ function Composer() {
 | `selectedBlocks` | The blocks of a block selection, in document order, or an empty array when the selection is text. |
 | `getSelection()`, `setSelection(selection)` | Read or move the selection. `setSelection` also takes a `SelectionJSON`, and clamps one that does not fit the document. |
 | `selectionToJSON()` | The selection as JSON-safe data (block index and offset). It still fits after reloading the same Markdown, so an app can store the caret and restore it. |
-| `on(event, handler)` | Subscribes; returns an unsubscribe function. Events: `change` (at most once per frame), `selectionChange`, `focus`, `blur`, `submit`. |
+| `on(event, handler)` | Subscribes; returns an unsubscribe function. Events: `change` (at most once per frame), `selectionChange`, `focus`, `blur`, `submit`, `suggestionChange` (see [Autocomplete](#autocomplete)). |
+| `suggestion.*` | The autocomplete popup: `state`, `open(name?)`, `close()`, `move(delta)`, `accept(index?)`. See [Autocomplete](#autocomplete). |
 | `addWidget({ at, render })` | Shows app UI after the block that contains `at` (a position or `'end'`), such as an upload placeholder. Returns a widget with `update(render?)`, `remove()` and `isRemoved`. A widget is never saved and is not part of undo history. It moves with its block; if the block is deleted, it moves to the nearest remaining block. `insertMarkdown(md, { at: widget })` inserts after the widget's block. |
 | `positionAtPoint(x, y)` | The document position at a viewport point, or `null`. |
-| `hasFocus()`, `focus()`, `blur()`, `isEditable`, `setOptions(options)`, `destroy()` | |
+| `submit()` | Emits a pending `change`, then `submit` with the current Markdown, as Mod+Enter does. Returns `false` when nothing listens for `submit`. |
+| `root` | The editable element: `element`, or for `useEditor`, the element `<EditorContent>` shows. |
+| `isComposing` | True while an input method (IME) is composing text. Replacing the document then would break the composition; the React wrapper waits for it to end. |
+| `destroy()`, `isDestroyed` | Removes the editor's content, listeners and popups from the page. After it, every call that would change the editor does nothing and commands return `false`, so a late callback (an upload that finishes after the editor closed) is safe. `getMarkdown()` still returns the last Markdown. |
+| `hasFocus()`, `focus()`, `blur()`, `isEditable`, `setOptions(options)` | |
 
 `insertMarkdown(markdown, { at, block, select })`: `at` is `'selection'` (default; replaces the selection, like a paste), `'end'`, a position, or a widget; the last three replace nothing. A single paragraph is inserted inline unless `block: true`, which inserts it as its own block and splits the block at the target. `select: 'keep'` keeps the current selection instead of moving the caret after the inserted content.
 
@@ -125,29 +134,81 @@ const tags: Extension = {
 textDecorator({ pattern: /\bTODO\b/, class: 'todo' })
 ```
 
-`tags()` and `mentions()` highlight `#tag` and `@name` (classes `mbe-tag` and `mbe-mention`), keep `\#` and `\@` as written so an escaped trigger survives edits, and take a `suggestion` for autocomplete. Tags and mentions stay plain text and are saved exactly as typed. `scan` replaces the default grammar (`scanTags`, `scanMentions`); see [docs/syntax.md](docs/syntax.md#tags-and-mentions):
+`tags()` and `mentions()` highlight `#tag` and `@name` (classes `mbe-tag` and `mbe-mention`) and keep `\#` and `\@` as written, so an escaped trigger survives edits. Tags and mentions stay plain text and are saved exactly as typed. `scan` replaces the default grammar (`scanTags`, `scanMentions`); see [docs/syntax.md](docs/syntax.md#tags-and-mentions). For autocomplete, add a `suggestion()` next to them.
+
+#### Autocomplete
+
+`suggestion()` adds an autocomplete popup at the caret, like the ones in Linear, CodeMirror and Monaco. The editor implements the behavior: when the popup opens and closes, keys, async items, placement, IME input and accessibility. The caller decides the syntax: the triggers, what counts as a token, where the popup may open, the items, and what a pick writes. Add one per syntax:
 
 ```ts
-tags({
-  class: 'tag',
-  suggestion: {
-    items: async ({ query }) => (await loadTags()).filter((t) => t.startsWith(query)).map((t) => ({ id: t, label: `#${t}` })),
-    command: ({ editor, range, item }) => editor.commands.insertText(`#${item.id} `, { range }),
-  },
-});
+import { matchToken, mentions, scanMentions, scanTags, suggestion, tags } from '@usememos/editor';
+
+const extensions = [
+  tags(),
+  mentions(),
+  // #tags: the popup opens exactly where tags are highlighted. A pick writes "#work/planning ".
+  suggestion({
+    name: 'tags',
+    trigger: ['#', '＃'],
+    match: matchToken(scanTags),
+    label: 'Tags',
+    items: ({ query }) => knownTags.filter((t) => t.includes(query)).map((t) => ({ id: t, label: `#${t}` })),
+  }),
+  // @people from a server, searched as the user types.
+  suggestion({
+    name: 'people',
+    trigger: '@',
+    match: matchToken(scanMentions),
+    debounce: 120,
+    items: async ({ query, signal }) =>
+      (await searchPeople(query, { signal })).map((p) => ({ id: p.username, label: p.name, detail: `@${p.username}` })),
+  }),
+  // [[ links, written as Markdown links.
+  suggestion({
+    name: 'pages',
+    trigger: '[[',
+    allowSpaces: true,
+    items: ({ query }) => findPages(query).map((p) => ({ id: p.slug, label: p.title })),
+    command: ({ editor, range, item }) => {
+      editor.setSelection({ anchor: range.from, focus: range.to });
+      editor.commands.insertMarkdown(`[${item.label}](/p/${item.id})`);
+    },
+  }),
+];
 ```
 
-`suggestion({ char, items, command })` opens a menu when `char` is typed at the start of a line or after a space. `items({ query })` returns the items for the text typed after it, and may be async. `command({ editor, range, item })` applies the pick; `range` covers the trigger and the query. The slash menu is built on the same code. Suggestions do not open inside table cells.
+| Option | Effect |
+| --- | --- |
+| `name` | Required, unique. Names the suggestion for `editor.suggestion.open(name)` and live updates. |
+| `trigger` | One or more strings that start a token, of any length. The first is what the default command writes, so `['#', '＃']` turns a full-width `＃` into `#`. |
+| `items({ query, signal, composing, explicit, editor })` | The items, as an array or a promise. Shown in the order given; the editor does not filter or sort. `signal` is aborted when the query changes or the popup closes. A rejection counts as no items. |
+| `command({ editor, range, item, query })` | Applies a pick. `range` covers the whole token, from the trigger to its end, even when the caret is in the middle. Default: writes the first trigger, the item's `value` (default `id`, then `label`) and a space, which is left out before whitespace or closing punctuation. |
+| `match` | Finds the token at the caret: `({ text, caret, content, triggers }) => ({ from, to, query }) \| null`. `matchToken(scan)` builds one from a scanner, such as the one given to `tags({ scan })`. Without `match`, the default matcher takes a trigger at the start of a line or after whitespace, followed by text with no whitespace. |
+| `allow({ block, cell, from, query, textBefore, excluded, explicit, editor })` | Whether the popup may open for a match. Default: not when the trigger is in inline code, a link, an image, raw HTML or a token (`excluded`). Code and raw blocks never open a popup. `explicit` is true for Ctrl+Space. |
+| `allowSpaces`, `allowAnywhere` | Default matcher only: the query may contain single spaces; the trigger may follow any character. |
+| `debounce` | Waits this many ms after the last change of the query before calling `items`. Default 0. |
+| `limit` | Most items shown. Default 50. |
+| `maxLength` | Longest query that keeps the popup open. Default 30. |
+| `emptyLabel` | Shown instead of hiding when nothing matches, for queries up to three characters. |
+| `label` | Accessible name of the listbox. Default `labels.suggestions`. |
+| `render: false` | Draws no popup; see below. |
+| `className` | Extra classes on the popup. |
 
-```ts
-suggestion({
-  char: '#',
-  items: async ({ query }) => (await loadTags()).filter((t) => t.startsWith(query)).map((t) => ({ id: t, label: `#${t}` })),
-  command: ({ editor, range, item }) => editor.commands.insertText(`#${item.id} `, { range }),
-});
+Items have `label`, and optionally `id`, `detail` (secondary text), `icon` (text or an element, such as an avatar `<img>`), `section` (a group heading) and `value`.
+
+The popup opens when typing leaves the caret in a token: right after a trigger, or after typing inside an existing token. Moving the caret into a token does not open it, and deleting never does. Ctrl+Space (also Option+Escape on macOS) opens it for the token at the caret, even where `allow` refused, which is told `explicit: true`. It closes when the caret leaves the token; Escape closes it and keeps it closed for that token. ArrowUp and ArrowDown move through the items, Enter and Tab pick, Page Up and Page Down jump. It opens in table cells. The slash menu is a suggestion too.
+
+With `render: false`, the editor draws nothing; the app draws the popup from `editor.suggestion.state` (`name`, `query`, `range`, `items`, `active`, `loading`, `listboxId`, `optionId(i)`, `anchorRect()`) and the `suggestionChange` event, and calls `editor.suggestion.accept(i)` on click. Keys, async items and the ARIA attributes on the editor root still work. In React, `useSuggestion(editor, name?)` returns the state and re-renders on each change:
+
+```tsx
+const editor = useEditor({ extensions: [suggestion({ name: 'people', trigger: '@', render: false, items })] });
+const state = useSuggestion(editor, 'people');
+const rect = state?.anchorRect();
+// <ul role="listbox" id={state.listboxId} style={{ position: 'fixed', left: rect.left, top: rect.bottom + 4 }}>
+//   {state.items.map((item, i) => <li role="option" id={state.optionId(i)} aria-selected={i === state.active} onClick={() => editor.suggestion.accept(i)}>…)}
 ```
 
-Other options: `allowSpaces` (the query may contain single spaces), `allowAnywhere` (open inside a word too), `maxLength` (default 30), `emptyLabel` (show this instead of hiding when nothing matches), `className`.
+The popup lines up with the trigger under the caret's line, follows scrolling, resizing and the on-screen keyboard, and hides while the trigger is scrolled out of view. Its z-index is `var(--mbe-popup-z, 1000)`. See [docs/architecture.md](docs/architecture.md#autocomplete) for how it works.
 
 `fileHandler({ accept, onPaste, onDrop })` receives pasted and dropped files. `accept` takes MIME types or patterns such as `image/*`. `onPaste` runs only when the clipboard has no plain text, so text copied together with an image still pastes as text. `onDrop` gets the document position of the drop. Dropped text without files is inserted where it lands.
 
@@ -216,6 +277,8 @@ To style the editor entirely with your own classes, import `@usememos/editor/bas
 | Keys | Action |
 | --- | --- |
 | `/` | Slash menu |
+| Ctrl+Space; Option+Escape on macOS | Open the autocomplete popup for the token at the caret |
+| ArrowUp, ArrowDown, Enter, Tab, Escape | In an open autocomplete popup: move, pick, pick, close |
 | Mod+B, Mod+I, Mod+E | Bold, italic, inline code |
 | Mod+Shift+X, Mod+Shift+S | Strikethrough |
 | Mod+K | Link |
@@ -250,4 +313,5 @@ npm run test:e2e   # browser tests (Playwright, Chromium)
 npm run test:perf  # timing gates, run alone
 npm run typecheck
 npm run build      # the published files, in packages/editor/dist
+npm run size       # what each published entry adds to an app, minified and gzipped
 ```

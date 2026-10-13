@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite --config playground/vite.config.ts",
     "build": "npm run build -w @usememos/editor",
+    "size": "npm run build && node packages/editor/scripts/size.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test --project=chromium",
@@ -21,6 +22,7 @@
     "esbuild": "0.25.12",
     "happy-dom": "20.14.5",
     "katex": "0.16.45",
+    "lucide": "1.55.0",
     "react": "19.1.1",
     "react-dom": "19.1.1",
     "typescript": "5.9.3",

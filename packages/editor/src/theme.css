@@ -186,7 +186,9 @@
 .mbe-menu-item.mbe-danger { color: var(--mbe-danger); }
 .mbe-menu-icon { border-radius: 4px; font-size: 11px; font-weight: 600; color: var(--mbe-muted); }
 .mbe-menu-item.mbe-danger .mbe-menu-icon { color: inherit; }
-.mbe-menu-empty { color: var(--mbe-muted); }
+.mbe-menu-empty,
+.mbe-menu-loading { color: var(--mbe-muted); }
+.mbe-menu-detail { font-size: 12px; color: var(--mbe-muted); }
 
 .mbe-tool { border-radius: 6px; }
 .mbe-tool:hover { background: var(--mbe-hover); }

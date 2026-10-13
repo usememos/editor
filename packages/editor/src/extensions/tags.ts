@@ -1,5 +1,6 @@
 // tags() and mentions(): `#tag` and `@name` written as plain text,
-// highlighted with decorations, with an optional suggestion menu.
+// highlighted with decorations. For a popup, add a `suggestion()` with
+// `matchToken` and the same scanner.
 //
 // Tags and mentions are never parsed into the document. They are text, saved
 // exactly as typed. A backslash before the trigger (`\#`, `\@`) is kept as a
@@ -12,19 +13,16 @@
 import { type Decoration, type DecorationContext, type TextRange, isExcluded } from '../decorations';
 import type { Extension } from '../extension';
 import type { InlineSyntax } from '../markdown/options';
-import type { SuggestionConfig, SuggestionItem } from './suggestion';
 
 /** Finds tags or mentions in `text[from, to)`. `text` is the whole container, so a scanner can look before `from`. */
 export type TagScanner = (text: string, from: number, to: number) => Iterable<TextRange>;
 
-export interface TagsOptions<T extends SuggestionItem = SuggestionItem> {
+export interface TagsOptions {
   /** Class on each match. Default `mbe-tag` for tags and `mbe-mention` for mentions. */
   readonly class?: string;
   readonly attributes?: Readonly<Record<string, string>>;
   /** Finds matches in a run of text. Default `scanTags` or `scanMentions`. */
   readonly scan?: TagScanner;
-  /** A suggestion menu opened by the trigger character. See `suggestion()`. */
-  readonly suggestion?: Omit<SuggestionConfig<T>, 'char'>;
 }
 
 /** A letter, combining mark, number or `_`: characters a tag or mention cannot follow. */
@@ -136,27 +134,20 @@ function escapeSyntax(ch: string): InlineSyntax {
   return { name: 'escape', triggers: '\\', match: (text, pos) => (text[pos + 1] === ch ? pos + 2 : -1) };
 }
 
-function build<T extends SuggestionItem>(
-  name: string,
-  char: string,
-  scan: TagScanner,
-  defaultClass: string,
-  options: TagsOptions<T>,
-): Extension {
+function build(name: string, char: string, scan: TagScanner, defaultClass: string, options: TagsOptions): Extension {
   return {
     name,
     markdown: { inline: [escapeSyntax(char)] },
     decorations: decorate(options.scan ?? scan, options.class ?? defaultClass, options.attributes),
-    suggestion: options.suggestion && ({ ...options.suggestion, char } as unknown as SuggestionConfig),
   };
 }
 
-/** `#tag` highlighting, `\#` escapes and an optional `#` suggestion menu. */
-export function tags<T extends SuggestionItem>(options: TagsOptions<T> = {}): Extension {
+/** `#tag` highlighting and `\#` escapes. */
+export function tags(options: TagsOptions = {}): Extension {
   return build('tags', '#', scanTags, 'mbe-tag', options);
 }
 
-/** `@name` highlighting, `\@` escapes and an optional `@` suggestion menu. */
-export function mentions<T extends SuggestionItem>(options: TagsOptions<T> = {}): Extension {
+/** `@name` highlighting and `\@` escapes. */
+export function mentions(options: TagsOptions = {}): Extension {
   return build('mentions', '@', scanMentions, 'mbe-mention', options);
 }

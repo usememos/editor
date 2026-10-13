@@ -13,6 +13,7 @@ npx playwright test --project=firefox --project=webkit  # the browser tests in F
 npm run test:perf  # timing gates, run alone
 npm run typecheck
 npm run build      # the published files, in packages/editor/dist
+npm run size       # what each published entry adds to an app, minified and gzipped
 ```
 
 ## Releasing

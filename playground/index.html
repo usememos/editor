@@ -18,7 +18,7 @@
       .card:focus-within { border-color: color-mix(in oklab, var(--accent) 40%, var(--line)); }
       #editor { min-height: 120px; max-height: 60vh; overflow: auto; }
       .bar { display: flex; flex-wrap: wrap; gap: 2px; align-items: center; padding-top: 8px; margin-top: 8px; border-top: 1px solid var(--line); }
-      .bar button { font: inherit; font-size: 13px; min-width: 28px; padding: 3px 8px; border-radius: 6px; border: none; background: none; color: var(--muted); cursor: pointer; }
+      .bar button { display: inline-flex; align-items: center; justify-content: center; font: inherit; font-size: 13px; min-width: 28px; min-height: 26px; padding: 3px 6px; border-radius: 6px; border: none; background: none; color: var(--muted); cursor: pointer; }
       .bar button:hover { background: color-mix(in oklab, var(--muted) 15%, transparent); color: var(--text); }
       .bar button.on { color: var(--accent); background: color-mix(in oklab, var(--accent) 12%, transparent); }
       .bar button.primary { color: var(--card); background: var(--accent); padding: 3px 12px; margin-left: 4px; }

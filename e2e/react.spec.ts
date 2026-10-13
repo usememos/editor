@@ -60,3 +60,46 @@ test('React: useEditor and EditorContent', async ({ page }) => {
   await page.keyboard.type('!');
   await expect(page.locator('#hook-output')).toHaveText('# From useEditor!\n');
 });
+
+test('React: an app-drawn suggestion popup with useSuggestion, and items that change live', async ({ page }) => {
+  await page.goto('/react.html?demo=suggest');
+  const root = page.locator('#suggest .mbe-root');
+  const popup = page.locator('.people-popup');
+  await root.click();
+  await page.keyboard.type('Hi @a');
+  await expect(popup.locator('[role="option"]')).toHaveText(['Ada Lovelace', 'Alan Turing']);
+  // No built-in popup is drawn.
+  await expect(page.locator('.mbe-suggestion-menu')).toHaveCount(0);
+  // The root points at the app's listbox and highlighted option.
+  await expect(root).toHaveAttribute('aria-controls', (await popup.getAttribute('id'))!);
+  await page.keyboard.press('ArrowDown');
+  await expect(popup.locator('[aria-selected="true"]')).toHaveText('Alan Turing');
+  await expect(root).toHaveAttribute('aria-activedescendant', (await popup.locator('[aria-selected="true"]').getAttribute('id'))!);
+  // The popup sits under the trigger.
+  const at = await page.evaluate(() => {
+    const popup = document.querySelector('.people-popup')!.getBoundingClientRect();
+    return popup.left;
+  });
+  const trigger = await root.evaluate((el) => {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let text = walker.nextNode() as Text;
+    while (!text.data.includes('@')) text = walker.nextNode() as Text;
+    const range = document.createRange();
+    range.setStart(text, text.data.indexOf('@'));
+    range.setEnd(text, text.data.indexOf('@') + 1);
+    return range.getBoundingClientRect().left;
+  });
+  expect(Math.abs(at - trigger)).toBeLessThanOrEqual(1);
+  await page.keyboard.press('Enter');
+  await expect(popup).toHaveCount(0);
+  await expect(root).toHaveText('Hi @alan ');
+  // New items from a re-render are used on the next query, without recreating the editor.
+  await page.locator('#add-person').click();
+  await root.click();
+  await page.keyboard.press('End');
+  await page.keyboard.type('@');
+  await expect(popup.locator('[role="option"]')).toHaveText(['Ada Lovelace', 'Alan Turing', 'Grace Hopper']);
+  await popup.locator('[role="option"]', { hasText: 'Grace Hopper' }).click();
+  await expect(root).toHaveText('Hi @alan @grace ');
+  await expect(root).not.toHaveAttribute('aria-controls');
+});

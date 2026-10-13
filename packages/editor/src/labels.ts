@@ -15,6 +15,12 @@ export const DEFAULT_LABELS = {
   table: 'Table',
   divider: 'Divider',
   noResults: 'No results',
+  /** Accessible name of an autocomplete popup without its own `label`. */
+  suggestions: 'Suggestions',
+  /** Accessible name of the slash menu. */
+  commands: 'Commands',
+  /** Shown in an autocomplete popup while its items are loading. */
+  loading: 'Loading…',
   duplicate: 'Duplicate',
   delete: 'Delete',
   bold: 'Bold',

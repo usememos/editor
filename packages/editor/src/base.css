@@ -165,7 +165,7 @@
 /* Floating UI -------------------------------------------------------------
    System colors keep menus readable when theme.css is not loaded. */
 
-.mbe-ui { z-index: 1000; }
+.mbe-ui { z-index: var(--mbe-popup-z, 1000); }
 .mbe-icon { display: block; flex: none; width: 16px; height: 16px; }
 .mbe-ui[hidden] { display: none !important; }
 .mbe-menu,
@@ -190,7 +190,12 @@
 }
 .mbe-menu-icon:empty { display: none; }
 .mbe-menu-label { flex: 1; }
-.mbe-menu-empty { padding: 6px 8px; }
+.mbe-suggestion-menu { max-width: 360px; }
+.mbe-suggestion-menu .mbe-menu-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mbe-menu-detail { flex: none; white-space: nowrap; }
+.mbe-menu-match { background: none; color: inherit; font-weight: 600; }
+.mbe-menu-empty,
+.mbe-menu-loading { padding: 6px 8px; }
 
 .mbe-toolbar { display: flex; align-items: center; gap: 2px; padding: 3px; }
 .mbe-tool {
