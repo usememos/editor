@@ -185,7 +185,7 @@ Each of these examples loads as one raw Markdown block:
 
 ### Block typing shortcuts
 
-Typed at the start of a paragraph. Undo restores the typed characters.
+Typed at the start of a paragraph. Undo, or Backspace right after the shortcut, restores the typed characters.
 
 | Type | Becomes |
 | --- | --- |
@@ -209,7 +209,7 @@ Typed at the start of a paragraph. Undo restores the typed characters.
 | Reference link | `[text][ref]`, `[ref]` | `link` on the spans | `[text](https://x)` |
 | Autolink | `<https://x.com>`, `<a@b.co>` | `link` whose text is the URL | `https://x.com`, `a@b.co` (bare, see below) |
 | Autolink literal (GFM) | `https://x.com`, `www.x.com`, `a@b.co` | `link` whose text is the URL | Same |
-| Image | `![alt](src "title")` | one image atom with `src`, `alt`, `title` | Same |
+| Image | `![alt](src "title")`, `![alt\|center\|320](src)` | one image atom with `src`, `alt`, `title`, `align`, `width`, `height` | Same |
 | Hard line break | `\` or two spaces at the end of a line | `"\n"` in the text | `\` then a newline |
 | Inline HTML | `<b>`, `<span class="x">` | text with the `html` mark | Verbatim |
 | Backslash escape | `\*not italic\*` | the plain character | Escaped only where needed |
@@ -234,6 +234,31 @@ Marks combine freely, except that text in a code span takes no other mark. The s
 - A link is an attribute on text spans. Links do not nest.
 - Link titles and reference labels are not kept: an edited block saves `[text](url "title")` and `[text][ref]` as `[text](url)`. Image titles are kept.
 - An image is one inline atom. Its alt text is plain text. `resolveUrl` can change or drop the displayed `src` without changing the saved Markdown.
+- Typing `[text](url)` or `![alt](src)` does not make a link or an image. The characters stay plain text and are saved escaped, so they read back as text: `\[text\](url)`.
+- To add a link, select text and press Mod+K, or paste a URL over it. Pasting Markdown, such as `[text](url)` or `![alt](src)`, makes links and images.
+- Images also come from the app: `insertMarkdown`, for example after a `fileHandler()` upload.
+
+### Image size and alignment
+
+```md
+![Diagram|320](diagram.png)
+![Diagram|320x200](diagram.png "Optional title")
+![Diagram|center](diagram.png)
+![Diagram|right|320](diagram.png)
+```
+
+The editor reads a size at the end of an image's description, as Obsidian does, and an alignment before it, as Obsidian's image plugins do. This is not part of CommonMark or GFM.
+
+- The size is `|` and a width, optionally followed by `x` and a height, in whole CSS pixels from 1 to 99999. The image shows at that width, but never wider than its line, and always keeps its aspect ratio. A height is kept in the Markdown and reserves space before the image loads.
+- The size is not part of the alt text: `![Diagram|320](d.png)` has the alt text `Diagram`.
+- The alignment is `|left`, `|center` or `|right`, at the end or right before the size, in lower case. It is not part of the alt text either. It applies to an image block: an image alone in its paragraph, with no link or formatting and only spaces around it. An image inside text keeps its alignment in the Markdown but shows inline.
+- Picking Left in the block menu removes the word; a `|left` that was typed is kept as written.
+- Only an unescaped `|` counts. `![a|b](x)`, `![a | 320](x)`, `![a|320px](x)`, `![a|Center](x)`, `![a\|320](x)` and `![a&#124;320](x)` have no size or alignment; their alt text keeps the `|`.
+- Alt text that ends like a size or an alignment, with none of its own, is saved with `&#124;` for its last `|`, so it reads back as text: alt text `sales|2024` is saved as `![sales&#124;2024](x)`, and `left|right` as `![left&#124;right](x)`.
+- In a table cell the `|` is escaped like every other pipe in the row: `| ![Diagram\|320](d.png) |`.
+- Resizing writes a width and drops a height. Reference images (`![Diagram|320][d]`) are read the same way and saved as inline images, like reference links.
+- Other renderers ignore both: they show the image at its own size, on the left, and read the alt text as `Diagram|right|320`. memos accepts it, because the image is still a Markdown image and its URL is unchanged.
+- Copying writes `<img width="320">` (and `height`), and an aligned image block as `<p style="text-align:center">` around it. Pasting HTML reads `width` and `height` attributes in whole pixels; other sizes, such as `50%`, are not kept.
 
 ### Autolink literals
 
@@ -251,7 +276,7 @@ With `autolinks: true` (the default), these are links without angle brackets, fo
 - An e-mail address is letters, digits, `.`, `-`, `_` and `+`, then `@`, then a domain of letters, digits, `-` and `_` with at least one period. It may not end with `-` or `_`.
 - Literals are not recognized in link text, code spans, raw HTML or extension tokens.
 - A link whose text is its own literal is saved bare, as typed, when the result reads back as the same link. Otherwise it is saved in angle brackets (`<https://x.com>`) or as `[text](url)`.
-- Typing a space after a literal in plain text makes it a link. Undo restores the plain text.
+- Typing a space after a literal in plain text makes it a link. Undo, or Backspace right after it, restores the plain text.
 - Plain text that forms a literal is saved as is and loads back as a link.
 
 | Markdown | Links |
@@ -283,6 +308,11 @@ The serializer escapes only characters that would otherwise change meaning:
 ### Inline typing shortcuts
 
 Typing the closing delimiter applies the mark and removes the delimiters: `**a**`, `__a__`, `*a*`, `_a_`, `` `a` ``, `~~a~~`. Text typed next does not continue the mark.
+
+- Undo, or Backspace right after the shortcut, before any other edit or caret move, restores the typed characters. They then stay text and are saved escaped: `\*\*a\*\*`.
+- A backslash escapes a delimiter, as in CommonMark: typing `\*a*` or `*a\*` leaves the text as typed. Inside a code span a backslash is literal, so `` `a\` `` is code.
+
+Links and images have no typing shortcut; see [Links and images](#links-and-images).
 
 ## Syntax extensions
 

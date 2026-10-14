@@ -108,6 +108,9 @@ test('events: change once per frame, selectionChange, submit on Ctrl+Enter, unsu
 });
 
 test('setOptions changes the placeholder, attributes, editability and image URLs', async ({ page }) => {
+  // The image loads from the new URL. An image that fails shows as unavailable, with no <img>.
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>';
+  await page.route('https://cdn.example/**', (route) => route.fulfill({ contentType: 'image/svg+xml', body: svg }));
   await open(page, '![a](/file/x.png)');
   await page.evaluate(() => {
     const editor = (window as any).editor;
@@ -135,6 +138,8 @@ test('setOptions changes the placeholder, attributes, editability and image URLs
 
 test('resolveUrl decides which links and images are used, and images load lazily', async ({ page }) => {
   const source = '[sms](sms:+44) [js](javascript:alert(1)) [web](https://a.com)\n\n![a](http://tracker.example/a.png) ![b](/b.png)';
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>';
+  await page.route(/\/(a|b)\.png$/, (route) => route.fulfill({ contentType: 'image/svg+xml', body: svg }));
   await open(page, source);
   const root = page.locator('#editor');
   // The default policy drops sms: and javascript: links.
@@ -150,8 +155,10 @@ test('resolveUrl decides which links and images are used, and images load lazily
   });
   await expect(root.locator('a.mbe-link').nth(0)).toHaveAttribute('href', 'sms:+44');
   await expect(root.locator('a.mbe-link').nth(1)).not.toHaveAttribute('href');
-  await expect(root.locator('img').nth(0)).not.toHaveAttribute('src');
-  await expect(root.locator('img').nth(1)).toHaveAttribute('src', '/b.png');
+  // An image the policy drops shows as unavailable, with its alt text.
+  await expect(root.locator('.mbe-image').nth(0)).toHaveClass(/mbe-image-unavailable/);
+  await expect(root.locator('.mbe-image').nth(0)).toHaveText('a');
+  await expect(root.locator('img').nth(0)).toHaveAttribute('src', '/b.png');
   // The saved Markdown keeps every URL as written.
   expect(await md(page)).toBe(source);
 });

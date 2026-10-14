@@ -7,7 +7,7 @@
  * Block spacing lives here so classes added by a theme cannot change it:
  * these rules are more specific than a single utility class.
  * All selectors are scoped under .mbe-root (the editable area) and
- * .mbe-ui (menus, toolbar and handle, which live in document.body).
+ * .mbe-ui (menus, toolbar and block handle, which live in document.body).
  */
 .mbe-root,
 .mbe-ui {
@@ -32,6 +32,9 @@
 .mbe-root > .mbe-block {
   margin: var(--mbe-block-gap) 0;
   position: relative;
+  /* Margins inside a block never merge with the block's own, so a block lays
+     out the same with or without .mbe-lazy, whose containment stops them. */
+  display: flow-root;
 }
 /* Block selection: whole blocks are highlighted and the caret is hidden.
    The shadow pads the highlight without moving any text. */
@@ -99,7 +102,28 @@
 /* Links: the text cursor while editing, so clicking places the caret. */
 .mbe-root a.mbe-link { cursor: text; }
 .mbe-root.mbe-readonly a.mbe-link { cursor: pointer; }
-.mbe-root .mbe-image { max-width: 100%; height: auto; margin: 8px 0; vertical-align: bottom; }
+/* Inline even under a CSS reset such as Tailwind's preflight, which makes images blocks; alignment needs it. */
+.mbe-root .mbe-image { display: inline-block; max-width: 100%; height: auto; margin: 8px 0; vertical-align: bottom; }
+/* An image alone in its paragraph moves within the column; it keeps its width. */
+.mbe-root .mbe-image-block[data-align="left"] { text-align: left; }
+.mbe-root .mbe-image-block[data-align="center"] { text-align: center; }
+.mbe-root .mbe-image-block[data-align="right"] { text-align: right; }
+/* An image that did not load: an icon and its alt text, on one line. */
+.mbe-root .mbe-image-unavailable {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  border: 1px dashed GrayText;
+}
+.mbe-root .mbe-image-alt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A selected image has an outline instead of the browser's selection highlight and caret.
+   The outline is drawn inside the image, so a container that clips its overflow does not cut it. */
+.mbe-root .mbe-image-selected { outline: 2px solid Highlight; outline-offset: -2px; }
+.mbe-root.mbe-image-selection,
+.mbe-root.mbe-image-selection * { caret-color: transparent; }
+.mbe-root.mbe-image-selection ::selection { background: transparent; }
 
 /* Code */
 .mbe-root .mbe-code-bar { display: flex; align-items: center; }
@@ -190,7 +214,7 @@
 .mbe-ui[hidden] { display: none !important; }
 .mbe-menu,
 .mbe-toolbar,
-.mbe-link-popover {
+.mbe-input-popover {
   position: fixed;
   background: Canvas;
   color: CanvasText;
@@ -217,27 +241,72 @@
 .mbe-menu-empty,
 .mbe-menu-loading { padding: 6px 8px; }
 
-.mbe-toolbar { display: flex; align-items: center; gap: 2px; padding: 3px; }
+/* Wider than the screen, the toolbar scrolls sideways; its max-width is set to fit. */
+.mbe-toolbar { box-sizing: border-box; display: flex; align-items: center; gap: 2px; padding: 4px; overflow-x: auto; scrollbar-width: none; }
+.mbe-toolbar::-webkit-scrollbar { display: none; }
 .mbe-tool {
+  flex: none;
   font: inherit;
   color: inherit;
   background: none;
   border: none;
-  padding: 4px 6px;
-  min-width: 28px;
-  min-height: 28px;
+  padding: 4px 7px;
+  min-width: 32px;
+  min-height: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
 }
+.mbe-tool[hidden],
+.mbe-tool-sep[hidden] { display: none; }
+.mbe-tool .mbe-icon { width: 18px; height: 18px; }
+.mbe-tool-menu { gap: 1px; padding-inline: 7px 4px; }
+.mbe-tool-icon,
+.mbe-tool-chevron { display: inline-flex; }
+.mbe-tool .mbe-tool-chevron .mbe-icon { width: 13px; height: 13px; }
 .mbe-tool.mbe-active { background: Highlight; color: HighlightText; }
-.mbe-tool-sep { width: 1px; align-self: stretch; margin: 3px 2px; background: GrayText; }
+.mbe-tool-sep { flex: none; width: 1px; height: 18px; margin: 0 3px; background: GrayText; }
+.mbe-menu-check { flex: none; display: inline-flex; margin-inline-start: auto; }
+.mbe-menu-submenu { flex: none; display: inline-flex; margin-inline-start: auto; }
+.mbe-menu-submenu .mbe-icon { width: 14px; height: 14px; }
+.mbe-submenu { min-width: 160px; }
+/* The row whose submenu is open stays marked while the pointer is in the submenu. */
+.mbe-menu-item[aria-expanded="true"] { background: Highlight; color: HighlightText; }
 
-.mbe-link-popover { display: flex; gap: 4px; padding: 4px; }
-.mbe-link-input { font: inherit; color: inherit; width: 260px; padding: 5px 8px; }
+.mbe-tooltip { position: fixed; pointer-events: none; white-space: nowrap; padding: 4px 8px; background: CanvasText; color: Canvas; }
 
-.mbe-handle {
+.mbe-input-popover { display: flex; gap: 4px; padding: 4px; }
+
+/* The resize handles of an image: a frame over it that only its resize handles respond to. */
+.mbe-image-frame { position: fixed; pointer-events: none; }
+.mbe-resize-handle {
+  position: absolute;
+  top: 50%;
+  width: 6px;
+  height: 40%;
+  min-height: 16px;
+  max-height: 48px;
+  box-sizing: border-box;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  touch-action: none;
+  cursor: ew-resize;
+  background: Canvas;
+  border: 1px solid CanvasText;
+  border-radius: 3px;
+}
+/* A larger area to grab than the resize handle shows. */
+.mbe-resize-handle::before { content: ''; position: absolute; inset: -6px -8px; }
+.mbe-resize-handle-left { left: 8px; }
+.mbe-resize-handle-right { left: calc(100% - 8px); }
+.mbe-image-frame-small .mbe-resize-handle-left { left: 0; }
+.mbe-image-frame-small .mbe-resize-handle-right { left: 100%; }
+.mbe-image-resizing,
+.mbe-image-resizing .mbe-resize-handle { cursor: ew-resize; }
+.mbe-popover-input { font: inherit; color: inherit; width: 260px; padding: 5px 8px; }
+
+.mbe-block-handle {
   position: fixed;
   width: 20px;
   height: 22px;

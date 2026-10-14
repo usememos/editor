@@ -108,24 +108,173 @@ test('formatting toolbar: Escape keeps it closed until the selection changes', a
   await expect(toolbar).toBeVisible();
 });
 
-test('formatting toolbar: has only mark and link buttons', async ({ page }) => {
+test('formatting toolbar: nine controls in three groups, named without shortcuts', async ({ page }) => {
   await page.keyboard.type('format me');
   await page.keyboard.press('Shift+Home');
   // The toolbar follows the selection, which the browser reports after the key press.
-  await expect(page.locator('.mbe-toolbar')).toBeVisible();
-  const buttons = await page
-    .locator('.mbe-toolbar button')
-    .evaluateAll((els) => els.map((el) => [el.getAttribute('aria-label')!.replace(/ \(.*\)$/, ''), el.querySelectorAll('svg.mbe-icon').length]));
-  expect(buttons).toEqual([
+  const toolbar = page.locator('.mbe-toolbar');
+  await expect(toolbar).toBeVisible();
+  const controls = await toolbar
+    .locator('button, .mbe-tool-sep')
+    .evaluateAll((els) => els.map((el) => (el.tagName === 'BUTTON' ? [el.getAttribute('aria-label'), el.querySelectorAll('svg.mbe-icon').length] : '|')));
+  expect(controls).toEqual([
+    ['Text style', 2],
+    '|',
     ['Bold', 1],
     ['Italic', 1],
     ['Strikethrough', 1],
     ['Code', 1],
     ['Link', 1],
+    '|',
+    ['Quote', 1],
+    ['Code block', 1],
+    ['List', 2],
   ]);
+  // No shortcut is shown anywhere; assistive technology gets it from aria-keyshortcuts.
+  await toolbar.locator('.mbe-tool-text-style').click();
+  const text = await page.evaluate(() =>
+    [...document.querySelectorAll('.mbe-toolbar, .mbe-toolbar *, .mbe-text-style-menu, .mbe-text-style-menu *')]
+      .flatMap((el) => [el.textContent, el.getAttribute('title'), el.getAttribute('aria-label')])
+      .join(' '),
+  );
+  expect(text).not.toMatch(/⌘|Ctrl|Alt|Shift|⇧|⌥/);
+  await expect(toolbar.locator('.mbe-tool-bold')).toHaveAttribute('aria-keyshortcuts', /^(Meta|Control)\+B$/);
+  await expect(page.locator('.mbe-text-style-menu [role=menuitemradio]').nth(2)).toHaveAttribute('aria-keyshortcuts', /^(Meta|Control)\+Alt\+2$/);
 });
 
-test('icons: every menu row, toolbar button and the handle shows a Lucide icon', async ({ page }) => {
+test('formatting toolbar: the text style menu sets a style on every selected block', async ({ page }) => {
+  await page.evaluate(() => (window as any).editor.setMarkdown('one\n\ntwo\n\nthree\n'));
+  await page.locator('#editor p').first().click();
+  await page.keyboard.press('Control+a');
+  const toolbar = page.locator('.mbe-toolbar');
+  await expect(toolbar).toBeVisible();
+  await toolbar.locator('.mbe-tool-text-style').click();
+  const menu = page.locator('.mbe-text-style-menu');
+  await expect(menu.locator('.mbe-menu-item')).toHaveText(['Text', 'Heading 1', 'Heading 2', 'Heading 3']);
+  await expect(menu.locator('[aria-checked=true]')).toHaveText('Text');
+  await menu.locator('.mbe-menu-item', { hasText: 'Heading 2' }).click();
+  await expect(menu).toBeHidden();
+  expect(await md(page)).toBe('## one\n\n## two\n\n## three\n');
+  // The selection and the toolbar stay, and show the new style.
+  await expect(toolbar).toBeVisible();
+  await expect(toolbar.locator('.mbe-tool-text-style')).toHaveClass(/mbe-active/);
+  await toolbar.locator('.mbe-tool-text-style').click();
+  await expect(menu.locator('[aria-checked=true]')).toHaveText('Heading 2');
+  // Picking the current style changes nothing.
+  await menu.locator('.mbe-menu-item', { hasText: 'Heading 2' }).click();
+  expect(await md(page)).toBe('## one\n\n## two\n\n## three\n');
+  await page.keyboard.press('Control+z');
+  expect(await blocks(page)).toEqual(['p:one', 'p:two', 'p:three']);
+});
+
+test('formatting toolbar: the list menu and quote toggle, code block merges', async ({ page }) => {
+  await page.evaluate(() => (window as any).editor.setMarkdown('one\n\n**two**\n'));
+  await page.locator('#editor p').first().click();
+  await page.keyboard.press('Control+a');
+  const toolbar = page.locator('.mbe-toolbar');
+  const list = page.locator('.mbe-list-menu');
+  await toolbar.locator('.mbe-tool-list').click();
+  await expect(list.locator('.mbe-menu-item')).toHaveText(['Bulleted list', 'Numbered list', 'To-do list']);
+  await list.locator('.mbe-menu-item', { hasText: 'To-do list' }).click();
+  expect(await md(page)).toBe('- [ ] one\n- [ ] **two**\n');
+  await expect(toolbar.locator('.mbe-tool-list')).toHaveClass(/mbe-active/);
+  await toolbar.locator('.mbe-tool-list').click();
+  await list.locator('.mbe-menu-item', { hasText: 'To-do list' }).click();
+  expect(await md(page)).toBe('one\n\n**two**\n');
+  await toolbar.locator('.mbe-tool-quote').click();
+  await expect(toolbar.locator('.mbe-tool-quote')).toHaveAttribute('aria-pressed', 'true');
+  await toolbar.locator('.mbe-tool-quote').click();
+  expect(await md(page)).toBe('one\n\n**two**\n');
+  await toolbar.locator('.mbe-tool-code-block').click();
+  expect(await md(page)).toBe('```\none\ntwo\n```\n');
+  // The selection is now code, where the toolbar does not show.
+  await expect(toolbar).toBeHidden();
+  await page.keyboard.press('Control+z');
+  expect(await md(page)).toBe('one\n\n**two**\n');
+});
+
+test('formatting toolbar: menus work from the keyboard, and Escape closes the menu first', async ({ page }) => {
+  await page.keyboard.type('title');
+  await page.keyboard.press('Shift+Home');
+  const toolbar = page.locator('.mbe-toolbar');
+  await toolbar.locator('.mbe-tool-text-style').click();
+  const menu = page.locator('.mbe-text-style-menu');
+  await expect(menu).toBeVisible();
+  await expect(toolbar.locator('.mbe-tool-text-style')).toHaveAttribute('aria-expanded', 'true');
+  // The highlight starts on the current style.
+  await expect(menu.locator('.mbe-highlighted')).toHaveText('Text');
+  await expect(page.locator('#editor')).toHaveAttribute('aria-activedescendant', /mbe-menu-/);
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  expect(await md(page)).toBe('# title\n');
+  await toolbar.locator('.mbe-tool-list').click();
+  await expect(page.locator('.mbe-list-menu')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.mbe-list-menu')).toBeHidden();
+  await expect(page.locator('#editor')).not.toHaveAttribute('aria-activedescendant', /./);
+  await expect(toolbar).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(toolbar).toBeHidden();
+});
+
+test('formatting toolbar: a press outside a menu closes it', async ({ page }) => {
+  await page.keyboard.type('title');
+  await page.keyboard.press('Shift+Home');
+  await page.locator('.mbe-tool-list').click();
+  await expect(page.locator('.mbe-list-menu')).toBeVisible();
+  // Opening the other menu closes this one.
+  await page.locator('.mbe-tool-text-style').click();
+  await expect(page.locator('.mbe-list-menu')).toBeHidden();
+  await expect(page.locator('.mbe-text-style-menu')).toBeVisible();
+  await page.locator('h2.label').first().click();
+  await expect(page.locator('.mbe-text-style-menu')).toBeHidden();
+});
+
+test('formatting toolbar: in a table cell, only inline controls', async ({ page }) => {
+  await page.evaluate(() => (window as any).editor.setMarkdown('| cell text |\n| - |\n| b |\n'));
+  await page.locator('#editor th').click();
+  await page.keyboard.press('Shift+Home');
+  const toolbar = page.locator('.mbe-toolbar');
+  await expect(toolbar).toBeVisible();
+  await expect(toolbar.locator('button:visible')).toHaveCount(5);
+  await expect(toolbar.locator('.mbe-tool-sep:visible')).toHaveCount(0);
+  await expect(toolbar.locator('button:visible').first()).toHaveAttribute('aria-label', 'Bold');
+});
+
+test('formatting toolbar: the items option picks controls, in the built-in order', async ({ page }) => {
+  await page.evaluate(() => {
+    const { Editor } = (window as any).core;
+    (window as any).editor.destroy();
+    (window as any).editor = new Editor({ element: document.getElementById('editor'), content: 'word', toolbar: { items: ['link', 'list', 'bold'] } });
+  });
+  await page.locator('#editor p').click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Shift+Home');
+  await expect(page.locator('.mbe-toolbar')).toBeVisible();
+  const controls = await page
+    .locator('.mbe-toolbar')
+    .locator('button, .mbe-tool-sep')
+    .evaluateAll((els) => els.map((el) => el.getAttribute('aria-label') ?? '|'));
+  expect(controls).toEqual(['Bold', 'Link', '|', 'List']);
+});
+
+test('formatting toolbar: a tooltip names the button after a pause, and hides while a menu is open', async ({ page }) => {
+  await page.keyboard.type('format me');
+  await page.keyboard.press('Shift+Home');
+  const tooltip = page.locator('.mbe-tooltip');
+  await page.locator('.mbe-tool-italic').hover();
+  await page.waitForTimeout(200);
+  await expect(tooltip).toBeHidden();
+  await expect(tooltip).toHaveText('Italic');
+  await expect(tooltip).toBeVisible();
+  // Moving along the buttons shows the next one at once.
+  await page.locator('.mbe-tool-strike').hover();
+  await expect(tooltip).toHaveText('Strikethrough', { timeout: 200 });
+  await page.locator('.mbe-tool-list').click();
+  await expect(tooltip).toBeHidden();
+});
+
+test('icons: every menu row, toolbar button and the block handle shows a Lucide icon', async ({ page }) => {
   await page.keyboard.type('/');
   const rows = slashMenu(page).locator('.mbe-menu-item');
   await expect(rows).toHaveCount(11);
@@ -134,15 +283,19 @@ test('icons: every menu row, toolbar button and the handle shows a Lucide icon',
   await page.keyboard.press('Enter');
   await page.keyboard.press('Control+/');
   const menu = page.locator('.mbe-block-menu');
-  await expect(menu.locator('.mbe-menu-item')).toHaveCount(11);
-  await expect(menu.locator('.mbe-menu-icon > svg.mbe-icon')).toHaveCount(11);
+  await expect(menu.locator('.mbe-menu-item')).toHaveCount(9);
+  await expect(menu.locator('.mbe-menu-icon > svg.mbe-icon')).toHaveCount(9);
+  // The Align row ends in a chevron, and its submenu rows have icons too.
+  await expect(menu.locator('.mbe-menu-submenu > svg.mbe-icon')).toHaveCount(1);
+  await menu.locator('.mbe-menu-item', { hasText: 'Align' }).hover();
+  await expect(page.locator('.mbe-submenu .mbe-menu-icon > svg.mbe-icon')).toHaveCount(3);
   // The icon takes the row's color, so Delete's icon is the danger color.
   const colors = await menu.locator('.mbe-danger').first().evaluate((row) => [getComputedStyle(row).color, getComputedStyle(row.querySelector('svg')!).color]);
   expect(colors[1]).toBe(colors[0]);
   await page.keyboard.press('Escape');
   await page.locator('#editor table').hover();
-  await expect(page.locator('.mbe-handle svg.mbe-icon')).toHaveCount(1);
-  const size = await page.locator('.mbe-handle svg').evaluate((el) => [el.getBoundingClientRect().width, el.getBoundingClientRect().height]);
+  await expect(page.locator('.mbe-block-handle svg.mbe-icon')).toHaveCount(1);
+  const size = await page.locator('.mbe-block-handle svg').evaluate((el) => [el.getBoundingClientRect().width, el.getBoundingClientRect().height]);
   expect(size).toEqual([16, 16]);
 });
 
@@ -182,7 +335,7 @@ test('link: Ctrl+K on a selection, then edit and remove', async ({ page }) => {
   await page.keyboard.type('see docs');
   for (let i = 0; i < 4; i++) await page.keyboard.press('Shift+ArrowLeft');
   await page.keyboard.press('Control+k');
-  const input = page.locator('.mbe-link-input');
+  const input = page.locator('.mbe-popover-input');
   await expect(input).toBeFocused();
   await input.fill('https://example.com');
   await input.press('Enter');
@@ -192,6 +345,20 @@ test('link: Ctrl+K on a selection, then edit and remove', async ({ page }) => {
   await page.keyboard.press('End');
   await page.keyboard.type('!');
   expect(await md(page)).toBe('see [docs](https://example.com)!\n');
+});
+
+test('link: Ctrl+K with nothing to link is left to the app', async ({ page }) => {
+  await page.evaluate(() => {
+    (window as any).modK = [];
+    window.addEventListener('keydown', (e) => e.key === 'k' && (window as any).modK.push(e.defaultPrevented));
+  });
+  await page.keyboard.type('see docs');
+  await page.keyboard.press('Control+k');
+  await expect(page.locator('.mbe-popover-input')).toBeHidden();
+  for (let i = 0; i < 4; i++) await page.keyboard.press('Shift+ArrowLeft');
+  await page.keyboard.press('Control+k');
+  await expect(page.locator('.mbe-popover-input')).toBeFocused();
+  expect(await page.evaluate(() => (window as any).modK)).toEqual([false, true]);
 });
 
 test('link: pasting a URL over selected text', async ({ page }) => {
@@ -205,35 +372,35 @@ test('link: pasting a URL over selected text', async ({ page }) => {
   expect(await md(page)).toBe('click [here](https://x.dev)\n');
 });
 
-test('block handle: only tables and code blocks have it; the menu duplicates and deletes', async ({ page }) => {
+test('block handle: only tables and code blocks have it; the block menu duplicates and deletes', async ({ page }) => {
   await page.keyboard.type('intro');
   await page.keyboard.press('Enter');
   await page.keyboard.type('```js ');
   await page.keyboard.type('let a = 1;');
-  const handle = page.locator('.mbe-handle');
+  const blockHandle = page.locator('.mbe-block-handle');
   await page.locator('#editor p').first().hover();
-  await page.waitForTimeout(400); // past the handle's hide delay
-  await expect(handle).toBeHidden();
+  await page.waitForTimeout(400); // past the block handle's hide delay
+  await expect(blockHandle).toBeHidden();
   await page.locator('#editor .mbe-code pre').hover();
-  await expect(handle).toBeVisible();
-  await handle.click();
+  await expect(blockHandle).toBeVisible();
+  await blockHandle.click();
   const menu = page.locator('.mbe-block-menu');
   await expect(menu.locator('.mbe-menu-item')).toHaveText([/Duplicate/, /Delete/]);
   await menu.locator('.mbe-menu-item', { hasText: 'Duplicate' }).click();
   expect(await blocks(page)).toEqual(['p:intro', 'code(js):let a = 1;', 'code(js):let a = 1;']);
   await page.locator('#editor .mbe-code pre').last().hover();
-  await handle.click();
+  await blockHandle.click();
   await menu.locator('.mbe-menu-item', { hasText: 'Delete' }).click();
   expect(await blocks(page)).toEqual(['p:intro', 'code(js):let a = 1;']);
 });
 
 test('block menu: a press outside closes it, in the editor text or with the editor unfocused', async ({ page }) => {
   await page.goto(`/?md=${encodeURIComponent('intro\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\nafter')}`);
-  const handle = page.locator('.mbe-handle');
+  const blockHandle = page.locator('.mbe-block-handle');
   const menu = page.locator('.mbe-block-menu');
   const open = async () => {
     await page.locator('#editor table').hover();
-    await handle.click();
+    await blockHandle.click();
     await expect(menu).toBeVisible();
   };
   // A press in another paragraph keeps focus in the editor, and still closes the menu.
@@ -271,7 +438,7 @@ test('block menu with Ctrl+/: opens in a table cell, not in a paragraph', async 
   await expect(menu).toBeHidden();
 });
 
-test('handle and toolbar never reach the saved Markdown or the clipboard', async ({ page }) => {
+test('block handle and toolbar never reach the saved Markdown or the clipboard', async ({ page }) => {
   await page.keyboard.type('plain');
   await page.locator('#editor p').hover();
   await page.keyboard.press('Control+a');
@@ -281,7 +448,7 @@ test('handle and toolbar never reach the saved Markdown or the clipboard', async
     return { text: data.getData('text/plain'), html: data.getData('text/html') };
   });
   expect(copied.text).toBe('plain');
-  expect(copied.html).not.toContain('mbe-handle');
+  expect(copied.html).not.toContain('mbe-block-handle');
   expect(copied.html).not.toContain('mbe-toolbar');
 });
 
@@ -347,6 +514,10 @@ test('menus and the toolbar stay on screen on a short, narrow viewport', async (
     await expect(page.locator('.mbe-toolbar')).toBeVisible();
     expect(await onScreen('.mbe-toolbar'), `toolbar on line ${n}`).toBe(true);
   }
+  // A toolbar wider than the screen scrolls sideways, so its last control can be reached.
+  await page.locator('.mbe-tool-list').click();
+  await expect(page.locator('.mbe-list-menu')).toBeVisible();
+  await page.keyboard.press('Escape');
   // The highlighted item scrolls into view in a menu that had to shrink.
   await page.keyboard.press('End');
   await page.keyboard.type(' /');
@@ -380,10 +551,12 @@ for (const [action, expected] of [
 
 test('block menu in a table: alignment is saved in the delimiter row', async ({ page }) => {
   await page.evaluate(() => (window as any).editor.setMarkdown('| a | b |\n| - | - |\n| c | d |\n'));
-  for (const [align, row] of [['Align center', '| --- | :-: |'], ['Align right', '| --- | --: |'], ['Align left', '| --- | :-- |']]) {
+  for (const [align, row] of [['Center', '| --- | :-: |'], ['Right', '| --- | --: |'], ['Left', '| --- | :-- |']]) {
     await page.locator('#editor td', { hasText: 'd' }).click();
     await page.keyboard.press('Control+/');
-    await page.locator('.mbe-block-menu .mbe-menu-item', { hasText: align }).click();
+    // The choices are in an Align submenu, which opens on hover.
+    await page.locator('.mbe-block-menu .mbe-menu-item', { hasText: 'Align' }).hover();
+    await page.locator('.mbe-submenu .mbe-menu-item', { hasText: align }).click();
     expect((await md(page)).split('\n')[1]).toBe(row);
   }
 });

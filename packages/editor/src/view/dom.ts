@@ -11,12 +11,15 @@ import {
   type Cell,
   type CodeBlock,
   type Doc,
+  type ImageAtom,
   type Inline,
   type Mark,
+  type ParagraphBlock,
   type Position,
   type Span,
   MARK_ORDER,
   ATOM_CHAR,
+  imageBlockOffset,
   inlineLength,
   inlineText,
   sliceInline,
@@ -117,6 +120,10 @@ export interface RenderContext {
   readonly icon?: (name: IconName) => Node | null;
   /** Code blocks get a copy button. */
   readonly codeCopy?: boolean;
+  /** An image failed to load and its element was replaced by the unavailable state. */
+  readonly onImageError?: () => void;
+  /** A loaded image element with this `src` from the elements being replaced, to show again instead of a new one. */
+  readonly loadedImage?: (src: string) => HTMLImageElement | undefined;
 }
 
 /**
@@ -137,6 +144,15 @@ export function sameReveal(a: BlockReveal | undefined, b: BlockReveal | undefine
   return true;
 }
 
+/** Marks a paragraph that holds only an image (see `imageBlockOffset`), with the image's alignment. */
+function markImageBlock(el: HTMLElement, block: ParagraphBlock): void {
+  const offset = imageBlockOffset(block);
+  if (offset === null) return;
+  el.classList.add('mbe-image-block');
+  const align = sliceInline(block.content, offset, offset + 1)[0]?.image?.align;
+  if (align) el.dataset.align = align;
+}
+
 function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HTMLElement {
   const { doc, labels } = ctx;
   const el = (tag: string, className?: string) => {
@@ -152,6 +168,7 @@ function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HT
       root = el(block.type === 'paragraph' ? 'p' : block.type === 'quote' ? 'blockquote' : `h${block.level}`);
       root.dir = 'auto';
       fillContent(root, block.content, ctx, block, reveal);
+      if (block.type === 'paragraph') markImageBlock(root, block);
       break;
     case 'listItem': {
       root = el('div');
@@ -443,15 +460,31 @@ function renderSpan(span: Span, ctx: RenderContext, viewed = false): Node {
   // One atom as long as the token's source. Clicking it shows the source (see Editor).
   if (view) return wrapMarks(span, atom(view, classes('mbe-view', `mbe-view-${span.token}`, ctx.classes.token?.[span.token!]), span.text), ctx);
   if (span.image) {
-    const img = doc.createElement('img');
-    // Off-screen images load when they come near the viewport.
-    img.setAttribute('loading', 'lazy');
-    img.setAttribute('decoding', 'async');
-    if (ctx.referrerPolicy) img.setAttribute('referrerpolicy', ctx.referrerPolicy);
-    const src = ctx.resolveUrl(span.image.src, 'image');
-    if (src !== null) img.src = src;
-    img.alt = span.image.alt;
-    if (span.image.title) img.title = span.image.title;
+    const image = span.image;
+    const src = ctx.resolveUrl(image.src, 'image');
+    if (src === null) return unavailableImage(image, ctx);
+    // A loaded image keeps its element when its block renders again, so it
+    // does not collapse while a new element loads it.
+    let img = ctx.loadedImage?.(src);
+    if (!img) {
+      const el = doc.createElement('img');
+      // Off-screen images load when they come near the viewport.
+      el.setAttribute('loading', 'lazy');
+      el.setAttribute('decoding', 'async');
+      if (ctx.referrerPolicy) el.setAttribute('referrerpolicy', ctx.referrerPolicy);
+      el.src = src;
+      el.addEventListener('error', () => {
+        if (!el.parentNode) return;
+        el.replaceWith(unavailableImage({ src, alt: el.alt, title: el.title || undefined }, ctx));
+        ctx.onImageError?.();
+      });
+      img = el;
+    }
+    img.alt = image.alt;
+    setAttribute(img, 'title', image.title);
+    // The size is the most it shows at; CSS keeps it within the column and the aspect ratio.
+    setAttribute(img, 'width', image.width ? String(image.width) : undefined);
+    setAttribute(img, 'height', image.height ? String(image.height) : undefined);
     return atom(img, classes('mbe-image', ctx.classes.image));
   }
   let node: Node = doc.createTextNode(span.text);
@@ -464,6 +497,31 @@ function renderSpan(span: Span, ctx: RenderContext, viewed = false): Node {
     node = wrapper;
   }
   return wrapMarks(span, node, ctx);
+}
+
+function setAttribute(el: HTMLElement, name: string, value: string | undefined): void {
+  if (value === undefined) el.removeAttribute(name);
+  else el.setAttribute(name, value);
+}
+
+/**
+ * What shows in place of an image that did not load, or whose URL the policy
+ * dropped: an icon and the alt text, as one atom like the image.
+ */
+function unavailableImage(image: ImageAtom, ctx: RenderContext): HTMLElement {
+  const doc = ctx.doc;
+  const el = doc.createElement('span');
+  const text = image.alt || ctx.labels.imageUnavailable;
+  el.setAttribute('role', 'img');
+  el.setAttribute('aria-label', text);
+  if (image.title) el.title = image.title;
+  const icon = ctx.icon?.('imageUnavailable');
+  if (icon) el.appendChild(icon);
+  const label = doc.createElement('span');
+  label.className = 'mbe-image-alt';
+  label.textContent = text;
+  el.appendChild(label);
+  return atom(el, classes('mbe-image', 'mbe-image-unavailable', ctx.classes.image));
 }
 
 function wrapMarks(span: Span, node: Node, ctx: RenderContext): Node {
@@ -517,6 +575,8 @@ export class BlockRenderer {
   icon?: (name: IconName) => Node | null;
   /** Code blocks get a copy button. */
   codeCopy = false;
+  /** An image failed to load and now shows as unavailable. */
+  onImageError?: () => void;
   /** Per block, the views that show their source. A block re-renders when its entry changes. */
   revealed: ReadonlyMap<string, BlockReveal> = new Map();
   /**
@@ -530,6 +590,8 @@ export class BlockRenderer {
   private readonly failedViews = new Set<string>();
   /** The block being rendered, so a pending view knows which blocks to render again. */
   private renderingBlock = '';
+  /** During a render, the loaded images of the block elements it replaces, by `src`. */
+  private loadedImages = new Map<string, HTMLImageElement[]>();
 
   constructor(
     private readonly root: HTMLElement,
@@ -549,6 +611,8 @@ export class BlockRenderer {
       classes: this.classes,
       icon: this.icon,
       codeCopy: this.codeCopy,
+      onImageError: this.onImageError,
+      loadedImage: (src) => this.loadedImages.get(src)?.shift(),
     };
   }
 
@@ -604,14 +668,33 @@ export class BlockRenderer {
    */
   render(doc: Doc, force = false, lazy = false): void {
     const ctx = this.context();
+    const kept = new Set<HTMLElement>();
+    for (const block of doc.blocks) {
+      const prev = this.rendered.get(block.id);
+      if (!force && prev && prev.block === block && prev.el.parentNode === this.root && sameReveal(prev.reveal, this.revealed.get(block.id))) kept.add(prev.el);
+    }
+    // Images that loaded in the elements being replaced move to the new
+    // elements, even in another block, instead of loading again.
+    if (!force) {
+      for (const { el } of this.rendered.values()) {
+        if (kept.has(el)) continue;
+        for (const img of Array.from(el.querySelectorAll<HTMLImageElement>('img.mbe-image'))) {
+          const src = img.getAttribute('src');
+          if (src === null || !img.complete || img.naturalWidth === 0) continue;
+          const list = this.loadedImages.get(src);
+          if (list) list.push(img);
+          else this.loadedImages.set(src, [img]);
+        }
+      }
+    }
     const next = new Map<string, { block: Block; el: HTMLElement; reveal?: BlockReveal }>();
     for (const block of doc.blocks) {
       this.renderingBlock = block.id;
       const prev = this.rendered.get(block.id);
       const reveal = this.revealed.get(block.id);
-      const reuse = !force && prev && prev.block === block && prev.el.parentNode === this.root && sameReveal(prev.reveal, reveal);
-      next.set(block.id, { block, el: reuse ? prev.el : renderBlock(block, ctx, reveal), reveal });
+      next.set(block.id, { block, el: prev && kept.has(prev.el) ? prev.el : renderBlock(block, ctx, reveal), reveal });
     }
+    this.loadedImages.clear();
 
     // Block elements in order, each followed by its widgets.
     const nodes: HTMLElement[] = [];
@@ -828,6 +911,19 @@ export function domToPosition(root: HTMLElement, node: Node, offset: number): Po
   const content = contentElement(blockEl);
   if (!content) return { blockId, offset: 0 };
   return { blockId, offset: offsetIn(content, target, off) };
+}
+
+/** The atom (an image or a rendered token) that starts at `pos`, or null. */
+export function atomAt(blockEl: HTMLElement, pos: Position): HTMLElement | null {
+  const content = contentElement(blockEl, pos.cell);
+  if (!content) return null;
+  let acc = 0;
+  for (const leaf of leaves(content)) {
+    if (acc === pos.offset && leaf.nodeType !== 3) return leaf as HTMLElement;
+    acc += leafLength(leaf);
+    if (acc > pos.offset) return null;
+  }
+  return null;
 }
 
 export function positionToDom(blockEl: HTMLElement, pos: Position): { node: Node; offset: number } {

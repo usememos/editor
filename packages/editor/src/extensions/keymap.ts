@@ -15,7 +15,8 @@ export function defaultKeymap(): Extension {
     'Mod-e': ({ editor }) => editor.commands.toggleCode(),
     'Mod-Shift-x': ({ editor }) => editor.commands.toggleStrike(),
     'Mod-Shift-s': ({ editor }) => editor.commands.toggleStrike(),
-    'Mod-k': ({ editor }) => (editor.openLinkPopover(), true),
+    // Without selected text or a link at the caret, Mod+K is left to the app, for example for a command menu.
+    'Mod-k': ({ editor }) => editor.openLinkPopover(),
     'Mod-Alt-0': ({ editor }) => editor.commands.setParagraph() || true,
     'Mod-Alt-1': ({ editor }) => editor.commands.toggleHeading({ level: 1 }) || true,
     'Mod-Alt-2': ({ editor }) => editor.commands.toggleHeading({ level: 2 }) || true,

@@ -24,6 +24,7 @@
 import {
   type Block,
   type Doc,
+  type ImageAtom,
   type Inline,
   type ListItemBlock,
   type Mark,
@@ -35,6 +36,7 @@ import {
   setMarkInRange,
   deleteInline,
 } from '../model';
+import { imageSuffix, imageSuffixText } from './ast';
 import { AUTOLINK_EMAIL, AUTOLINK_URI, isUnicodePunctuation, isUnicodeWhitespace, parseInline } from './inline';
 import { emailLiterals, isLiteralBoundary, literalHref, urlLiteralAt } from './autolink';
 import { type InlineSyntax, type MarkdownOptions, type ResolvedMarkdown, resolveMarkdown } from './options';
@@ -288,7 +290,10 @@ function sameInline(a: Inline, b: Inline): boolean {
         sameMarks(s.marks, t.marks) &&
         s.image?.src === t.image?.src &&
         s.image?.alt === t.image?.alt &&
-        s.image?.title === t.image?.title
+        s.image?.title === t.image?.title &&
+        s.image?.align === t.image?.align &&
+        s.image?.width === t.image?.width &&
+        s.image?.height === t.image?.height
       );
     })
   );
@@ -816,7 +821,7 @@ function linkDestination(url: string): string {
   return escapeEntities(url.replace(/\\/g, '\\\\'));
 }
 
-function imageMarkdown(image: { src: string; alt: string; title?: string }, ctx: InlineContext): string {
+function imageMarkdown(image: ImageAtom, ctx: InlineContext): string {
   // Alt text keeps line breaks as hard breaks: a soft break in alt text reads back as a space.
   const altCtx: InlineContext = ctx.newline === 'soft' ? { ...ctx, newline: 'break' } : ctx;
   const alt = escapeText({ text: image.alt, encodeFirst: false, encodeLast: false }, altCtx, {
@@ -826,5 +831,12 @@ function imageMarkdown(image: { src: string; alt: string; title?: string }, ctx:
     atEnd: false,
   });
   const title = image.title ? ` "${escapeEntities(image.title.replace(/["\\]/g, '\\$&'))}"` : '';
-  return `![${alt}](${linkDestination(image.src)}${title})`;
+  // The alignment and size go after the alt text, as in Obsidian. When alt
+  // text would read back as part of them (it ends like `|center` or `|320`),
+  // its last "|" is written as a character reference, which is not a "|".
+  const suffix = imageSuffixText(image);
+  const read = imageSuffix(alt + suffix);
+  const same = read ? read.index === alt.length && imageSuffixText(read) === suffix : !suffix;
+  const text = (same ? alt : alt.replace(/\|(?=[^|]*$)/, '&#124;')) + suffix;
+  return `![${text}](${linkDestination(image.src)}${title})`;
 }

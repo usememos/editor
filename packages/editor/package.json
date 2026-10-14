@@ -1,7 +1,7 @@
 {
   "name": "@usememos/editor",
   "version": "0.0.0",
-  "description": "A block editor for standard Markdown. Zero runtime dependencies, with an optional React component.",
+  "description": "A block editor for Markdown. Zero runtime dependencies, with an optional React component.",
   "keywords": [
     "markdown",
     "editor",

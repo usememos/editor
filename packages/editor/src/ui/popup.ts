@@ -150,6 +150,29 @@ export class Popup {
     this.el.style.top = `${Math.round(top - offset.y)}px`;
   }
 
+  /**
+   * Shows the popup beside `menu` (a menu's rectangle, viewport coordinates),
+   * with its point `offsetY` from its top level with `top`: on the right, or
+   * on the left when there is no room, as a submenu opens.
+   */
+  showBeside(menu: { left: number; right: number }, top: number, offsetY: number, gap = 4): void {
+    const doc = this.owner.ownerDocument;
+    if (!this.open) this.copyTheme();
+    this.el.hidden = false;
+    this.open = true;
+    const offset = attach(this.el, this.owner);
+    const vp = visibleViewport(doc.defaultView!);
+    this.el.style.maxHeight = '';
+    const w = this.el.offsetWidth;
+    const h = this.el.offsetHeight;
+    let left = menu.right + gap;
+    if (left + w > vp.left + vp.width - 8 && menu.left - gap - w >= vp.left + 8) left = menu.left - gap - w;
+    left = Math.max(vp.left + 8, Math.min(left, vp.left + vp.width - w - 8));
+    const y = Math.max(vp.top + 8, Math.min(top - offsetY, vp.top + vp.height - h - 8));
+    this.el.style.left = `${Math.round(left - offset.x)}px`;
+    this.el.style.top = `${Math.round(y - offset.y)}px`;
+  }
+
   hide(): void {
     if (!this.open) return;
     this.open = false;
@@ -183,6 +206,14 @@ export interface MenuItem {
   /** Extra words that match when filtering. */
   aliases?: string[];
   danger?: boolean;
+  /** For a choice in a menu: true marks the current one with `Menu.checkIcon`. */
+  checked?: boolean;
+  /** A class for the label, such as one that previews a heading style. */
+  labelClass?: string;
+  /** `aria-keyshortcuts` of the row. */
+  keyShortcuts?: string;
+  /** Items of a submenu that opens beside the row, on hover, ArrowRight or Enter, instead of `run`. */
+  submenu?: MenuSection;
   run: () => void;
 }
 
@@ -199,12 +230,23 @@ export class Menu {
   private items: MenuItem[] = [];
   private index = 0;
   private readonly id = `mbe-menu-${++menuCounter}`;
+  /** The submenu of the item at `childIndex`, while it is open. */
+  private child: Menu | null = null;
+  private childIndex = -1;
+  /** Shown after the label of a `checked` item. */
+  checkIcon: Icon | undefined;
+  /** Shown at the end of a row that opens a submenu. */
+  submenuIcon: Icon | undefined;
   /** Called after an item runs. */
   onPicked: (() => void) | null = null;
   /** Called when the highlight moves, by key, by mouse or because the items changed. */
   onHighlight: ((index: number) => void) | null = null;
 
-  constructor(owner: HTMLElement, className: string, role: 'listbox' | 'menu' = 'listbox') {
+  constructor(
+    private readonly owner: HTMLElement,
+    private readonly className: string,
+    role: 'listbox' | 'menu' = 'listbox',
+  ) {
     this.popup = new Popup(owner, `mbe-menu ${className}`);
     this.popup.el.setAttribute('role', role);
     this.popup.el.id = this.id;
@@ -219,11 +261,65 @@ export class Menu {
   }
 
   get activeDescendant(): string | null {
+    if (this.child?.isOpen) return this.child.activeDescendant;
     return this.items.length ? `${this.id}-${this.index}` : null;
+  }
+
+  /** The open submenu, if any. */
+  get submenu(): Menu | null {
+    return this.child?.isOpen ? this.child : null;
+  }
+
+  /** True if `node` is in this menu or its submenu. */
+  contains(node: Node): boolean {
+    return this.el.contains(node) || !!this.child?.contains(node);
+  }
+
+  /** Opens the submenu of the item at `i` (default: the highlighted one) and highlights its checked or first item. Returns false when it has none. */
+  openSubmenu(i = this.index): boolean {
+    const item = this.items[i];
+    const row = this.el.querySelector<HTMLElement>(`#${this.id}-${i}`);
+    if (!item?.submenu || !row) return false;
+    if (this.child?.isOpen && this.childIndex === i) return true;
+    this.highlight(i);
+    if (!this.child) {
+      this.child = new Menu(this.owner, `mbe-submenu ${this.className}-submenu`, 'menu');
+      this.child.onPicked = () => {
+        this.closeSubmenu();
+        this.onPicked?.();
+      };
+      this.child.onHighlight = () => this.onHighlight?.(this.index);
+    }
+    this.child.checkIcon = this.checkIcon;
+    this.child.el.setAttribute('aria-label', item.submenu.title ?? item.label);
+    this.child.setSections([item.submenu]);
+    const checked = item.submenu.items.find((it) => it.checked);
+    if (checked) this.child.highlightId(checked.id);
+    this.childIndex = i;
+    row.setAttribute('aria-expanded', 'true');
+    // Top-aligned with the row: the submenu's first item sits level with it.
+    const menuRect = this.el.getBoundingClientRect();
+    const rowTop = row.getBoundingClientRect().top;
+    this.child.popup.showBeside(menuRect, rowTop, 0);
+    const first = this.child.el.querySelector<HTMLElement>('.mbe-menu-item');
+    const shift = first ? first.getBoundingClientRect().top - this.child.el.getBoundingClientRect().top : 0;
+    if (shift) this.child.popup.showBeside(menuRect, rowTop, shift);
+    this.onHighlight?.(this.index);
+    return true;
+  }
+
+  /** Closes the submenu, keeping its item highlighted. */
+  closeSubmenu(): void {
+    if (!this.child?.isOpen) return;
+    this.child.hide();
+    this.el.querySelector(`#${this.id}-${this.childIndex}`)?.setAttribute('aria-expanded', 'false');
+    this.childIndex = -1;
+    this.onHighlight?.(this.index);
   }
 
   setSections(sections: MenuSection[], emptyLabel?: string): void {
     const doc = this.el.ownerDocument;
+    this.closeSubmenu();
     this.el.replaceChildren();
     this.items = [];
     this.index = 0;
@@ -242,14 +338,17 @@ export class Menu {
         const row = doc.createElement('div');
         row.className = 'mbe-menu-item';
         row.id = `${this.id}-${i}`;
-        row.setAttribute('role', this.el.getAttribute('role') === 'menu' ? 'menuitem' : 'option');
+        const role = this.el.getAttribute('role') === 'menu' ? (item.checked === undefined ? 'menuitem' : 'menuitemradio') : 'option';
+        row.setAttribute('role', role);
+        if (item.checked !== undefined) row.setAttribute('aria-checked', String(item.checked));
+        if (item.keyShortcuts) row.setAttribute('aria-keyshortcuts', item.keyShortcuts);
         if (item.danger) row.classList.add('mbe-danger');
         const icon = doc.createElement('span');
         icon.className = 'mbe-menu-icon';
         const content = iconNode(doc, item.icon);
         if (content) icon.appendChild(content);
         const label = doc.createElement('span');
-        label.className = 'mbe-menu-label';
+        label.className = item.labelClass ? `mbe-menu-label ${item.labelClass}` : 'mbe-menu-label';
         setMarked(label, item.label, item.mark);
         row.append(icon, label);
         if (item.detail) {
@@ -258,7 +357,27 @@ export class Menu {
           detail.textContent = item.detail;
           row.appendChild(detail);
         }
-        row.addEventListener('mousemove', () => this.highlight(i));
+        if (item.checked) {
+          const check = doc.createElement('span');
+          check.className = 'mbe-menu-check';
+          const content = iconNode(doc, this.checkIcon);
+          if (content) check.appendChild(content);
+          row.appendChild(check);
+        }
+        if (item.submenu) {
+          row.setAttribute('aria-haspopup', 'menu');
+          row.setAttribute('aria-expanded', 'false');
+          const arrow = doc.createElement('span');
+          arrow.className = 'mbe-menu-submenu';
+          const content = iconNode(doc, this.submenuIcon);
+          if (content) arrow.appendChild(content);
+          row.appendChild(arrow);
+        }
+        row.addEventListener('mousemove', () => {
+          if (this.index !== i || !this.child?.isOpen) this.highlight(i);
+          if (item.submenu) this.openSubmenu(i);
+          else this.closeSubmenu();
+        });
         row.addEventListener('click', () => this.pick(i));
         this.el.appendChild(row);
       }
@@ -336,15 +455,21 @@ export class Menu {
   pick(i = this.index): void {
     const item = this.items[i];
     if (!item) return;
+    if (item.submenu) {
+      this.openSubmenu(i);
+      return;
+    }
     item.run();
     this.onPicked?.();
   }
 
   hide(): void {
+    this.closeSubmenu();
     this.popup.hide();
   }
 
   destroy(): void {
+    this.child?.destroy();
     this.popup.destroy();
   }
 }

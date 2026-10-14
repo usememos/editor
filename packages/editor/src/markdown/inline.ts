@@ -10,7 +10,7 @@
 // wrapping a range of siblings in a new node is cheap.
 
 import type { Inline } from '../model';
-import type { InlineNode } from './ast';
+import { type ImageNodeAlign, type InlineNode, imageSuffix } from './ast';
 import { lookupEntity } from '#entities';
 import { lowerInlines } from './lower';
 import { emailLiterals, isLiteralBoundary, urlLiteralAt } from './autolink';
@@ -202,6 +202,11 @@ class Node {
   depth = 0;
   destination = '';
   title = '';
+  /** An image's alignment (see `imageSuffix`), '' when none. */
+  align: ImageNodeAlign | '' = '';
+  /** An image's size (see `imageSuffix`), 0 when none. */
+  width = 0;
+  height = 0;
   /** An escaped "@": kept apart from the text around it, so it does not join an e-mail literal. */
   apart = false;
   parent: Node | null = null;
@@ -301,9 +306,20 @@ function toAst(parent: Node): InlineNode[] {
         out.push({ type: n.type, children: toAst(n) });
         break;
       case 'link':
-      case 'image':
         out.push({ type: n.type, destination: n.destination, title: n.title, children: toAst(n) });
         break;
+      case 'image': {
+        out.push({
+          type: n.type,
+          destination: n.destination,
+          title: n.title,
+          children: toAst(n),
+          ...(n.align ? { align: n.align } : {}),
+          ...(n.width ? { width: n.width } : {}),
+          ...(n.width && n.height ? { height: n.height } : {}),
+        });
+        break;
+      }
       case 'root':
         break;
     }
@@ -855,6 +871,15 @@ class InlineParser {
     const link = new Node(opener.image ? 'image' : 'link');
     link.destination = dest ?? '';
     link.title = title ?? '';
+    if (opener.image) {
+      // An alignment and a size after the description, `![alt|center|320](src)`.
+      const suffix = imageSuffix(this.subject.slice(opener.index + 1, startPos - 1));
+      if (suffix) {
+        link.align = suffix.align ?? '';
+        link.width = suffix.width ?? 0;
+        link.height = suffix.height ?? 0;
+      }
+    }
     let n = opener.node.next;
     while (n) {
       const next: Node | null = n.next;

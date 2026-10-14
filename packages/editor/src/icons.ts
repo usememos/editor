@@ -29,7 +29,7 @@ type IconChild = string | readonly [tag: string, attrs: Readonly<Record<string, 
 /** `trash`, used by every delete action. */
 const TRASH: readonly IconChild[] = ['M10 11v6', 'M14 11v6', 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6', 'M3 6h18', 'M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'];
 
-/** The built-in icons, by the `labels` key of the control that shows them. The comment names the Lucide icon. */
+/** The built-in icons, by the `labels` key of the control that shows them (see IconName). The comment names the Lucide icon. */
 const ICONS = {
   /** `type` */
   text: ['M12 4v16', 'M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2', 'M9 20h6'],
@@ -69,12 +69,36 @@ const ICONS = {
   addColumnLeft: ['m12 19-7-7 7-7', 'M19 12H5'],
   /** `arrow-right` */
   addColumnRight: ['M5 12h14', 'm12 5 7 7-7 7'],
+  /** `text-align-start`, the table menu's Align row */
+  align: ['M21 5H3', 'M15 12H3', 'M17 19H3'],
   /** `text-align-start` */
   alignLeft: ['M21 5H3', 'M15 12H3', 'M17 19H3'],
   /** `text-align-center` */
   alignCenter: ['M21 5H3', 'M17 12H7', 'M19 19H5'],
   /** `text-align-end` */
   alignRight: ['M21 5H3', 'M21 12H9', 'M21 19H7'],
+  /** `align-start-vertical`, an image block's Align row and its Left item */
+  imageAlignLeft: [['rect', { width: '9', height: '6', x: '6', y: '14', rx: '2' }], ['rect', { width: '16', height: '6', x: '6', y: '4', rx: '2' }], 'M2 2v20'],
+  /** `align-center-vertical` */
+  imageAlignCenter: [
+    'M12 2v20',
+    'M8 10H4a2 2 0 0 1-2-2V6c0-1.1.9-2 2-2h4',
+    'M16 10h4a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-4',
+    'M8 20H7a2 2 0 0 1-2-2v-2c0-1.1.9-2 2-2h1',
+    'M16 14h1a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-1',
+  ],
+  /** `align-end-vertical` */
+  imageAlignRight: [['rect', { width: '16', height: '6', x: '2', y: '4', rx: '2' }], ['rect', { width: '9', height: '6', x: '9', y: '14', rx: '2' }], 'M22 22V2'],
+  /** `rotate-ccw` */
+  resetImageSize: ['M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8', 'M3 3v5h5'],
+  /** `text-cursor-input` */
+  altText: [
+    'M12 20h-1a2 2 0 0 1-2-2 2 2 0 0 1-2 2H6',
+    'M13 8h7a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-7',
+    'M5 16H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h1',
+    'M6 4h1a2 2 0 0 1 2 2 2 2 0 0 1 2-2h1',
+    'M9 6v12',
+  ],
   /** `trash` */
   deleteRow: TRASH,
   /** `trash` */
@@ -89,11 +113,34 @@ const ICONS = {
   inlineCode: ['m16 18 6-6-6-6', 'm8 6-6 6 6 6'],
   /** `link` */
   link: ['M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71', 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'],
+  /** `image-off` */
+  imageUnavailable: [
+    ['line', { x1: '2', x2: '22', y1: '2', y2: '22' }],
+    'M10.41 10.41a2 2 0 1 1-2.83-2.83',
+    ['line', { x1: '13.5', x2: '6', y1: '13.5', y2: '21' }],
+    ['line', { x1: '18', x2: '21', y1: '12', y2: '15' }],
+    'M3.59 3.59A1.99 1.99 0 0 0 3 5v14a2 2 0 0 0 2 2h14c.55 0 1.052-.22 1.41-.59',
+    'M21 15V5a2 2 0 0 0-2-2H9',
+  ],
+  /** `chevron-down`, after the icon of a toolbar button that opens a menu */
+  chevronDown: ['m6 9 6 6 6-6'],
+  /** `check`, after the current item of a menu */
+  selected: ['M20 6 9 17l-5-5'],
+  /** `chevron-right`, at the end of a menu row that opens a submenu */
+  chevronRight: ['m9 18 6-6-6-6'],
   /** `grip-vertical` */
   blockHandle: [['circle', { cx: '9', cy: '12', r: '1' }], ['circle', { cx: '9', cy: '5', r: '1' }], ['circle', { cx: '9', cy: '19', r: '1' }], ['circle', { cx: '15', cy: '12', r: '1' }], ['circle', { cx: '15', cy: '5', r: '1' }], ['circle', { cx: '15', cy: '19', r: '1' }]],
-} satisfies Partial<Record<keyof Labels, readonly IconChild[]>>;
+} satisfies Partial<Record<keyof Labels | IconPart, readonly IconChild[]>>;
 
-/** Names of the built-in icons. Each is the `labels` key of the control that shows it. */
+/** Icons not named after a label: parts of controls, and an image block's Align choices, whose labels tables share. */
+type IconPart = 'chevronDown' | 'chevronRight' | 'selected' | 'imageAlignLeft' | 'imageAlignCenter' | 'imageAlignRight';
+
+/**
+ * Names of the built-in icons. Each is the `labels` key of the control that
+ * shows it, except `chevronDown`, `chevronRight` and `selected`, which are
+ * parts of controls, and `imageAlignLeft`, `imageAlignCenter` and
+ * `imageAlignRight`, an image block's Align choices.
+ */
 export type IconName = keyof typeof ICONS;
 
 export type Icons = Partial<Record<IconName, Icon>>;

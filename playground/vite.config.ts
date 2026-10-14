@@ -16,6 +16,10 @@ export default defineConfig({
     },
   },
   build: {
+    // The browser tests run against this build (see playwright.config.ts).
+    // Unminified, so a failure's stack and the CSS read the same as the source.
+    minify: false,
+    cssMinify: false,
     rollupOptions: { input: { main: src('index.html'), react: src('react.html') } },
   },
 });

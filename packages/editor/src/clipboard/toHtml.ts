@@ -7,7 +7,7 @@
 // and `html`-marked text) is written verbatim, as a Markdown renderer would;
 // all other text is escaped.
 
-import { type Block, type Doc, type Inline, type ListItemBlock, type Span, inlineText } from '../model';
+import { type Block, type Doc, type Inline, type ListItemBlock, type Span, imageBlockOffset, inlineText, sliceInline } from '../model';
 
 export function docToHtml(doc: Doc): string {
   let out = '';
@@ -40,8 +40,12 @@ export function docToHtml(doc: Doc): string {
 
 function blockHtml(block: Block): string {
   switch (block.type) {
-    case 'paragraph':
-      return `<p>${inlineHtml(block.content)}</p>`;
+    case 'paragraph': {
+      // An image block keeps its alignment, as other apps read it.
+      const at = imageBlockOffset(block);
+      const align = at === null ? undefined : sliceInline(block.content, at, at + 1)[0]?.image?.align;
+      return `<p${align ? ` style="text-align:${align}"` : ''}>${inlineHtml(block.content)}</p>`;
+    }
     case 'heading':
       return `<h${block.level}>${inlineHtml(block.content)}</h${block.level}>`;
     case 'code': {
@@ -132,8 +136,10 @@ function inlineHtml(inline: Inline): string {
 function spanHtml(span: Span): string {
   let html: string;
   if (span.image) {
-    const { src, alt, title } = span.image;
-    html = `<img src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"${title ? ` title="${escapeHtml(title)}"` : ''}>`;
+    const { src, alt, title, width, height } = span.image;
+    html = `<img src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"${title ? ` title="${escapeHtml(title)}"` : ''}`;
+    if (width) html += ` width="${width}"${height ? ` height="${height}"` : ''}`;
+    html += '>';
   } else if (span.marks.includes('html')) {
     html = span.text;
   } else {

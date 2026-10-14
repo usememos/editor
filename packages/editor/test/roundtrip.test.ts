@@ -346,6 +346,7 @@ function random(seed: number) {
 const ALPHABET = 'ab .,"*_~`[]()!<>&#-=+1\\|\n:;é\t'.split('');
 const SNIPPETS = ['- ', '1. ', '# ', '> ', '---', '| - |', '```', '    ', '[x] ', '<div>', '==='];
 const MARKS: Mark[] = ['bold', 'italic', 'strike', 'code'];
+const sizes = random(11);
 
 function randomInline(r: ReturnType<typeof random>, allowHtml: boolean): Span[] {
   const text = (max: number) => {
@@ -366,7 +367,14 @@ function randomInline(r: ReturnType<typeof random>, allowHtml: boolean): Span[] 
     let span: Span = { text: text(5), marks: sortMarks(MARKS.filter(() => r.next() < 0.25)) };
     if (r.next() < 0.1) span = { ...span, link: r.pick(['http://a.b', 'x y', 'a(b', 'u', 'mailto:a@b.c']) };
     if (r.next() < 0.05) {
-      const image = { src: r.pick(['i.png', 'a b.png']), alt: text(3), ...(r.next() < 0.3 ? { title: 'T"q' } : {}) };
+      // Alt text may end like a size or an alignment (`|1`, `|center`), and the
+      // image may have them. These draw from their own generator, so the
+      // documents around them stay the same.
+      const src = r.pick(['i.png', 'a b.png']);
+      const alt = text(3) + (sizes.next() < 0.2 ? sizes.pick(['|1', '|12x3', '\\|1', '|center', '|left|1', '\\|right']) : '');
+      const size = sizes.next() < 0.3 ? { width: sizes.pick([1, 320]), ...(sizes.next() < 0.3 ? { height: 2 } : {}) } : {};
+      const align = sizes.next() < 0.3 ? { align: sizes.pick(['left', 'center', 'right'] as const) } : {};
+      const image = { src, alt, ...(r.next() < 0.3 ? { title: 'T"q' } : {}), ...align, ...size };
       span = { ...span, text: ATOM_CHAR, marks: span.marks.filter((m) => m !== 'code'), image };
     }
     spans.push(span);
@@ -398,7 +406,7 @@ function randomBlock(r: ReturnType<typeof random>, prevIndent: number): Block {
 /** A comparable description of a block's content, as Markdown can represent it. */
 function describe_(block: Block): unknown {
   const content = (inline: Inline) =>
-    representableInline(inline).map((s) => [s.text, s.marks, s.link, s.image?.src, s.image?.alt, s.image?.title]);
+    representableInline(inline).map((s) => [s.text, s.marks, s.link, s.image?.src, s.image?.alt, s.image?.title, s.image?.align, s.image?.width, s.image?.height]);
   switch (block.type) {
     case 'table':
       return ['table', block.align, block.rows.map((row) => row.map(content))];

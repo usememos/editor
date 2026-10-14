@@ -531,6 +531,13 @@ describe('inline shortcuts', () => {
     ['a ~~gone~~ b', ['p:a <s>gone</s> b']],
     ['snake_case_name', ['p:snake_case_name']],
     ['2 * 3 * 4', ['p:2 * 3 * 4']],
+    // A backslash escapes a delimiter, as in CommonMark; inside code it is literal.
+    ['\\*a*', ['p:\\*a*']],
+    ['*a\\*', ['p:*a\\*']],
+    ['\\**a**', ['p:\\**a**']],
+    ['\\\\*a*', ['p:\\\\<i>a</i>']],
+    ['\\`a`', ['p:\\`a`']],
+    ['`a\\`', ['p:<c>a\\</c>']],
   ])('%s', (input, expected) => {
     expect(typed(input)).toEqual(expected);
   });
@@ -573,6 +580,25 @@ describe('toggleBlockType', () => {
     expect(show(s)).toEqual(['p:a', 'p:b']);
     s = cmd.toggleBlockType(s, { type: 'listItem', listType: 'task' });
     expect(show(s)).toEqual(['task0[ ]:a', 'task0[ ]:b']);
+  });
+
+  it('turns several blocks into one code block, a line per block, and selects it', () => {
+    const p1 = paragraph(bold('a'));
+    const p2 = listItem('bullet', plain('b'));
+    const p3 = heading(2, plain('c'));
+    const s0: EditorState = { ...createState({ blocks: [p1, p2, p3] }), selection: { anchor: caret(p3.id, 1).anchor, focus: caret(p1.id, 0).focus } };
+    const s = cmd.toggleBlockType(s0, { type: 'code' });
+    expect(show(s)).toEqual(['code():a\nb\nc']);
+    expect(s.doc.blocks[0]!.id).toBe(p1.id);
+    expect(s.selection).toEqual({ anchor: { blockId: p1.id, offset: 0 }, focus: { blockId: p1.id, offset: 5 } });
+  });
+
+  it('keeps tables and dividers out of a merged code block', () => {
+    const blocks = [paragraph(plain('a')), divider(), paragraph(plain('b')), paragraph(plain('c'))];
+    const s0: EditorState = { ...createState({ blocks }), selection: { anchor: caret(blocks[0]!.id, 0).anchor, focus: caret(blocks[3]!.id, 1).focus } };
+    const s = cmd.setBlockType(s0, { type: 'code', language: 'js' });
+    expect(show(s)).toEqual(['code(js):a', 'hr', 'code(js):b\nc']);
+    expect(s.selection.focus).toEqual({ blockId: blocks[2]!.id, offset: 3 });
   });
 });
 

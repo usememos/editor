@@ -17,6 +17,7 @@
 import {
   ATOM_CHAR,
   type Block,
+  type ImageAtom,
   type ListType,
   type Mark,
   MAX_INDENT,
@@ -33,7 +34,7 @@ import {
   sortMarks,
   table,
 } from '../model';
-import { type BlockNode, type InlineNode, type ListItemNode, type ListNode, inlineNodesText } from './ast';
+import { type BlockNode, type ImageNode, type InlineNode, type ListItemNode, type ListNode, imageSuffixText, inlineNodesText } from './ast';
 import { DEFAULT_MARKDOWN, type MarkdownOptions } from './options';
 
 /**
@@ -122,13 +123,26 @@ function lowerInto(
         // Links cannot nest, so the destination simply replaces any outer one.
         lowerInto(node.children, marks, node.destination, out, soft);
         break;
-      case 'image': {
-        const alt = inlineNodesText(node.children, ' ');
-        push({ text: ATOM_CHAR, marks, image: node.title ? { src: node.destination, alt, title: node.title } : { src: node.destination, alt } });
+      case 'image':
+        push({ text: ATOM_CHAR, marks, image: imageAtom(node) });
         break;
-      }
     }
   }
+}
+
+function imageAtom(node: ImageNode): ImageAtom {
+  let alt = inlineNodesText(node.children, ' ');
+  // The description ends with the alignment and size; the alt text does not.
+  const suffix = imageSuffixText(node);
+  if (suffix && alt.endsWith(suffix)) alt = alt.slice(0, -suffix.length);
+  return {
+    src: node.destination,
+    alt,
+    ...(node.title ? { title: node.title } : {}),
+    ...(node.align ? { align: node.align } : {}),
+    ...(node.width ? { width: node.width } : {}),
+    ...(node.height ? { height: node.height } : {}),
+  };
 }
 
 function withMark(marks: readonly Mark[], mark: Mark): readonly Mark[] {

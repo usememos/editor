@@ -93,6 +93,14 @@
 .mbe-root :is(.mbe-raw-html, .mbe-token) { color: var(--mbe-muted); }
 .mbe-root code { background: var(--mbe-code-bg); border-radius: 4px; padding: 2px 4px; }
 .mbe-root .mbe-image { border-radius: 8px; }
+.mbe-root .mbe-image-selected { outline-color: var(--mbe-accent); }
+.mbe-root .mbe-image-unavailable {
+  border-color: var(--mbe-border);
+  background: var(--mbe-block-code-bg);
+  color: var(--mbe-muted);
+  font-size: 0.875em;
+  line-height: 20px;
+}
 /* Footnotes, rendered: a reference is a small raised label, a definition a small muted note. */
 .mbe-root .mbe-footnote-ref { font-size: 0.75em; line-height: 0; color: var(--mbe-link); }
 .mbe-root.mbe-readonly .mbe-footnote-ref { cursor: pointer; }
@@ -182,7 +190,7 @@
 }
 .mbe-menu,
 .mbe-toolbar,
-.mbe-link-popover {
+.mbe-input-popover {
   color: var(--mbe-text);
   background: var(--mbe-popup-bg);
   border: 1px solid var(--mbe-popup-border);
@@ -199,26 +207,53 @@
 .mbe-menu-loading { color: var(--mbe-muted); }
 .mbe-menu-detail { font-size: 12px; color: var(--mbe-muted); }
 
-.mbe-tool { border-radius: 6px; }
-.mbe-tool:hover { background: var(--mbe-hover); }
+.mbe-toolbar { border-radius: calc(var(--mbe-radius) + 2px); }
+.mbe-tool { border-radius: 7px; }
+.mbe-tool:hover,
+.mbe-tool.mbe-open { background: var(--mbe-hover); }
 .mbe-tool.mbe-active { color: var(--mbe-accent); background: var(--mbe-hover); }
+.mbe-tool-chevron { color: var(--mbe-muted); }
 .mbe-tool-bold { font-weight: 700; }
 .mbe-tool-italic { font-style: italic; font-family: Georgia, serif; }
 .mbe-tool-strike { text-decoration: line-through; }
 .mbe-tool-code { font-family: var(--mbe-mono); font-size: 12px; }
 .mbe-tool-sep { background: var(--mbe-popup-border); }
+.mbe-tooltip {
+  font-size: 12px;
+  border-radius: 6px;
+  color: var(--mbe-popup-bg);
+  background: var(--mbe-text);
+}
 
-.mbe-link-input {
+/* The text style and list menus: roomier rows, and each style shown as itself. */
+.mbe-text-style-menu .mbe-menu-item,
+.mbe-list-menu .mbe-menu-item { min-height: 32px; font-size: 14px; line-height: 24px; }
+.mbe-menu-check { color: var(--mbe-accent); }
+.mbe-menu-submenu { color: var(--mbe-muted); }
+.mbe-menu-item[aria-expanded="true"] { background: var(--mbe-hover); color: inherit; }
+.mbe-menu-heading1 { font-size: 19px; font-weight: 650; }
+.mbe-menu-heading2 { font-size: 17px; font-weight: 650; }
+.mbe-menu-heading3 { font-size: 15px; font-weight: 650; }
+
+.mbe-popover-input {
   border: 1px solid var(--mbe-popup-border);
   border-radius: 6px;
   background: transparent;
   outline: none;
 }
-.mbe-link-input:focus { border-color: var(--mbe-accent); }
+.mbe-popover-input:focus { border-color: var(--mbe-accent); }
 
-.mbe-handle {
+.mbe-resize-handle {
+  background: rgb(0 0 0 / 0.6);
+  border-color: rgb(255 255 255 / 0.85);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
+}
+.mbe-resize-handle:hover,
+.mbe-image-resizing .mbe-resize-handle { background: var(--mbe-accent); }
+
+.mbe-block-handle {
   border-radius: 4px;
   color: var(--mbe-muted);
   opacity: 0.7;
 }
-.mbe-handle:hover { background: var(--mbe-hover); opacity: 1; }
+.mbe-block-handle:hover { background: var(--mbe-hover); opacity: 1; }

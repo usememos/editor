@@ -47,6 +47,67 @@ export interface ImageNode {
   readonly title: string;
   /** The image description; its plain text is the alt text. */
   readonly children: InlineNode[];
+  /**
+   * An alignment and a size written after the description, as in Obsidian:
+   * `![alt|320](src)`, `![alt|center](src)` or `![alt|center|320x200](src)`.
+   * The description still ends with them; see `imageSuffix`. Not part of
+   * CommonMark, so the spec HTML ignores them.
+   */
+  readonly align?: ImageNodeAlign;
+  readonly width?: number;
+  readonly height?: number;
+}
+
+export type ImageNodeAlign = 'left' | 'center' | 'right';
+
+/** What an image description ends with: an alignment, a size, or both. */
+export interface ImageSuffix {
+  readonly align?: ImageNodeAlign;
+  readonly width?: number;
+  readonly height?: number;
+  /** Where the suffix starts in the text. */
+  readonly index: number;
+}
+
+/**
+ * The size at the end of an image description: `|320` or `|320x200`, whole
+ * CSS pixels from 1 to 99999.
+ */
+const IMAGE_SIZE = /\|([1-9][0-9]{0,4})(?:x([1-9][0-9]{0,4}))?$/;
+/** An alignment, optionally followed by a size: `|center` or `|center|320`. */
+const IMAGE_ALIGN = /\|(left|center|right)(?:\|([1-9][0-9]{0,4})(?:x([1-9][0-9]{0,4}))?)?$/;
+
+/** True when the character after `before` is escaped by an odd number of backslashes. */
+const escapedAfter = (before: string) => /(^|[^\\])(\\\\)*\\$/.test(before);
+
+/**
+ * The alignment and size at the end of an image description, written as
+ * text: `|center`, `|320`, `|320x200` or `|center|320`. The alignment comes
+ * first, as in Obsidian image plugins. A `|` escaped with a backslash does
+ * not start a suffix; neither does `&#124;`, which is not a `|` in the source.
+ * With `source` false, `text` is plain text in which escapes are already gone.
+ */
+export function imageSuffix(text: string, source = true): ImageSuffix | null {
+  const aligned = IMAGE_ALIGN.exec(text);
+  if (aligned && !(source && escapedAfter(text.slice(0, aligned.index)))) {
+    return {
+      align: aligned[1] as ImageNodeAlign,
+      ...(aligned[2] ? { width: Number(aligned[2]) } : {}),
+      ...(aligned[3] ? { height: Number(aligned[3]) } : {}),
+      index: aligned.index,
+    };
+  }
+  const size = IMAGE_SIZE.exec(text);
+  if (size && !(source && escapedAfter(text.slice(0, size.index)))) {
+    return { width: Number(size[1]), ...(size[2] ? { height: Number(size[2]) } : {}), index: size.index };
+  }
+  return null;
+}
+
+/** The text of an image suffix: `|center|320x200`, or '' for none. A height without a width is not written. */
+export function imageSuffixText(s: { readonly align?: ImageNodeAlign; readonly width?: number; readonly height?: number }): string {
+  const size = s.width ? `|${s.width}${s.height ? `x${s.height}` : ''}` : '';
+  return (s.align ? `|${s.align}` : '') + size;
 }
 
 export type BlockNode =

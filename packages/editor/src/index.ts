@@ -14,6 +14,7 @@ export {
   type SlashItemId,
 } from './editor';
 export { DEFAULT_LABELS, type Labels } from './labels';
+export { TOOLBAR_ITEMS, type ToolbarItem } from './ui/toolbar';
 export type { Icon, IconName, Icons } from './icons';
 export * from './model';
 export * as commands from './commands';

@@ -7,6 +7,8 @@ import {
   type Cell,
   type EditorState,
   type HeadingLevel,
+  type ImageAlign,
+  type ImageAtom,
   type Inline,
   type ListItemBlock,
   type ListType,
@@ -14,8 +16,10 @@ import {
   type Position,
   type Selection,
   type TableBlock,
+  type RawBlock,
   type TextBlock,
   type Align,
+  ATOM_CHAR,
   MAX_INDENT,
   blockIndex,
   caret,
@@ -30,6 +34,7 @@ import {
   formatAt,
   getBlock,
   heading,
+  imageBlockOffset,
   inlineLength,
   inlineText,
   insertInline,
@@ -182,7 +187,11 @@ export function nextGrapheme(text: string, offset: number): number {
 
 /** Backspace. */
 export function deleteBackward(state: EditorState): EditorState {
-  if (!isCollapsed(state.selection)) return deleteSelection(state);
+  if (!isCollapsed(state.selection)) {
+    // A selected image block goes as a whole block, not as an image that leaves an empty paragraph.
+    const image = selectedImageBlock(state);
+    return image ? removeBlockAt(state, blockIndex(state.doc, image.pos.blockId), -1) : deleteSelection(state);
+  }
   const pos = state.selection.focus;
   const index = blockIndex(state.doc, pos.blockId);
   const block = state.doc.blocks[index]!;
@@ -210,6 +219,12 @@ export function deleteBackward(state: EditorState): EditorState {
   const prev = state.doc.blocks[index - 1];
   if (!prev) return state;
   if (prev.type === 'divider') return withBlocks(state, splice(state, index - 1, 1));
+  const prevImage = imageBlockOffset(prev);
+  if (prevImage !== null) {
+    // Select the image block above first, so a second Backspace deletes it; an empty paragraph is removed on the way.
+    const selection = imageSelection(prev.id, prevImage);
+    return inlineLength(block.content) === 0 ? withBlocks(state, splice(state, index, 1), selection) : { ...state, selection, storedMarks: null };
+  }
   if (prev.type === 'table') {
     // Backspace moves into the table; an empty block is removed on the way.
     const end = endOf(prev);
@@ -221,7 +236,10 @@ export function deleteBackward(state: EditorState): EditorState {
 
 /** Delete (forward). */
 export function deleteForward(state: EditorState): EditorState {
-  if (!isCollapsed(state.selection)) return deleteSelection(state);
+  if (!isCollapsed(state.selection)) {
+    const image = selectedImageBlock(state);
+    return image ? removeBlockAt(state, blockIndex(state.doc, image.pos.blockId), 1) : deleteSelection(state);
+  }
   const pos = state.selection.focus;
   const index = blockIndex(state.doc, pos.blockId);
   const block = state.doc.blocks[index]!;
@@ -236,6 +254,14 @@ export function deleteForward(state: EditorState): EditorState {
   const next = state.doc.blocks[index + 1];
   if (!next || next.type === 'table') return state;
   if (next.type === 'divider') return withBlocks(state, splice(state, index + 1, 1));
+  const nextImage = imageBlockOffset(next);
+  if (nextImage !== null) {
+    // Select the image block below rather than pulling it into this block; an empty paragraph is removed on the way.
+    const selection = imageSelection(next.id, nextImage);
+    return block.type === 'paragraph' && inlineLength(block.content) === 0
+      ? withBlocks(state, splice(state, index, 1), selection)
+      : { ...state, selection, storedMarks: null };
+  }
   return deleteRange(state, pos, { blockId: next.id, offset: 0 });
 }
 
@@ -274,17 +300,18 @@ export function insertText(state: EditorState, text: string): EditorState {
 
 /**
  * ArrowDown on the last line of the last block, or ArrowUp on the first line
- * of the first block, when that block is a code block, table or divider: adds
- * an empty paragraph past it, so the caret is never stuck. In a table that is
- * the last (or first) row. Lines are lines of text; a wrapped line counts as
- * one.
+ * of the first block, when that block is a code block, table or divider, or
+ * a selected image block: adds an empty paragraph past it, so the caret is
+ * never stuck. In a table that is the last (or first) row. Lines are lines of
+ * text; a wrapped line counts as one.
  */
 export function exitBlock(state: EditorState, dir: 1 | -1): EditorState {
-  if (!isCollapsed(state.selection)) return state;
-  const pos = state.selection.focus;
+  const image = selectedImageBlock(state);
+  if (!isCollapsed(state.selection) && !image) return state;
+  const pos = image?.pos ?? state.selection.focus;
   const index = blockIndex(state.doc, pos.blockId);
   const block = state.doc.blocks[index]!;
-  if (block.type !== 'code' && block.type !== 'table' && block.type !== 'divider') return state;
+  if (block.type !== 'code' && block.type !== 'table' && block.type !== 'divider' && !image) return state;
   if (index !== (dir === 1 ? state.doc.blocks.length - 1 : 0)) return state;
 
   if (block.type === 'table') {
@@ -488,6 +515,88 @@ export function setLink(state: EditorState, href: string | null): EditorState {
 }
 
 // ---------------------------------------------------------------------------
+// Images
+
+/** The image the selection covers exactly, with the position before it. Null when the selection is anything else. */
+export function selectedImage(state: EditorState): { pos: Position; image: ImageAtom } | null {
+  const { anchor, focus } = state.selection;
+  if (anchor.blockId !== focus.blockId || !sameCell(anchor.cell, focus.cell)) return null;
+  if (Math.abs(anchor.offset - focus.offset) !== 1) return null;
+  const from = Math.min(anchor.offset, focus.offset);
+  const content = containerContent(getBlock(state.doc, anchor.blockId), anchor.cell);
+  const image = content ? sliceInline(content, from, from + 1)[0]?.image : undefined;
+  return image ? { pos: { ...anchor, offset: from }, image } : null;
+}
+
+/** A selection of the image in an image block, whose image is at `offset`. */
+function imageSelection(blockId: string, offset: number): Selection {
+  return { anchor: { blockId, offset }, focus: { blockId, offset: offset + 1 } };
+}
+
+/** The selected image when it is an image block's (see `isImageBlock`), else null. */
+export function selectedImageBlock(state: EditorState): { pos: Position; image: ImageAtom } | null {
+  const selected = selectedImage(state);
+  if (!selected || selected.pos.cell) return null;
+  return imageBlockOffset(getBlock(state.doc, selected.pos.blockId)) === selected.pos.offset ? selected : null;
+}
+
+/** Selects the image after `pos` as one unit. */
+export function selectImage(state: EditorState, pos: Position): EditorState {
+  const block = state.doc.blocks.find((b) => b.id === pos.blockId);
+  const content = block && containerContent(block, pos.cell);
+  if (!content || !sliceInline(content, pos.offset, pos.offset + 1)[0]?.image) return state;
+  return { ...state, selection: { anchor: pos, focus: { ...pos, offset: pos.offset + 1 } }, storedMarks: null };
+}
+
+/**
+ * What `updateImage` changes. `null` removes a title, an alignment or a size;
+ * a new width drops the height, so the image keeps its aspect ratio.
+ */
+export interface ImageChange {
+  readonly alt?: string;
+  readonly title?: string | null;
+  /** Shown on image blocks only (see `isImageBlock`). */
+  readonly align?: ImageAlign | null;
+  readonly width?: number | null;
+}
+
+/** Changes the image after `pos` and selects it. */
+export function updateImage(state: EditorState, pos: Position, change: ImageChange): EditorState {
+  const block = state.doc.blocks.find((b) => b.id === pos.blockId);
+  const content = block && containerContent(block, pos.cell);
+  const span = content ? sliceInline(content, pos.offset, pos.offset + 1)[0] : undefined;
+  if (!block || !content || !span?.image) return state;
+  const { title: _title, align: _align, width: _width, height: _height, ...rest } = span.image;
+  let title = span.image.title;
+  if (change.title !== undefined) title = change.title || undefined;
+  const align = change.align !== undefined ? (change.align ?? undefined) : span.image.align;
+  let width = span.image.width;
+  let height = span.image.height;
+  if (change.width !== undefined) {
+    width = change.width === null ? undefined : Math.max(1, Math.min(99999, Math.round(change.width)));
+    if (width !== span.image.width) height = undefined;
+  }
+  const image: ImageAtom = {
+    ...rest,
+    ...(change.alt !== undefined ? { alt: change.alt } : {}),
+    ...(title ? { title } : {}),
+    ...(align ? { align } : {}),
+    ...(width ? { width } : {}),
+    ...(width && height ? { height } : {}),
+  };
+  const selected = selectImage(state, pos).selection;
+  const same =
+    image.alt === span.image.alt &&
+    image.title === span.image.title &&
+    image.align === span.image.align &&
+    image.width === span.image.width &&
+    image.height === span.image.height;
+  if (same) return selected === state.selection ? state : { ...state, selection: selected, storedMarks: null };
+  const next = concatInline(sliceInline(content, 0, pos.offset), [{ ...span, text: ATOM_CHAR, image }], sliceInline(content, pos.offset + 1));
+  return replaceBlock(state, withContainerContent(block, pos.cell, next), selected);
+}
+
+// ---------------------------------------------------------------------------
 // Block types
 
 export type BlockTypeSpec =
@@ -522,18 +631,61 @@ function convert(block: TextBlock, spec: BlockTypeSpec): TextBlock {
   }
 }
 
+/** Text blocks whose type the block type commands change: all but raw source blocks. */
+function isConvertible(block: Block): block is Exclude<TextBlock, RawBlock> {
+  return isTextBlock(block) && block.type !== 'raw';
+}
+
 /**
  * Changes the type of every text block touched by the selection. Text and IDs
- * are kept. Tables and dividers are inserted instead (see insertBlock).
+ * are kept. Tables and dividers are inserted instead (see insertBlock). Code
+ * is the exception: adjacent blocks become one code block, a line per block.
  */
 export function setBlockType(state: EditorState, spec: BlockTypeSpec): EditorState {
   if (spec.type === 'table' || spec.type === 'divider') return insertBlock(state, spec);
   const { from, to } = orderedRange(state.doc, state.selection);
   const start = blockIndex(state.doc, from.blockId);
   const end = blockIndex(state.doc, to.blockId);
-  const updated = state.doc.blocks.slice(start, end + 1).map((b) => (isTextBlock(b) && b.type !== 'raw' ? convert(b, spec) : b));
+  const range = state.doc.blocks.slice(start, end + 1);
+  if (spec.type === 'code' && range.filter(isConvertible).length > 1) return mergeIntoCode(state, start, range, spec.language);
+  const updated = range.map((b) => (isConvertible(b) ? convert(b, spec) : b));
   const doc = { blocks: splice(state, start, updated.length, ...updated) };
   return { doc, selection: clampSelection(doc, state.selection), storedMarks: null };
+}
+
+/**
+ * Turns each run of adjacent text blocks in `range` into one code block that
+ * keeps the first block's ID, and selects the code. Formatting is dropped.
+ */
+function mergeIntoCode(state: EditorState, start: number, range: readonly Block[], language: string | undefined): EditorState {
+  const out: Block[] = [];
+  const merged: Block[] = [];
+  let run: Exclude<TextBlock, RawBlock>[] = [];
+  const flush = () => {
+    const first = run[0];
+    if (!first) return;
+    const text = run.map((b) => inlineText(toPlain(b.content))).join('\n');
+    const code = codeBlock(language ?? (first.type === 'code' ? first.language : ''), text, first.id);
+    out.push(code);
+    merged.push(code);
+    run = [];
+  };
+  for (const block of range) {
+    if (isConvertible(block)) run.push(block);
+    else {
+      flush();
+      out.push(block);
+    }
+  }
+  flush();
+  const selection = { anchor: startOf(merged[0]!), focus: endOf(merged[merged.length - 1]!) };
+  return { doc: { blocks: splice(state, start, range.length, ...out) }, selection, storedMarks: null };
+}
+
+/** The blocks the selection touches whose type the block type commands change. */
+export function convertibleBlocks(state: EditorState): Exclude<TextBlock, RawBlock>[] {
+  const { from, to } = orderedRange(state.doc, state.selection);
+  return state.doc.blocks.slice(blockIndex(state.doc, from.blockId), blockIndex(state.doc, to.blockId) + 1).filter(isConvertible);
 }
 
 /** True if the block already has the type `spec` describes. */
@@ -555,9 +707,7 @@ function hasType(block: Block, spec: BlockTypeSpec): boolean {
  * paragraphs when they all have that type already.
  */
 export function toggleBlockType(state: EditorState, spec: BlockTypeSpec): EditorState {
-  const { from, to } = orderedRange(state.doc, state.selection);
-  const blocks = state.doc.blocks.slice(blockIndex(state.doc, from.blockId), blockIndex(state.doc, to.blockId) + 1);
-  const text = blocks.filter((b) => isTextBlock(b) && b.type !== 'raw');
+  const text = convertibleBlocks(state);
   if (text.length === 0) return state;
   const on = text.every((b) => hasType(b, spec));
   return setBlockType(state, on ? { type: 'paragraph' } : spec);
@@ -679,7 +829,7 @@ export function setCodeLanguage(state: EditorState, blockId: string, language: s
 }
 
 // ---------------------------------------------------------------------------
-// Block menu
+// Block actions
 
 export function duplicateBlock(state: EditorState, blockId: string): EditorState {
   const index = blockIndex(state.doc, blockId);
@@ -944,6 +1094,9 @@ export function applyInlineInputRules(state: EditorState): EditorState | null {
     const innerEnd = end - rule.delim;
     const innerStart = innerEnd - inner.length;
     const start = innerStart - rule.delim;
+    // A backslash escapes a delimiter, as in CommonMark: `\*a*` stays text. Inside code
+    // a backslash is literal, so only the opening backtick can be escaped.
+    if (isEscaped(before, start) || (rule.mark !== 'code' && isEscaped(before, innerEnd))) continue;
     // The delimiters must be plain typed characters, not already formatted as code.
     if (rangeHasMark(content, start, end, 'code') || sliceInline(content, start, end).some((s) => s.image)) continue;
     let next = setMarkInRange(content, innerStart, innerEnd, rule.mark, true);
@@ -957,6 +1110,13 @@ export function applyInlineInputRules(state: EditorState): EditorState | null {
     return { ...after, storedMarks: marks };
   }
   return null;
+}
+
+/** True when the character at `index` follows an odd number of backslashes. */
+function isEscaped(text: string, index: number): boolean {
+  let count = 0;
+  while (index - count - 1 >= 0 && text[index - count - 1] === '\\') count++;
+  return count % 2 === 1;
 }
 
 /**

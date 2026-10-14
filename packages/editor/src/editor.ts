@@ -36,6 +36,7 @@ import {
   type CodeBlock,
   type HeadingLevel,
   type Mark,
+  type ParagraphBlock,
   type Position,
   type RawBlock,
   type Selection,
@@ -45,20 +46,24 @@ import {
   createState,
   endOf,
   getBlock,
+  imageBlockOffset,
   inlineLength,
   inlineText,
   isCollapsed,
+  isImageBlock,
   isPlainTextBlock,
   isTextBlock,
   paragraph,
   plain,
   samePosition,
+  sliceInline,
   startOf,
 } from './model';
-import { FormatToolbar, LinkPopover } from './ui/toolbar';
-import { BlockHandle } from './ui/handle';
-import { Menu, type MenuSection, isMac, isSafari, isTouch, matches, setPopupContainer } from './ui/popup';
-import { BLOCK_ATTR, BlockRenderer, childIndex, contentElement, domText, domToPosition, positionToDom, type ResolveUrl, defaultResolveUrl } from './view/dom';
+import { FormatToolbar, InputPopover, type ToolbarItem } from './ui/toolbar';
+import { BlockHandle } from './ui/blockHandle';
+import { ResizeHandles, type ImageTarget } from './ui/resizeHandles';
+import { Menu, type MenuItem, type MenuSection, isMac, isSafari, isTouch, matches, setPopupContainer } from './ui/popup';
+import { BLOCK_ATTR, BlockRenderer, atomAt, childIndex, contentElement, domText, domToPosition, positionToDom, type ResolveUrl, defaultResolveUrl } from './view/dom';
 import { revealedViews, sameRevealed, viewEntry } from './view/reveal';
 import { scrollRectIntoView } from './view/scroll';
 import { type Theme, mergeClasses, tokenProperties } from './theme';
@@ -112,8 +117,11 @@ export interface EditorOptions {
   labels?: Partial<Labels>;
   /** Replaces built-in icons, by the `labels` key of the same control. A string is shown as text; an element is cloned. */
   icons?: Icons;
-  /** Shows the formatting toolbar on selection. Default true. */
-  toolbar?: boolean;
+  /**
+   * Shows the formatting toolbar on selection. Default true. `items` picks
+   * its controls; they always appear in the built-in order.
+   */
+  toolbar?: boolean | { items?: readonly ToolbarItem[] };
   /**
    * The element menus, the toolbar and other popups are appended to.
    * Default: the nearest open `<dialog>` or `aria-modal` ancestor of
@@ -182,7 +190,9 @@ export type ActiveName =
   | 'codeBlock'
   | 'table'
   | 'divider'
-  | 'raw';
+  | 'raw'
+  /** The selection is exactly one image. */
+  | 'image';
 
 /** A position that survives reloading the same Markdown: a block index and an offset. */
 export interface PositionJSON {
@@ -223,6 +233,12 @@ export interface EditorCommands {
   toggleCodeBlock(attrs?: { language?: string }): boolean;
   setLink(attrs: { href: string }): boolean;
   unsetLink(): boolean;
+  /**
+   * Changes the selected image (see `isActive('image')`): its alt text, its
+   * title, its alignment (shown on image blocks), or its width in CSS pixels.
+   * `null` removes the title, the alignment or the width.
+   */
+  updateImage(attrs: cmd.ImageChange): boolean;
   /** Inserts plain text at the selection, or in place of `range` (for example a suggestion's range). */
   insertText(text: string, options?: { range?: { from: Position; to: Position } }): boolean;
   insertMarkdown(markdown: string, options?: InsertMarkdownOptions): boolean;
@@ -277,18 +293,22 @@ const BLOCK_ITEMS: readonly BlockItem[] = [
   { id: 'divider', aliases: ['hr', 'separator', 'line', 'rule'], spec: { type: 'divider' } },
 ];
 
-/** Block menu actions for the table cell with the caret. Each label is `labels[id]`. */
-const TABLE_ITEMS: readonly { id: IconName; action: cmd.TableAction }[] = [
+/** Block actions for the table cell with the caret. Each label is `labels[id]`. The Align submenu goes after the first four. */
+const TABLE_ACTIONS: readonly { id: IconName & keyof Labels; action: cmd.TableAction }[] = [
   { id: 'addRowAbove', action: { kind: 'addRowAbove' } },
   { id: 'addRowBelow', action: { kind: 'addRowBelow' } },
   { id: 'addColumnLeft', action: { kind: 'addColumnLeft' } },
   { id: 'addColumnRight', action: { kind: 'addColumnRight' } },
-  { id: 'alignLeft', action: { kind: 'align', align: 'left' } },
-  { id: 'alignCenter', action: { kind: 'align', align: 'center' } },
-  { id: 'alignRight', action: { kind: 'align', align: 'right' } },
   { id: 'deleteRow', action: { kind: 'deleteRow' } },
   { id: 'deleteColumn', action: { kind: 'deleteColumn' } },
 ];
+
+/** The Align submenu of the block menu, for a table column or an image block. */
+const ALIGN_CHOICES = [
+  { id: 'alignLeft', align: 'left', image: 'imageAlignLeft' },
+  { id: 'alignCenter', align: 'center', image: 'imageAlignCenter' },
+  { id: 'alignRight', align: 'right', image: 'imageAlignRight' },
+] as const;
 
 const SLASH_CHARS = ['/', '／'];
 
@@ -327,6 +347,12 @@ export class Editor {
   private composition: { blockId: string; marks: EditorState['storedMarks']; recorded: boolean } | null = null;
   /** When the last composition ended (Safari only): the next key may be the Enter that committed it. */
   private compositionEndedAt = 0;
+  /**
+   * The last Markdown shortcut that typing applied: the state with the typed
+   * characters, and the state the shortcut made. Backspace right after it
+   * goes back to the typed characters.
+   */
+  private shortcut: { typed: EditorState; applied: EditorState } | null = null;
   /** Blocks the browser edited during a composition that ended, rendered again on the next frame. */
   private readonly unsettled = new Set<string>();
   private settleFrame: number | null = null;
@@ -367,8 +393,12 @@ export class Editor {
   private readonly suggestions: SuggestionController;
   private readonly blockMenu: Menu;
   private readonly toolbar: FormatToolbar | null;
-  private readonly linkPopover: LinkPopover;
-  private readonly handle: BlockHandle;
+  /** The link popover, and the field for an image's alt text. */
+  private readonly inputPopover: InputPopover;
+  private readonly blockHandle: BlockHandle;
+  private readonly resizeHandles: ResizeHandles;
+  /** The selected image's element, which carries the selected class. */
+  private selectedImageEl: HTMLElement | null = null;
   private hintEl: HTMLElement | null = null;
   /**
    * The block selection, by block ID, or null for a text selection. While it
@@ -469,9 +499,19 @@ export class Editor {
     };
     this.blockMenu = new Menu(root, 'mbe-block-menu', 'menu');
     this.blockMenu.onPicked = () => this.blockMenu.hide();
-    this.linkPopover = new LinkPopover(this);
-    this.toolbar = options.toolbar === false ? null : new FormatToolbar(this);
-    this.handle = new BlockHandle(this);
+    this.blockMenu.onHighlight = () => this.syncActiveDescendant();
+    this.blockMenu.checkIcon = this.icon('selected');
+    this.blockMenu.submenuIcon = this.icon('chevronRight');
+    this.inputPopover = new InputPopover(this);
+    this.toolbar = options.toolbar === false ? null : new FormatToolbar(this, typeof options.toolbar === 'object' ? options.toolbar.items : undefined);
+    if (this.toolbar) this.toolbar.onMenuChange = () => this.syncActiveDescendant();
+    this.blockHandle = new BlockHandle(this);
+    this.resizeHandles = new ResizeHandles(this);
+    this.renderer.onImageError = () => {
+      if (this.destroyed) return;
+      if (!this.composing) this.syncDomSelection();
+      this.updateUi();
+    };
 
     this.listen(root, 'beforeinput', this.typed((e) => this.onBeforeInput(e as InputEvent)));
     this.listen(root, 'input', this.typed((e) => this.onInput(e as InputEvent)));
@@ -571,6 +611,12 @@ export class Editor {
         return cmd.isMarkActive(s, name);
       case 'link':
         return cmd.activeLink(s) !== null;
+      case 'image': {
+        const selected = cmd.selectedImage(s);
+        if (!selected || !attrs) return selected !== null;
+        const actual: Record<string, unknown> = { ...selected.image, block: cmd.selectedImageBlock(s) !== null };
+        return Object.entries(attrs).every(([k, v]) => actual[k] === v);
+      }
     }
     const block = getBlock(s.doc, s.selection.focus.blockId);
     if (blockName(block) !== name) return false;
@@ -579,12 +625,16 @@ export class Editor {
     return Object.entries(attrs).every(([k, v]) => actual[k] === v);
   }
 
-  /** Attributes of `name` at the selection: `href` for a link, `level` for a heading, `language` for a code block, `checked` for a task, `syntax` for a raw block. */
+  /** Attributes of `name` at the selection: `src`, `alt`, `title`, `align`, `width`, `height` and `block` (true for an image block) for a selected image, `href` for a link, `level` for a heading, `language` for a code block, `checked` for a task, `syntax` for a raw block. */
   getAttributes(name: ActiveName): Record<string, unknown> {
     const s = this.current;
     if (name === 'link') {
       const link = cmd.activeLink(s);
       return link ? { href: link.href } : {};
+    }
+    if (name === 'image') {
+      const selected = cmd.selectedImage(s);
+      return selected ? { ...selected.image, block: cmd.selectedImageBlock(s) !== null } : {};
     }
     const block = getBlock(s.doc, s.selection.focus.blockId);
     if (blockName(block) !== name) return {};
@@ -826,6 +876,11 @@ export class Editor {
       toggleCodeBlock: (attrs = {}) => block({ type: 'code', language: attrs.language }),
       setLink: ({ href }) => run((s) => cmd.setLink(s, href)),
       unsetLink: () => run((s) => cmd.setLink(s, null)),
+      updateImage: (attrs) =>
+        run((s) => {
+          const selected = cmd.selectedImage(s);
+          return selected ? cmd.updateImage(s, selected.pos, attrs) : null;
+        }),
       insertText: (text, options = {}) =>
         run((s) => {
           const range = options.range;
@@ -982,8 +1037,9 @@ export class Editor {
     for (const widget of [...this.widgets]) widget.remove();
     this.blockMenu.destroy();
     this.toolbar?.destroy();
-    this.linkPopover.destroy();
-    this.handle.destroy();
+    this.inputPopover.destroy();
+    this.blockHandle.destroy();
+    this.resizeHandles.destroy();
     setPopupContainer(this.root, undefined);
     for (const name of Object.keys(this.runtime.attributes ?? {})) this.root.removeAttribute(name);
     for (const name of this.tokenNames) this.root.style.removeProperty(name);
@@ -1181,8 +1237,14 @@ export class Editor {
       this.updateUi();
       return;
     }
+    this.shortcut = null;
     const skipped = key?.vertical ? this.skippedBlock(key.from, key.vertical, key.x, selection.focus) : null;
-    if (skipped) {
+    // A caret cannot sit beside the image of an image block, as a click next to it would put it: select the image.
+    const image = this.imageBlockAt(skipped ? { anchor: skipped, focus: skipped } : selection);
+    if (image) {
+      if (!samePosition(image.anchor, cur.anchor) || !samePosition(image.focus, cur.focus)) this.setSelection(image);
+      else this.updateUi();
+    } else if (skipped) {
       this.setSelection({ anchor: skipped, focus: skipped });
     } else {
       this.current = { ...this.state, selection, storedMarks: null };
@@ -1193,6 +1255,15 @@ export class Editor {
     }
     // Browsers scroll the caret into view, but not always clear of the editor's edge.
     if (key) this.scrollCaretIntoView();
+  }
+
+  /** The selection of an image block's image, when `sel` is a caret in that block. */
+  private imageBlockAt(sel: Selection): Selection | null {
+    if (!isCollapsed(sel) || sel.focus.cell) return null;
+    const block = this.state.doc.blocks.find((b) => b.id === sel.focus.blockId);
+    const offset = block ? imageBlockOffset(block) : null;
+    if (offset === null) return null;
+    return { anchor: { blockId: block!.id, offset }, focus: { blockId: block!.id, offset: offset + 1 } };
   }
 
   /**
@@ -1360,6 +1431,45 @@ export class Editor {
   }
 
   /**
+   * An arrow key next to an image block: from the edge of the block before
+   * or after it, the selection of its image; from a selected image block, a
+   * caret in the next block that holds one, or the same selection when there
+   * is none. Null when no image block is involved.
+   */
+  private imageBlockStep(key: string): Selection | null {
+    const sel = this.state.selection;
+    const blocks = this.state.doc.blocks;
+    const forward = key === 'ArrowDown' || key === 'ArrowRight';
+    const selected = cmd.selectedImageBlock(this.state);
+    if (selected) {
+      const index = blockIndex(this.state.doc, selected.pos.blockId);
+      for (let i = index + (forward ? 1 : -1); i >= 0 && i < blocks.length; i += forward ? 1 : -1) {
+        const block = blocks[i]!;
+        if (block.type === 'divider') continue;
+        const offset = imageBlockOffset(block);
+        if (offset !== null) return { anchor: { blockId: block.id, offset }, focus: { blockId: block.id, offset: offset + 1 } };
+        const vertical = key === 'ArrowDown' || key === 'ArrowUp';
+        const pos = vertical ? this.blockEntry(block, forward, this.selectionRect()?.left ?? 0) : forward ? startOf(block) : endOf(block);
+        return { anchor: pos, focus: pos };
+      }
+      return sel;
+    }
+    if (!isCollapsed(sel) || sel.focus.cell) return null;
+    const index = blockIndex(this.state.doc, sel.focus.blockId);
+    const current = blocks[index]!;
+    const next = blocks[index + (forward ? 1 : -1)];
+    const offset = next ? imageBlockOffset(next) : null;
+    if (!next || offset === null || !isTextBlock(current)) return null;
+    if (key === 'ArrowRight' && sel.focus.offset !== endOf(current).offset) return null;
+    if (key === 'ArrowLeft' && sel.focus.offset !== 0) return null;
+    if (key === 'ArrowDown' || key === 'ArrowUp') {
+      const content = contentElement(this.renderer.elementFor(current.id)!);
+      if (content && !this.onEdgeLine(content, forward)) return null;
+    }
+    return { anchor: { blockId: next.id, offset }, focus: { blockId: next.id, offset: offset + 1 } };
+  }
+
+  /**
    * ArrowUp or ArrowDown on the first or last line of a table cell: the
    * position in the cell above or below (same column), or past the table in
    * the next block that holds a caret. Null when the caret is not on that
@@ -1472,6 +1582,8 @@ export class Editor {
       return;
     }
     this.refreshSelection();
+    // Typing does not replace a selected image block; Enter and deleting still work.
+    if ((type === 'insertText' || type === 'insertReplacementText') && cmd.selectedImageBlock(this.state)) return;
 
     switch (type) {
       case 'insertText': {
@@ -1501,7 +1613,7 @@ export class Editor {
         this.run(cmd.insertLineBreak);
         return;
       case 'deleteContentBackward':
-        this.run(cmd.deleteBackward);
+        if (!this.undoShortcut()) this.run(cmd.deleteBackward);
         return;
       case 'deleteContentForward':
         this.run(cmd.deleteForward);
@@ -1574,11 +1686,28 @@ export class Editor {
   /** Markdown shortcuts and suggestion menus that typing `text` triggers. */
   private afterTyping(text: string): void {
     // Shortcuts are separate undo steps, so undo restores the typed characters.
+    const typed = this.state;
     if (text === ' ' || text === '-') this.run((s) => cmd.applyBlockInputRules(s));
     if (text.length === 1 && '*_`~'.includes(text)) this.run((s) => cmd.applyInlineInputRules(s));
     if (this.markdown.inline.length > 0) this.run((s) => cmd.applyTokenInputRules(s, this.markdown.inline) ?? s);
     if (text === ' ' && this.markdown.autolinks) this.run((s) => cmd.applyAutolinkInputRule(s) ?? s);
+    this.shortcut = this.state.doc !== typed.doc ? { typed, applied: this.state } : null;
     if (!text.includes('\n')) this.typedForSuggestion();
+  }
+
+  /**
+   * Backspace right after a Markdown shortcut, with no edit or caret move since,
+   * restores the characters that were typed: `**a**` stays text. It is its
+   * own undo step.
+   */
+  private undoShortcut(): boolean {
+    const shortcut = this.shortcut;
+    this.shortcut = null;
+    // A caret move clears the shortcut (see onSelectionChange and onKeyDown); an edit replaces the document.
+    const { doc, selection } = this.state;
+    if (!shortcut || doc !== shortcut.applied.doc || !isCollapsed(selection)) return false;
+    if (!samePosition(selection.focus, shortcut.applied.selection.focus)) return false;
+    return this.run(() => shortcut.typed);
   }
 
   private onCompositionStart(e: Event): void {
@@ -1759,6 +1888,8 @@ export class Editor {
     this.caretKey = null;
     if (this.fromControl(e)) return;
     if (e.isComposing || e.keyCode === 229) return;
+    // Moving the caret, even back to where it was, ends the chance to undo a shortcut with Backspace.
+    if (CARET_KEY.test(e.key)) this.shortcut = null;
     const mod = isMac ? e.metaKey : e.ctrlKey;
     const key = e.key.toLowerCase();
     const handled = (fn: () => unknown) => {
@@ -1779,12 +1910,22 @@ export class Editor {
         return;
       }
     }
-    const menu = this.blockMenu.isOpen ? this.blockMenu : null;
+    const menu = this.blockMenu.isOpen ? this.blockMenu : (this.toolbar?.menu ?? null);
     if (menu) {
+      // An open submenu takes the keys; ArrowLeft or Escape goes back to its menu.
+      const sub = menu.submenu;
+      if (sub) {
+        if (e.key === 'ArrowLeft' || e.key === 'Escape') return handled(() => menu.closeSubmenu());
+        if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) return handled(() => this.moveMenu(sub, 1));
+        if (e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey)) return handled(() => this.moveMenu(sub, -1));
+        if (e.key === 'Enter' && sub.count > 0) return handled(() => sub.pick());
+      }
+      if (e.key === 'ArrowRight' && menu.openSubmenu()) return handled(() => this.syncActiveDescendant());
       if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) return handled(() => this.moveMenu(menu, 1));
       if (e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey)) return handled(() => this.moveMenu(menu, -1));
       if (e.key === 'Enter' && menu.count > 0) return handled(() => menu.pick());
-      if (e.key === 'Escape') return handled(() => this.closeBlockMenu());
+      // Escape closes a toolbar menu and leaves the toolbar open.
+      if (e.key === 'Escape') return handled(() => (menu === this.blockMenu ? this.closeBlockMenu() : this.toolbar!.closeMenu()));
     }
 
     if (e.key === 'Escape' && this.toolbar?.isOpen) {
@@ -1797,6 +1938,16 @@ export class Editor {
     if (this.blockSel && this.onBlockKey(e)) {
       e.preventDefault();
       return;
+    }
+
+    // Enter on a selected image adds the line or paragraph after it, rather than replacing it.
+    if (e.key === 'Enter' && !mod && !e.altKey) {
+      this.refreshSelection();
+      const image = cmd.selectedImage(this.state);
+      if (image) {
+        const after = { ...image.pos, offset: image.pos.offset + 1 };
+        this.setSelection({ anchor: after, focus: after });
+      }
     }
 
     // Extension key bindings, earlier extensions first.
@@ -1816,6 +1967,10 @@ export class Editor {
     // no editable text comes before the caret, so this is handled here.
     if (e.key === 'Backspace' && !e.ctrlKey && !e.metaKey && !e.altKey) {
       this.refreshSelection();
+      if (this.undoShortcut()) {
+        e.preventDefault();
+        return;
+      }
       const { selection } = this.state;
       if (isCollapsed(selection) && selection.focus.offset === 0) {
         e.preventDefault();
@@ -1841,6 +1996,14 @@ export class Editor {
       if (into) {
         e.preventDefault();
         this.setSelection({ anchor: into, focus: into });
+        return;
+      }
+      // An image block is one stop: arrows select it, and the next arrow leaves it.
+      const image = this.imageBlockStep(e.key);
+      if (image) {
+        e.preventDefault();
+        if (image !== this.state.selection) this.setSelection(image);
+        else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') this.run((s) => cmd.exitBlock(s, e.key === 'ArrowDown' ? 1 : -1));
         return;
       }
       const vertical = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
@@ -1933,6 +2096,14 @@ export class Editor {
     }
     this.dropBlockSelection();
     if (target === this.root && e.button === 0 && !this.readOnly && this.clickBelowLastBlock(e)) return;
+    // Clicking an image selects it as one unit; Shift+click extends the text selection as usual.
+    const imageEl = e.button === 0 && !e.shiftKey && !this.readOnly ? target.closest?.<HTMLElement>('.mbe-image') : null;
+    const image = imageEl && this.root.contains(imageEl) ? this.imageTarget(imageEl) : null;
+    if (image) {
+      e.preventDefault();
+      this.selectImageAt(image.pos);
+      return;
+    }
     const view = e.button === 0 && !this.readOnly ? target.closest?.<HTMLElement>('.mbe-view, .mbe-view-block') : null;
     if (view && this.root.contains(view)) {
       e.preventDefault();
@@ -1954,20 +2125,22 @@ export class Editor {
   }
 
   /**
-   * A click in the empty space below a final code block, table or divider
+   * A click in the empty space below a final code block, table, divider or image block
    * adds a paragraph there. The browser would put the caret inside the
    * block, or in the block above a table.
    */
   private clickBelowLastBlock(e: MouseEvent): boolean {
     const blocks = this.state.doc.blocks;
     const last = blocks[blocks.length - 1];
-    if (!last || (last.type !== 'code' && last.type !== 'table' && last.type !== 'divider')) return false;
+    const image = last ? imageBlockOffset(last) : null;
+    if (!last || (last.type !== 'code' && last.type !== 'table' && last.type !== 'divider' && image === null)) return false;
     const el = this.root.querySelector<HTMLElement>(`:scope > [data-block-id="${last.id}"]`);
     if (!el || e.clientY <= el.getBoundingClientRect().bottom) return false;
     e.preventDefault();
     this.root.focus({ preventScroll: true });
     const end = endOf(last);
-    this.run((s) => cmd.exitBlock({ ...s, selection: { anchor: end, focus: end } }, 1));
+    const selection = image !== null ? { anchor: { blockId: last.id, offset: image }, focus: { blockId: last.id, offset: image + 1 } } : { anchor: end, focus: end };
+    this.run((s) => cmd.exitBlock({ ...s, selection }, 1));
     return true;
   }
 
@@ -2053,10 +2226,10 @@ export class Editor {
 
   private onFocusOut(e: FocusEvent): void {
     const next = e.relatedTarget as Node | null;
-    if (next && (this.root.contains(next) || this.linkPopover.contains(next))) return;
+    if (next && (this.root.contains(next) || this.inputPopover.contains(next))) return;
     // Focus may move between table cells and the root; check after it settles.
     queueMicrotask(() => {
-      if (this.hasFocus() || this.linkPopover.isOpen) return;
+      if (this.hasFocus() || this.inputPopover.isOpen) return;
       if (!this.focused) return;
       this.focused = false;
       this.root.classList.remove('mbe-focused');
@@ -2069,7 +2242,8 @@ export class Editor {
   }
 
   private onScroll(): void {
-    this.handle.hide();
+    this.blockHandle.hide();
+    this.resizeHandles.reposition();
     if (this.suggestions.isActive || this.toolbar?.isOpen || this.blockMenu.isOpen) this.updateUi();
   }
 
@@ -2374,16 +2548,43 @@ export class Editor {
   private blockMenuSections(blockId: string): MenuSection[] {
     const block = getBlock(this.state.doc, blockId);
     const sections: MenuSection[] = [];
-    if (block.type === 'table' && this.state.selection.focus.blockId === blockId && this.state.selection.focus.cell) {
-      sections.push({
-        title: this.labels.tableSection,
-        items: TABLE_ITEMS.map(({ id, action }) => ({
-          id,
-          label: this.labels[id],
-          icon: this.icon(id),
-          run: () => this.run((s) => cmd.tableAction(s, action)),
+    const cell = this.state.selection.focus.cell;
+    if (block.type === 'table' && this.state.selection.focus.blockId === blockId && cell) {
+      const items: MenuItem[] = TABLE_ACTIONS.map(({ id, action }) => ({
+        id,
+        label: this.labels[id],
+        icon: this.icon(id),
+        run: () => this.run((s) => cmd.tableAction(s, action)),
+      }));
+      // A column without an alignment shows as left-aligned.
+      const current = block.align[cell.col] ?? 'left';
+      items.splice(4, 0, this.alignMenuItem('align', current, (align) => ({
+        icon: this.icon(align.id),
+        run: () => this.run((s) => cmd.tableAction(s, { kind: 'align', align: align.align })),
+      })));
+      sections.push({ title: this.labels.tableSection, items });
+    }
+    const imageOffset = imageBlockOffset(block);
+    if (imageOffset !== null) {
+      const pos: Position = { blockId, offset: imageOffset };
+      const image = sliceInline((block as ParagraphBlock).content, imageOffset, imageOffset + 1)[0]!.image!;
+      const items: MenuItem[] = [
+        this.alignMenuItem('imageAlignLeft', image.align ?? 'left', (align) => ({
+          icon: this.icon(align.image),
+          // An image without an alignment sits on the left, so Left removes the word.
+          run: () => this.updateImageAt(pos, { align: align.align === 'left' ? null : align.align }),
         })),
-      });
+        { id: 'altText', label: this.labels.altText, icon: this.icon('altText'), run: () => this.editAltText(pos, image.alt) },
+      ];
+      if (image.width) {
+        items.push({
+          id: 'resetImageSize',
+          label: this.labels.resetImageSize,
+          icon: this.icon('resetImageSize'),
+          run: () => this.updateImageAt(pos, { width: null }),
+        });
+      }
+      sections.push({ title: this.labels.imageSection, items });
     }
     sections.push({
       items: [
@@ -2394,25 +2595,49 @@ export class Editor {
     return sections;
   }
 
+  /** The Align row of the block menu: a submenu of Left, Center and Right with the current one checked. */
+  private alignMenuItem(
+    icon: IconName,
+    current: 'left' | 'center' | 'right',
+    choice: (align: (typeof ALIGN_CHOICES)[number]) => Pick<MenuItem, 'icon' | 'run'>,
+  ): MenuItem {
+    return {
+      id: 'align',
+      label: this.labels.align,
+      icon: this.icon(icon),
+      run: () => {},
+      submenu: {
+        title: this.labels.align,
+        items: ALIGN_CHOICES.map((align) => ({ id: align.id, label: this.labels[align.id], checked: current === align.align, ...choice(align) })),
+      },
+    };
+  }
+
   /**
    * @internal
-   * Only large blocks get the handle and block menu: tables and code blocks.
-   * Other blocks change type through the slash menu or Markdown shortcuts.
+   * Only large blocks get the block handle and block menu: tables, code blocks and
+   * image blocks. Other blocks change type through the slash menu or Markdown
+   * shortcuts.
    */
   hasBlockMenu(blockId: string): boolean {
     const block = this.state.doc.blocks.find((b) => b.id === blockId);
-    return block?.type === 'table' || block?.type === 'code';
+    return block?.type === 'table' || block?.type === 'code' || (!!block && isImageBlock(block));
   }
 
-  /** @internal Opens the block menu of a table or code block, as the block handle and Mod+/ do. */
+  /** @internal Opens the block menu of a table, code block or image block, as the block handle and Mod+/ do. */
   openBlockMenu(blockId: string, anchor?: DOMRect): void {
     if (this.readOnly || !this.hasBlockMenu(blockId)) return;
     this.dropBlockSelection();
     this.suggestions.close();
     this.toolbar?.hide();
-    // Keep the caret in the table cell for table actions; otherwise move it into the block.
-    // Either way the editor takes focus, so the menu's keys work and a press outside closes it.
-    if (this.state.selection.focus.blockId !== blockId) {
+    // Keep the caret in the table cell for table actions; select the image of an image block;
+    // otherwise move the caret into the block. Either way the editor takes focus, so the menu's
+    // keys work and a press outside closes it.
+    const imageOffset = imageBlockOffset(getBlock(this.state.doc, blockId));
+    if (imageOffset !== null) {
+      this.current = cmd.selectImage(this.state, { blockId, offset: imageOffset });
+      if (!this.hasFocus()) this.focus();
+    } else if (this.state.selection.focus.blockId !== blockId) {
       const block = getBlock(this.state.doc, blockId);
       const start = startOf(block);
       this.current = { ...this.state, selection: { anchor: start, focus: start } };
@@ -2431,32 +2656,43 @@ export class Editor {
     this.syncActiveDescendant();
   }
 
-  /** A press anywhere but the block menu or the block handle closes the menu, in the editor's text too. */
+  /**
+   * A press anywhere but the block menu or the block handle closes the block menu,
+   * in the editor's text too. The same goes for a toolbar menu and the toolbar.
+   */
   private onDocumentPointerDown(e: Event): void {
-    if (!this.blockMenu.isOpen) return;
     const target = e.target as Node | null;
-    if (target && (this.blockMenu.popup.el.contains(target) || this.handle.contains(target))) return;
+    if (this.toolbar?.menu && !(target && this.toolbar.contains(target))) this.toolbar.closeMenu();
+    if (!this.blockMenu.isOpen) return;
+    if (target && (this.blockMenu.contains(target) || this.blockHandle.contains(target))) return;
     this.closeBlockMenu();
   }
 
   // -------------------------------------------------------------------------
   // Toolbar and link popover (see ui/toolbar.ts)
 
-  /** @internal Opens the link popover for the selection, as Mod+K does. */
-  openLinkPopover(): void {
-    if (this.readOnly) return;
+  /**
+   * @internal Opens the link popover for the selection, as Mod+K does. Returns
+   * false when there is nothing to link: no selected text and no link at the caret.
+   */
+  openLinkPopover(): boolean {
+    if (this.readOnly) return false;
     const block = getBlock(this.state.doc, this.state.selection.focus.blockId);
-    if (isPlainTextBlock(block)) return;
-    if (isCollapsed(this.state.selection) && !cmd.activeLink(this.state)) return;
+    if (isPlainTextBlock(block)) return false;
+    if (isCollapsed(this.state.selection) && !cmd.activeLink(this.state)) return false;
     const rect = this.selectionRect();
-    if (!rect) return;
+    if (!rect) return false;
     this.toolbar?.hide();
     const saved = this.state.selection;
-    this.linkPopover.open(rect, cmd.activeLink(this.current)?.href ?? '', (href) => {
+    const value = cmd.activeLink(this.current)?.href ?? '';
+    const { labels } = this;
+    const options = { value, label: labels.link, placeholder: labels.linkPlaceholder, type: 'url', removeLabel: labels.removeLink } as const;
+    this.inputPopover.open(rect, options, (href) => {
       this.current = { ...this.state, selection: saved };
       if (href !== null) this.run((s) => cmd.setLink(s, href === '' ? null : href));
       this.focus();
     });
+    return true;
   }
 
   // -------------------------------------------------------------------------
@@ -2482,6 +2718,11 @@ export class Editor {
 
     this.suggestions.update(focused);
 
+    // The selected image: an outline and its handles.
+    const image = focused && !this.readOnly && !this.blockSel ? this.imageTargetAt(this.state) : null;
+    this.paintSelectedImage(image?.el ?? null);
+    this.resizeHandles.update(image);
+
     // Formatting toolbar.
     if (this.toolbar) {
       const block = this.state.doc.blocks.find((b) => b.id === pos.blockId);
@@ -2494,6 +2735,7 @@ export class Editor {
         !this.composing &&
         !isCollapsed(this.state.selection) &&
         !this.blockSel &&
+        !image &&
         !this.suggestions.isActive &&
         !this.blockMenu.isOpen &&
         !!block &&
@@ -2502,17 +2744,87 @@ export class Editor {
       if (show) this.toolbar.show();
       else this.toolbar.hide();
     }
-    // On touch devices there is no hover, so the handle follows the caret.
+    // On touch devices there is no hover, so the block handle follows the caret.
     if (focused && !this.readOnly && isTouch()) {
-      if (this.hasBlockMenu(pos.blockId)) this.handle.showFor(pos.blockId);
-      else this.handle.hide();
+      if (this.hasBlockMenu(pos.blockId)) this.blockHandle.showFor(pos.blockId);
+      else this.blockHandle.hide();
     }
     if (!focused && this.blockMenu.isOpen && !this.root.ownerDocument.activeElement?.closest?.('.mbe-ui')) this.blockMenu.hide();
     this.syncActiveDescendant();
   }
 
+  /** Marks the selected image's element, and hides the browser's selection highlight over it. */
+  private paintSelectedImage(el: HTMLElement | null): void {
+    if (this.selectedImageEl !== el) {
+      this.selectedImageEl?.classList.remove('mbe-image-selected');
+      el?.classList.add('mbe-image-selected');
+      this.selectedImageEl = el;
+    }
+    this.root.classList.toggle('mbe-image-selection', el !== null);
+  }
+
+  // -------------------------------------------------------------------------
+  // Images (see ui/resizeHandles.ts)
+
+  /** The selected image of `state` and its element, or null. */
+  private imageTargetAt(state: EditorState): ImageTarget | null {
+    const selected = cmd.selectedImage(state);
+    if (!selected) return null;
+    const blockEl = this.renderer.elementFor(selected.pos.blockId);
+    const el = blockEl ? atomAt(blockEl, selected.pos) : null;
+    if (!el?.classList.contains('mbe-image')) return null;
+    return { el, ...selected };
+  }
+
+  /** @internal The image an element shows, and the position before it. Null when it is not an image in this editor. */
+  imageTarget(el: HTMLElement): ImageTarget | null {
+    if (!el.parentNode || !this.root.contains(el)) return null;
+    const pos = domToPosition(this.root, el.parentNode, childIndex(el));
+    if (!pos) return null;
+    const next = cmd.selectImage(this.current, pos);
+    const selected = next === this.current ? null : cmd.selectedImage(next);
+    return selected ? { el, ...selected } : null;
+  }
+
+  /** @internal Selects the image after `pos` and focuses the editor. */
+  selectImageAt(pos: Position): void {
+    if (this.readOnly || this.destroyed) return;
+    const next = cmd.selectImage(this.current, pos);
+    if (next === this.current) return;
+    if (!this.hasFocus()) this.root.focus({ preventScroll: true });
+    this.setSelection(next.selection);
+  }
+
+  /** @internal Changes the image after `pos` and selects it, as one undo step. */
+  updateImageAt(pos: Position, change: cmd.ImageChange): void {
+    this.run((s) => cmd.updateImage(s, pos, change));
+  }
+
+  /**
+   * Opens the alt text field under the image after `pos`. Enter saves the text,
+   * Escape keeps the old one. Either way the image stays selected.
+   */
+  private editAltText(pos: Position, alt: string): void {
+    // Opening the block menu selected the image.
+    const rect = (this.imageTargetAt(this.state)?.el ?? this.blockElement(pos.blockId))?.getBoundingClientRect();
+    if (!rect) return;
+    const { labels } = this;
+    const options = { value: alt, label: labels.altText, placeholder: labels.altTextPlaceholder, type: 'text' } as const;
+    this.inputPopover.open(rect, options, (value) => {
+      if (value !== null) this.updateImageAt(pos, { alt: value });
+      else this.current = cmd.selectImage(this.state, pos);
+      this.focus();
+    });
+  }
+
+  /** @internal Shows the resize handles again, after a resize that changed nothing. */
+  refreshImageUi(): void {
+    this.updateUi();
+  }
+
   private syncActiveDescendant(): void {
-    const id = this.suggestions.activeDescendant ?? (this.blockMenu.isOpen ? this.blockMenu.activeDescendant : null);
+    const menu = this.blockMenu.isOpen ? this.blockMenu : this.toolbar?.menu;
+    const id = this.suggestions.activeDescendant ?? menu?.activeDescendant ?? null;
     if (id) this.root.setAttribute('aria-activedescendant', id);
     else this.root.removeAttribute('aria-activedescendant');
   }
@@ -2522,7 +2834,9 @@ export class Editor {
     this.suggestions.close();
     this.blockMenu.hide();
     this.toolbar?.hide();
-    this.handle.hide();
+    this.blockHandle.hide();
+    this.resizeHandles.hide();
+    this.paintSelectedImage(null);
     this.hintEl?.classList.remove('mbe-show-hint');
     this.hintEl = null;
   }

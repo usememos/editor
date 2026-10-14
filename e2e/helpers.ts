@@ -126,8 +126,10 @@ function failOnPageErrors(page: Page) {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
   page.on('console', (m) => {
-    // An image from a host the test machine cannot reach is the network, not the page.
-    if (m.type() === 'error' && !m.text().startsWith('Failed to load resource')) errors.push(`console.error: ${m.text()}`);
+    // An image that cannot load is the network, not the page: a host the test
+    // machine cannot reach, or a blob: URL from before a reload, which Firefox
+    // reports as a security error.
+    if (m.type() === 'error' && !/^Failed to load resource|may not load data from blob:/.test(m.text())) errors.push(`console.error: ${m.text()}`);
   });
   return errors;
 }

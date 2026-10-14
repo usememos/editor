@@ -1,0 +1,35 @@
+name: Fuzz
+
+# Random editing with new seeds every night, in every browser. Each push runs
+# only two fixed seeds (see e2e/fuzz.spec.ts). A failure prints its seed;
+# replay it with FUZZ_SEED=<seed> npx playwright test e2e/fuzz.spec.ts.
+on:
+  schedule:
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      # Seeds start from the date, so each night tries new ones.
+      - run: FUZZ_FIRST=$(( $(date -u +%Y%m%d) * 100 )) npx playwright test e2e/fuzz.spec.ts --project=${{ matrix.browser }}
+        env:
+          FUZZ_RUNS: 30
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-results-${{ matrix.browser }}
+          path: test-results
+          retention-days: 7

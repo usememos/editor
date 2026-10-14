@@ -17,6 +17,7 @@ import {
   type Block,
   type Doc,
   type HeadingLevel,
+  type ImageAtom,
   type ListType,
   type Mark,
   MAX_INDENT,
@@ -267,7 +268,21 @@ class Converter {
       if (!src || /^(?:javascript|vbscript):/i.test(src)) return;
       const alt = el.getAttribute('alt') ?? '';
       const title = el.getAttribute('title');
-      this.push(ATOM_CHAR, format, { image: title ? { src, alt, title } : { src, alt } });
+      // A width in whole pixels, as `<img width="320">` writes it; a percentage or CSS width is not kept.
+      const size = (name: string) => {
+        const value = el.getAttribute(name)?.trim() ?? '';
+        return /^[1-9][0-9]{0,4}$/.test(value) ? Number(value) : 0;
+      };
+      const width = size('width');
+      const height = width ? size('height') : 0;
+      const image: ImageAtom = {
+        src,
+        alt,
+        ...(title ? { title } : {}),
+        ...(width ? { width } : {}),
+        ...(height ? { height } : {}),
+      };
+      this.push(ATOM_CHAR, format, { image });
       return;
     }
     const block = BLOCKS.has(tag);

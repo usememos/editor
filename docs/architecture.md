@@ -4,7 +4,7 @@ How the editor works: the decisions behind it, how the code carries them out, an
 
 ## Principles
 
-The editor is a block editor whose storage format is Markdown. Every design decision below follows from these five rules. A change that breaks one of them needs a decision recorded here first.
+The editor is a Markdown block editor: a block editor whose storage format is Markdown. Every design decision below follows from these five rules. A change that breaks one of them needs a decision recorded here first.
 
 1. **Markdown is the stored format; blocks are the editing model.** Loading parses Markdown into blocks. Every edit is an operation on blocks. Saving writes the blocks back to Markdown. There is no second format (no JSON document) for an app to store.
 2. **Every block type has a Markdown form.** The editor adds no block type that CommonMark or GFM cannot write (no toggles, callouts, columns or colored text). Syntax outside CommonMark and GFM enters only through an extension that defines how it is written (see "Syntax extensions"), and is saved exactly as written.
@@ -41,7 +41,7 @@ Other products confirm the split behind rules 1 and 2. Editors that keep Markdow
 | `packages/editor/src/decorations.ts`, `packages/editor/src/widgets.ts` | Text decorations, and app UI placed between blocks. |
 | `packages/editor/src/view/dom.ts` | Rendering blocks to DOM, and mapping DOM points to model positions and back. |
 | `packages/editor/src/view/reveal.ts` | Which rendered views show their source for a given selection. |
-| `packages/editor/src/ui/` | `Popup` and `Menu`, the toolbar and link popover, the block handle. |
+| `packages/editor/src/ui/` | `Popup` and `Menu`, the toolbar and the input popover (link URLs and alt text), the block handle, the resize handles. |
 | `packages/editor/src/suggest/` | The autocomplete popup: the session and keys (`controller.ts`), finding the token at the caret (`match.ts`), item requests (`source.ts`) and placement (`anchor.ts`). |
 | `packages/editor/src/markdown/` | Parser (`blocks.ts`, `inline.ts`, `autolink.ts`, `lower.ts`), serializer (`serialize.ts`), source-preserving save (`source.ts`), dialect options and syntax extensions (`options.ts`), entity tables, and an HTML renderer used only by the spec tests (`html.ts`). |
 | `packages/editor/src/clipboard/` | Document to HTML for copy (`toHtml.ts`), pasted HTML to document (`fromHtml.ts`). |
@@ -56,7 +56,7 @@ Other products confirm the split behind rules 1 and 2. Editors that keep Markdow
 
 - A document is `{ blocks: Block[] }`. Blocks are never nested.
 - Block types: `paragraph`, `heading` (level 1–6), `listItem` (`listType` bullet, ordered or task; `indent` 0–5; `checked`; `start` on the first ordered item), `quote`, `code` (`language`, plain text), `raw` (Markdown kept as source, plain text; `syntax` is `html`, `markdown` or an extension's name), `table` (`align` per column; rows of cells; row 0 is the header), `divider`.
-- Inline content is an array of spans `{ text, marks, link?, image? }`. Marks are `bold`, `italic`, `strike`, `code` and `html` (inline raw HTML). A hard line break is `"\n"` in the text. An image is the single character U+FFFC with an `image` attribute.
+- Inline content is an array of spans `{ text, marks, link?, image? }`. Marks are `bold`, `italic`, `strike`, `code` and `html` (inline raw HTML). A hard line break is `"\n"` in the text. An image is the single character U+FFFC with an `image` attribute: `src`, `alt`, and optionally `title`, `align`, `width` and `height`. A paragraph whose only content is one image, with no link or marks and only spaces or tabs around it, is an image block (`isImageBlock`): it is derived, not a block type, so typing a letter beside the image would turn it back into a paragraph, and the Markdown is the same either way. Selecting an image means a selection that covers exactly that character; `commands.selectedImage` finds it. The resize handles (`ui/resizeHandles.ts`) live in the popup container like the other floating UI, so the document's DOM holds only the `<img>`.
 - A position is `{ blockId, offset, cell? }`. `offset` counts UTF-16 code units in the block's (or cell's) plain text. `cell` is `{ row, col }` inside a table.
 - Every edit returns new objects for the blocks it touches and reuses the rest. Rendering, history and the React wrapper all depend on this.
 
@@ -80,7 +80,7 @@ One `contentEditable` root, not one per block, so native selection crosses block
 3. **Fallback.** An `input` event the editor did not cancel goes through the same read-back, and typed text then runs the Markdown shortcuts. A `beforeinput` that cannot be cancelled (from some Android keyboards) for typed text, a replacement, or a deletion inside one text container is left to the browser and read back, so it is not applied twice.
 4. **`keydown`**: an open menu takes the navigation keys first. A block selection takes its own keys next (see "Block selection"). Then extension key bindings run in order, ending with `defaultKeymap()` (marks, block types, Mod+K, undo/redo, Tab, submit, Escape). A binding that returns true stops the rest and prevents the browser default. Mod+/ (block menu) and Mod+Shift+V (plain paste) are handled by the editor itself.
    ArrowDown on the last line of a code block, table or divider that ends the document adds an empty paragraph below it, and ArrowUp on the first line of one that starts the document adds one above it (`exitBlock`). Elsewhere the browser moves the caret. When it passes over a block that holds a caret (Firefox skips list items, which are flex boxes, and WebKit skips code blocks and tables), the editor moves the caret into that block at the same horizontal position. After any caret key the editor keeps the caret 8 px clear of the scroll container's edge. Backspace at the start of a block is handled on `keydown`, because WebKit sends no `beforeinput` there when no editable text comes before the caret. A click in the empty space below such a final block also adds a paragraph. Enter three times at the end of a code block still leaves it.
-5. **Markdown shortcuts** run after typed text: block rules on a space at the start of a block (`#`, `-`, `*`, `+`, `1.`, `[ ]`, `[x]`, `>`, ` ```lang `, `---`) and inline rules when a closing `*`, `_`, `` ` `` or `~` is typed. Undo restores the typed characters.
+5. **Markdown shortcuts** run after typed text: block rules on a space at the start of a block (`#`, `-`, `*`, `+`, `1.`, `[ ]`, `[x]`, `>`, ` ```lang `, `---`) and inline rules when a closing `*`, `_`, `` ` `` or `~` is typed. A delimiter after an odd number of backslashes is escaped and does not count, as in CommonMark; inside inline code a backslash is literal. Undo restores the typed characters, and so does Backspace right after a shortcut, before any other edit or caret move (`undoShortcut`, as ProseMirror's `undoInputRule`). The autolink rule on a space works the same way.
 
 Selection: on `selectionchange`, the DOM selection is read into the model. After each change, the model selection is written back to the DOM, only when it differs.
 
@@ -122,8 +122,14 @@ Each history entry is a snapshot of `{ doc, selection }` from before a change. T
 - **Popups** use `position: fixed` and are appended to `document.body`, so a parent with `overflow: hidden` (a chat input, a card) does not clip them. Inside an open `<dialog>` or an `aria-modal` element they are appended there instead, so they show above the modal and are not inert; the `popupContainer` option picks the element. When an ancestor of the container has a `transform`, `filter` or `contain` style, `position: fixed` is relative to that ancestor: each popup measures its offset at `left: 0; top: 0` and subtracts it, as Floating UI does. Popups copy the editor's theme variables, stay inside the visual viewport (the on-screen keyboard shrinks it), and flip above the anchor when there is no room below. Their z-index is `var(--mbe-popup-z, 1000)`.
 - **Autocomplete** (`suggestion()`); see [Autocomplete](#autocomplete).
 - **Slash menu** is a suggestion. It opens on `/` (or the full-width `／` from Japanese IMEs) at the start of a block or after a space. Typing filters it. Picking a text type (paragraph, heading, list, quote, code) converts the current block in place and keeps its text; a table or divider goes below the block, or replaces it if empty. It shows "No results" until the query passes three characters with no match, then hides. The menu is a listbox wired to the editor with `aria-activedescendant`. It rebuilds only when the query changes, so a late `selectionchange` does not reset the highlighted item.
-- **Block handle** is a grip icon. It appears on hover next to tables and code blocks only, and follows the caret into them on touch devices. It opens the block menu: Duplicate, Delete and, with the caret in a table cell, row, column and alignment actions. Mod+/ opens the same menu from the keyboard inside those blocks. Opening the menu puts focus in the editor. Escape, a pick, or a press anywhere outside the menu and the handle closes it, a press in the editor's own text included. Other blocks have no handle; they change type through the slash menu or Markdown shortcuts.
-- **Formatting toolbar** appears over a non-empty selection: bold, italic, strikethrough, code and link, each an icon button named by its label (`aria-label` and a tooltip with the shortcut). It does not change block types. Buttons show their state with `aria-pressed`. On touch devices it sits below the selection, away from the native selection menu.
+- **Block handle** is a grip icon. It appears on hover next to tables, code blocks and image blocks only, and follows the caret into them on touch devices. It opens the block menu, whose entries are block actions: Duplicate, Delete and, with the caret in a table cell, row and column actions and an Align submenu for the column; on an image block, an Align submenu, Alt text and Reset size (shown only when the image has a width). Alt text opens the same input popover as the link popover (Mod+K), under the image; Enter applies, Escape cancels, and the image stays selected either way. Mod+/ opens the block menu from the keyboard inside those blocks, and on an image block it selects the image. Opening the block menu puts focus in the editor. Escape, a pick, or a press anywhere outside the block menu and the block handle closes it, a press in the editor's own text included. Other blocks have no block handle; they change type through the slash menu or Markdown shortcuts.
+  - **Submenus** follow Notion: a row with a submenu ends in a chevron and opens it on hover, ArrowRight or Enter. The submenu opens beside the row, top-aligned with it, on the right unless there is no room, and highlights the current choice, which has a check mark. ArrowLeft and Escape close only the submenu; ArrowUp, ArrowDown and Enter work in it while it is open.
+  - **Image blocks** hold no caret. A caret that lands in one (a click beside the image, an arrow key from the block before or after) selects the image instead, Backspace or Delete at the edge of the next or previous block selects it first, and a second press deletes the block. Printable keys do nothing while it is selected; Enter adds a paragraph after it. At the end of the document, ArrowDown adds a paragraph below it, as for a table.
+- **Formatting toolbar** appears over a non-empty selection. It has nine controls in three groups, with a divider between groups: a text style menu (Text, Heading 1–3); bold, italic, strikethrough, inline code and link; quote, code block and a list menu (bulleted, numbered, to-do). Linear's toolbar was the reference; underline and collapsible sections are left out because Markdown has no syntax for them. The `toolbar` option's `items` picks controls, which keep this order.
+  - **Names, not shortcuts.** Each control is an icon button named by its label (`aria-label`). A tooltip shows the label after 500 ms of hover, and at once while moving between buttons. No shortcut is shown anywhere; buttons and menu rows carry them in `aria-keyshortcuts`. Buttons show their state with `aria-pressed`; a menu button shows the icon of the current choice and `aria-expanded`.
+  - **Block controls** act on every text block the selection touches. Text style sets a style, and picking the current one changes nothing. Quote and the list types toggle, as their shortcuts do. Code block turns adjacent blocks into one code block, a line per block, and drops their formatting (one undo brings it back). A control shows as active only when every selected block has that type. In a table cell only the inline controls show.
+  - **Menus** open on the side of the toolbar away from the selection, flipping when there is no room, and preview each heading style. As in the block menu, focus stays in the editor: ArrowUp and ArrowDown move, Enter picks, Escape closes the menu and leaves the toolbar open, and a press outside the toolbar and the menu closes it.
+  - On touch devices the toolbar sits below the selection, away from the native selection menu. Wider than the screen, it scrolls sideways instead of wrapping.
 
 ## Autocomplete
 
@@ -171,13 +177,21 @@ Every icon in the editor's UI comes from [Lucide](https://lucide.dev), the icon 
 | Slash menu | `quote`, `code`, `table`, `divider` | `text-quote`, `square-code`, `table`, `minus` |
 | Block menu | `duplicate`, `delete` | `copy`, `trash` |
 | Block menu, table cell | `addRowAbove`, `addRowBelow`, `addColumnLeft`, `addColumnRight` | `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right` |
-| Block menu, table cell | `alignLeft`, `alignCenter`, `alignRight` | `text-align-start`, `text-align-center`, `text-align-end` |
+| Block menu, table cell | `align` | `text-align-start` |
+| Block menu, table cell, Align submenu | `alignLeft`, `alignCenter`, `alignRight` | `text-align-start`, `text-align-center`, `text-align-end` |
+| Block menu, image block, the Align row and submenu | `imageAlignLeft`, `imageAlignCenter`, `imageAlignRight` | `align-start-vertical`, `align-center-vertical`, `align-end-vertical` |
+| Block menu, image block | `altText`, `resetImageSize` | `text-cursor-input`, `rotate-ccw` |
+| Block menu, a row that opens a submenu | `chevronRight` | `chevron-right` |
 | Block menu, table cell | `deleteRow`, `deleteColumn` | `trash` |
 | Formatting toolbar | `bold`, `italic`, `strike`, `inlineCode`, `link` | `bold`, `italic`, `strikethrough`, `code`, `link` |
+| Formatting toolbar, menu buttons and menus | `text`, `heading1`, `heading2`, `heading3`, `bulletList`, `numberedList`, `todoList` | the slash menu's icons |
+| Formatting toolbar | `quote`, `code` | the slash menu's icons |
+| Formatting toolbar, menu buttons and menus | `chevronDown`, `selected` | `chevron-down`, `check` |
+| An image that did not load | `imageUnavailable` | `image-off` |
 | Block handle | `blockHandle` | `grip-vertical` |
 | Code block bar | `copyCode`, `copied` | `copy`, `check` |
 
-That is 30 places and 27 distinct icons.
+That is 49 places and 35 distinct icons. `chevronDown`, `chevronRight`, `selected` and the three `imageAlign*` names are the only icon names that are not also `labels` keys. The image Align choices share the table's labels (`alignLeft` and the others) but not its icons, because aligning a picture is not aligning text.
 
 **The playground** is an app built on the editor, so it imports Lucide the way an app would: its formatting bar uses the `lucide` package (a root `devDependency`, pinned to the same version as `icons.ts`) and builds each button's icon with `createElement`. Each button is named by its title (`aria-label`). Buttons that are words (Read-only, Theme, Save) stay text. The package never imports `lucide`.
 
@@ -299,11 +313,15 @@ The cold-load result depends on the JavaScript engine warming up: about half of 
 | --- | --- |
 | `npm test` | Unit, spec and round-trip tests (vitest, Node), including every example in `docs/syntax.md`. |
 | `npm run test:e2e` | Browser tests in Chromium: editing, block selection, menus, toolbar, links, tables, clipboard, IME, extensions, themes, React, entity decoding. |
-| `npm run test:e2e:themed` | The same browser tests with a class on every `theme.classes` key, to show theme classes change no behavior. |
+| `npm run test:e2e:themed` | The playground, clipboard and fuzz browser tests with a class on every `theme.classes` key, to show theme classes change no behavior. The editor never reads class names, so these specs, which cover every block type, copy and paste, and random editing, are enough. |
 | `npm run test:perf` | The two timing gates, run alone. |
 | `npm run typecheck` | TypeScript in strict mode. |
 | `npm run build` | The published files in `packages/editor/dist`: ES modules bundled with esbuild (`index.js`, `react.js`, the two entity files), the stylesheets, and type declarations from `tsc`. Members marked `@internal` are left out of the declarations. |
 | `npm run size` | The size table under "Performance". A report, not a gate. |
+
+The browser tests run against the playground built with Vite and served as static files, not the dev server. Each test opens a new page, and the dev server's 55 module requests made that load about half of each test's time. The build is unminified, so stacks and CSS read as in the source.
+
+`e2e/fuzz.spec.ts` runs two fixed seeds with the other browser tests. A nightly workflow (`.github/workflows/fuzz.yml`) runs 30 new seeds in Chromium, Firefox and WebKit, numbered from the date. A failure prints its seed; `FUZZ_SEED=<seed>` replays it.
 
 CI (`.github/workflows/ci.yml`) runs the typecheck, unit tests, build and the browser tests in Chromium (plain and themed), Firefox and WebKit on every push to main and every pull request. Firefox and WebKit each run in two shards, as four jobs side by side. Tests that drive IME through the Chrome DevTools Protocol run in Chromium only. The timing gates are left out because shared runners are too noisy for them.
 

@@ -1,6 +1,6 @@
-// The block handle shown to the left of the hovered table or code block.
+// The block handle shown to the left of the hovered table, code block or image block.
 // Clicking it opens the block menu. On touch devices it follows the block
-// with the caret. Other blocks have no handle.
+// with the caret. Other blocks have no block handle.
 
 import type { Editor } from '../editor';
 import { iconNode } from '../icons';
@@ -18,7 +18,7 @@ export class BlockHandle {
     const doc = root.ownerDocument;
     this.el = doc.createElement('button');
     this.el.type = 'button';
-    this.el.className = 'mbe-ui mbe-handle';
+    this.el.className = 'mbe-ui mbe-block-handle';
     const icon = iconNode(doc, editor.icon('blockHandle'));
     if (icon) this.el.appendChild(icon);
     this.el.setAttribute('aria-label', editor.labels.blockHandle);
@@ -52,7 +52,7 @@ export class BlockHandle {
     else if (this.blockId !== null) this.scheduleHide();
   }
 
-  /** Shows the handle next to a block. */
+  /** Shows the block handle next to a block. */
   showFor(blockId: string): void {
     this.cancelHide();
     const blockEl = this.editor.blockElement(blockId);
@@ -70,7 +70,7 @@ export class BlockHandle {
     this.el.style.top = `${Math.round(rect.top + firstLine / 2 - size / 2 - offset.y)}px`;
   }
 
-  /** True when `node` is the handle or inside it. */
+  /** True when `node` is the block handle or inside it. */
   contains(node: Node): boolean {
     return this.el.contains(node);
   }

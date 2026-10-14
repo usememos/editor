@@ -59,7 +59,8 @@ const SELECTORS: Record<string, string> = {
   '#editor > .mbe-table': 't-table',
   '#editor > .mbe-divider hr': 't-divider',
   '#editor > .mbe-raw': 't-raw',
-  '#editor img': 't-image',
+  // An image, or the box shown when it does not load.
+  '#editor .mbe-image': 't-image',
   '#editor strong': 't-bold',
   '#editor em': 't-italic',
   '#editor s': 't-strike',

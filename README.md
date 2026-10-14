@@ -1,9 +1,9 @@
 # @usememos/editor
 
-A block editor for standard Markdown, for React or any web app.
+A block editor for Markdown, for React or any web app.
 
 - Markdown in, Markdown out: CommonMark plus GFM tables, task lists, strikethrough and autolinks. Blocks you did not edit are saved byte for byte.
-- Block editing: slash menu, a formatting toolbar, Markdown shortcuts, and a block handle on tables and code blocks.
+- Block editing: slash menu, a formatting toolbar, Markdown shortcuts, and a block handle on tables, code blocks and images that stand alone, which opens the block menu.
 - One package, `@usememos/editor`, with zero runtime dependencies. It works without a framework, and `@usememos/editor/react` is a thin React wrapper.
 - About 56 KB minified and gzipped, plus 3.5 KB of CSS: a third of what a comparable CodeMirror 6, Tiptap or Lexical setup adds (see [Performance](docs/architecture.md#performance)).
 
@@ -63,11 +63,11 @@ The same names work in `new Editor(options)` and as React props, except that Rea
 | `referrerPolicy` | `ReferrerPolicy` | `referrerpolicy` for images, such as `no-referrer`. Images always load lazily. |
 | `onLinkClick` | `({ editor, href, event }) => boolean` | Called when a link is clicked to be opened: a plain click while read-only, Mod+click while editing. Return `true` to handle it, for example to route an in-app link or scroll to an anchor; otherwise the editor opens `href` in a new tab. |
 | `theme` | `{ classes?, tokens?, colorScheme? }` | Your own classes on rendered elements, colors and fonts, and light or dark. See [Theming](#theming). |
-| `toolbar` | `boolean` | Shows the formatting toolbar on selection. Default `true`. |
+| `toolbar` | `boolean \| { items? }` | Shows the formatting toolbar on selection. Default `true`. `items` lists its controls; they keep the built-in order: `textStyle`, `bold`, `italic`, `strike`, `inlineCode`, `link`, `quote`, `codeBlock`, `list` (exported as `TOOLBAR_ITEMS`). For example, `{ items: ['bold', 'italic', 'strike', 'inlineCode', 'link'] }` keeps it to inline formatting. |
 | `popupContainer` | `HTMLElement` | Where menus, the toolbar and the autocomplete popup are appended. Default: the nearest open `<dialog>` or `aria-modal` ancestor of `element`, else `document.body`. |
 | `slashMenu` | `false \| string[]` | Built-in slash menu items to show, in order, or `false` for none: `text`, `heading1`, `heading2`, `heading3`, `bulletList`, `numberedList`, `todoList`, `quote`, `code`, `table`, `divider`. |
 | `labels` | `Partial<Labels>` | Overrides UI strings, for localization. See `src/labels.ts`. |
-| `icons` | `Partial<Record<IconName, string \| Element>>` | Replaces built-in icons, which are [Lucide](https://lucide.dev) icons. A string is shown as text; an element, such as an `<svg>`, is cloned for every place it appears. Names match the `labels` keys of the same controls: the slash menu items, `duplicate`, `delete`, the table actions, `bold`, `italic`, `strike`, `inlineCode`, `link` and `blockHandle`. |
+| `icons` | `Partial<Record<IconName, string \| Element>>` | Replaces built-in icons, which are [Lucide](https://lucide.dev) icons. A string is shown as text; an element, such as an `<svg>`, is cloned for every place it appears. Names match the `labels` keys of the same controls: the slash menu items, the block actions (`duplicate`, `delete`, the table cell actions, `altText` and `resetImageSize`), `bold`, `italic`, `strike`, `inlineCode`, `link`, `chevronDown` and `selected` (the formatting toolbar's menu buttons and their check mark), `chevronRight` (a menu row that opens a submenu), `imageAlignLeft`, `imageAlignCenter` and `imageAlignRight` (an image block's Align choices), `blockHandle` and `imageUnavailable` (shown in place of an image that did not load). |
 | `onChange` | `(markdown: string, editor) => void` | Called after document changes, at most once per animation frame. |
 | `onSubmit` | `(markdown: string, editor) => void` | Called on Mod+Enter or Ctrl+Enter with the current Markdown, for comment boxes and chat inputs. |
 | `onFocus`, `onBlur` | `(editor) => void` | Focus events. |
@@ -98,10 +98,10 @@ function Composer() {
 | `setMarkdown(markdown, { history? })` | Replaces the document. `history: 'clear'` (default) clears undo history; `'keep'` makes the replacement one undo step. Does not emit `change`. |
 | `isEmpty` | True when the document holds only empty paragraphs. |
 | `state` | The document and selection, immutable. |
-| `commands.*` | Edits. Each applies one change, records one undo step, and returns `true` if it did something: `toggleBold`, `toggleItalic`, `toggleStrike`, `toggleCode`, `setParagraph`, `toggleHeading({ level })`, `toggleBulletList`, `toggleOrderedList`, `toggleTaskList`, `toggleBlockquote`, `toggleCodeBlock({ language? })`, `setLink({ href })`, `unsetLink`, `insertText(text, { range? })`, `insertMarkdown(markdown, options?)`, `insertTable({ rows?, cols? })`, `insertDivider`, `indent`, `outdent`, `undo`, `redo`, `selectAll`, `selectBlocks`, `focus(position?)`, `blur`, `scrollIntoView`. `selectBlocks` selects the blocks the selection touches as whole blocks, as Escape does; it returns `false` when read-only. `scrollIntoView` changes nothing in the document: it scrolls the caret into view in the editor's scrolling containers and the window, for example after an `insertMarkdown` from code. |
+| `commands.*` | Edits. Each applies one change, records one undo step, and returns `true` if it did something: `toggleBold`, `toggleItalic`, `toggleStrike`, `toggleCode`, `setParagraph`, `toggleHeading({ level })`, `toggleBulletList`, `toggleOrderedList`, `toggleTaskList`, `toggleBlockquote`, `toggleCodeBlock({ language? })`, `setLink({ href })`, `unsetLink`, `updateImage({ alt?, title?, align?, width? })`, `insertText(text, { range? })`, `insertMarkdown(markdown, options?)`, `insertTable({ rows?, cols? })`, `insertDivider`, `indent`, `outdent`, `undo`, `redo`, `selectAll`, `selectBlocks`, `focus(position?)`, `blur`, `scrollIntoView`. `selectBlocks` selects the blocks the selection touches as whole blocks, as Escape does; it returns `false` when read-only. `updateImage` changes the selected image; `null` removes its title, alignment or width, and a new width drops a height so the image keeps its aspect ratio. `scrollIntoView` changes nothing in the document: it scrolls the caret into view in the editor's scrolling containers and the window, for example after an `insertMarkdown` from code. |
 | `run(fn)` | Applies a custom command: a function from state to a new state, or `null`. The pure commands are exported as `commands` from the package. |
-| `isActive(name, attrs?)` | `bold`, `italic`, `strike`, `code`, `link`, or the type of the block with the caret: `paragraph`, `heading`, `bulletList`, `orderedList`, `taskList`, `blockquote`, `codeBlock`, `table`, `divider`, `raw`. `attrs` narrows it, for example `isActive('heading', { level: 2 })`. |
-| `getAttributes(name)` | `href` of a link, `level` of a heading, `language` of a code block, `checked` of a task, `syntax` of a raw block. |
+| `isActive(name, attrs?)` | `bold`, `italic`, `strike`, `code`, `link`, `image` (the selection is exactly one image), or the type of the block with the caret: `paragraph`, `heading`, `bulletList`, `orderedList`, `taskList`, `blockquote`, `codeBlock`, `table`, `divider`, `raw`. `attrs` narrows it, for example `isActive('heading', { level: 2 })`. |
+| `getAttributes(name)` | `src`, `alt`, `title`, `align`, `width`, `height` and `block` (true for an image block) of the selected image, `href` of a link, `level` of a heading, `language` of a code block, `checked` of a task, `syntax` of a raw block. |
 | `selectedBlocks` | The blocks of a block selection, in document order, or an empty array when the selection is text. |
 | `getSelection()`, `setSelection(selection)` | Read or move the selection. `setSelection` also takes a `SelectionJSON`, and clamps one that does not fit the document. |
 | `selectionToJSON()` | The selection as JSON-safe data (block index and offset). It still fits after reloading the same Markdown, so an app can store the caret and restore it. |
@@ -286,21 +286,31 @@ To style the editor entirely with your own classes, import `@usememos/editor/bas
 | ArrowUp, ArrowDown, Enter, Tab, Escape | In an open autocomplete popup: move, pick, pick, close |
 | Mod+B, Mod+I, Mod+E | Bold, italic, inline code |
 | Mod+Shift+X, Mod+Shift+S | Strikethrough |
-| Mod+K | Link |
+| Mod+K | Link, for selected text or the link at the caret. Otherwise the key is left to the app, for example for a command menu |
 | Mod+Alt+0, Mod+Alt+1–3 | Paragraph, heading 1–3 |
 | Mod+Alt+C | Code block |
 | Mod+Shift+7, 8, 9 | Numbered, bullet, task list |
-| Mod+/ | Block menu, in a table or code block |
+| Mod+/ | Block menu, in a table, code block or image block |
 | Mod+Z, Mod+Shift+Z (Ctrl+Y) | Undo, redo |
 | Shift+Enter | Line break inside a block |
 | Tab, Shift+Tab | Indent and outdent list items; next and previous table cell |
 | Mod+Shift+V | Paste as plain text |
+| Backspace right after a Markdown shortcut | Restore the typed characters, such as `**bold**` or `## ` |
 | Mod+Enter, Ctrl+Enter | `submit` |
+| Click an image | Select it. Backspace or Delete removes it, ArrowLeft and ArrowRight move past it, Enter starts a new paragraph after it, typing replaces it |
 | Escape | Close a menu or the toolbar; otherwise select the block with the caret (or every block a text selection crosses); in a block selection, leave the editor |
 
 With blocks selected: ArrowUp and ArrowDown select the block above or below, Shift extends the selection, Mod+A selects every block, Backspace and Delete delete them, Mod+C, Mod+X and paste copy, cut and replace them as whole blocks, Mod+D duplicates them, and the block type keys, Tab and the mark keys apply to all of them. Enter, ArrowLeft and ArrowRight go back to editing text. Typing does nothing. See [Block selection](docs/architecture.md#block-selection).
 
 Markdown shortcuts at the start of a line: `#`–`######`, `-`, `*`, `+`, `1.`, `[ ]`, `[x]`, `>`, ` ``` `, `---`. Inline: `**bold**`, `*italic*`, `_italic_`, `` `code` ``, `~~strike~~`.
+
+## Images
+
+While editing, clicking an image selects it, with an outline. Its resize handles, shown on hover and on the selected image, resize it: the width follows the pointer up to the width of the line, keeps the aspect ratio, and snaps to the width of other images in the document when it comes within 8 pixels. Each resize is one undo step. An image that does not load, or whose URL `resolveUrl` dropped, shows an icon and its alt text (`labels.imageUnavailable` when it has none), and can still be selected and deleted. Read-only editors show images at their saved size and alignment, with none of these controls.
+
+An image alone in its paragraph is an image block. It has the block handle and the block menu, like a table. Its block actions are an Align submenu (Left, Center, Right); Alt text, which opens a field for the alt text (Enter saves it, Escape keeps the old text); for a resized image, Reset size, which removes the width; then Duplicate and Delete. The alignment and size stay in the alt text when it is edited. The caret never rests beside an image block: arrow keys and a click select the image, Backspace at the start of the next block selects it and a second Backspace deletes it, and typing does nothing. Enter adds a paragraph after it. A centered image grows by twice the drag, so the resize handle stays under the pointer.
+
+The size and the alignment are saved after the alt text, as in Obsidian and its image plugins: `![chart|320](chart.png)`, `![chart|320x200](chart.png)` with a height, `![chart|center](chart.png)` or `![chart|center|320](chart.png)`. The size is a whole number of CSS pixels, and the image never shows wider than the column. The alignment applies only to image blocks. Other Markdown renderers show the image at its own size, on the left, and read the alt text as `chart|center|320`. See [Image size and alignment](docs/syntax.md#image-size-and-alignment) in the syntax doc.
 
 ## What saving changes
 

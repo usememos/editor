@@ -14,10 +14,26 @@ export const MARK_ORDER: readonly Mark[] = ['bold', 'italic', 'strike', 'code', 
 /** Character used as the text of an inline atom (an image). */
 export const ATOM_CHAR = '￼';
 
+/** Where an image block sits in its column. Without one it sits at the start of the line. */
+export type ImageAlign = 'left' | 'center' | 'right';
+
 export interface ImageAtom {
   readonly src: string;
   readonly alt: string;
   readonly title?: string;
+  /**
+   * Alignment, saved after the alt text and before the size:
+   * `![alt|center](src)` or `![alt|center|320](src)`. It shows only on an
+   * image block, an image alone in its paragraph (see `isImageBlock`).
+   */
+  readonly align?: ImageAlign;
+  /**
+   * Display width in CSS pixels, saved after the alt text as in Obsidian:
+   * `![alt|320](src)`. Without it the image shows at its own size.
+   */
+  readonly width?: number;
+  /** Display height in CSS pixels, saved as `![alt|320x200](src)`. Only read when a width is given. */
+  readonly height?: number;
 }
 
 /** A run of text that shares one format. A hard line break is a "\n" in the text. */
@@ -244,6 +260,33 @@ export function isPlainTextBlock(block: Block): block is CodeBlock | RawBlock {
 }
 
 /** Inline content at a position's container: the block's content, or a table cell. Null for dividers. */
+/**
+ * The offset of the image in an image block, or null when `block` is not one.
+ * An image block is a paragraph whose only content is one image, with no link
+ * or format, and at most spaces around it. Markdown renders such a paragraph
+ * as a lone image, so the editor gives it a block menu and alignment.
+ */
+export function imageBlockOffset(block: Block): number | null {
+  if (block.type !== 'paragraph') return null;
+  let offset: number | null = null;
+  let at = 0;
+  for (const span of block.content) {
+    if (span.image) {
+      if (offset !== null || span.link || span.marks.length > 0) return null;
+      offset = at;
+    } else if (span.token || span.link || !/^[ \t]*$/.test(span.text)) {
+      return null;
+    }
+    at += span.text.length;
+  }
+  return offset;
+}
+
+/** True when `block` is an image block (see `imageBlockOffset`). */
+export function isImageBlock(block: Block): boolean {
+  return imageBlockOffset(block) !== null;
+}
+
 export function containerContent(block: Block, cell?: Cell): Inline | null {
   if (block.type === 'table') {
     if (!cell) return null;

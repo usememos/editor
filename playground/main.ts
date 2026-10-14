@@ -152,6 +152,8 @@ function uploadInline(editor: Editor, file: File, at: Parameters<Editor['addWidg
 
 const composer: Partial<EditorOptions> = {
   markdown: { breaks: true, setext: false },
+  // Uploaded images are blob: URLs here; the default policy would drop them.
+  resolveUrl: (url, kind) => (kind === 'image' && url.startsWith('blob:') ? url : core.defaultResolveUrl(url, kind)),
   attributes: { autocorrect: 'on', autocapitalize: 'sentences', 'aria-label': 'Note' },
   extensions: [
     math({ render: (tex, el, options) => katex.render(tex, el, { ...options, throwOnError: false }) }),

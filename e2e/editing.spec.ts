@@ -130,6 +130,37 @@ test('inline shortcuts', async ({ page }) => {
   await expect(page.locator('#editor code')).toHaveText('code');
 });
 
+test('Backspace right after a Markdown shortcut restores the typed characters', async ({ page }) => {
+  await page.keyboard.type('a **bold**');
+  await expect(page.locator('#editor strong')).toHaveText('bold');
+  await page.keyboard.press('Backspace');
+  expect(await blocks(page)).toEqual(['p:a **bold**']);
+  expect(await md(page)).toBe('a \\*\\*bold\\*\\*\n');
+  // Undo brings the shortcut back; the next Backspace deletes a character.
+  await page.keyboard.press('Control+z');
+  await expect(page.locator('#editor strong')).toHaveText('bold');
+  await page.keyboard.press('Backspace');
+  expect(await md(page)).toBe('a **bol**\n');
+  // Block shortcuts and autolinks too.
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('## ');
+  await page.keyboard.press('Backspace');
+  expect((await blocks(page)).at(-1)).toBe('p:## ');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('www.x.com ');
+  await page.keyboard.press('Backspace');
+  // Saved as text: the heading marker and the URL are escaped so they read back as typed.
+  expect(await md(page)).toBe('a **bol**\n\n&#35;#\n\nwww\\.x.com\n');
+});
+
+test('Backspace after a shortcut deletes as usual once the caret has moved', async ({ page }) => {
+  await page.keyboard.type('a *it*');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('Backspace');
+  expect(await md(page)).toBe('a *i*\n');
+});
+
 test('marks: Ctrl+B for the next typed text and for a selection', async ({ page }) => {
   await page.keyboard.type('plain ');
   await page.keyboard.press('Control+b');
@@ -384,7 +415,9 @@ test('Enter in an empty quote ends the quote', async ({ page }) => {
 });
 
 test('Backspace in an empty code block makes it a paragraph', async ({ page }) => {
-  await page.keyboard.type('```js ');
+  await page.keyboard.type('```js x');
+  // The first Backspace deletes the x; right after the shortcut it would bring back "```js ".
+  await page.keyboard.press('Backspace');
   await page.keyboard.press('Backspace');
   expect(await blocks(page)).toEqual(['p:']);
 });
