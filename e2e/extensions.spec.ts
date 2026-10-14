@@ -126,6 +126,60 @@ test('textDecorator highlights while typing and never reaches the saved Markdown
   expect(await md(page)).toBe('see #work-x and `#no` and #a/b\n');
 });
 
+test('tags take a class and attributes per match, and redecorate() applies outside changes', async ({ page }) => {
+  await page.goto('/?empty');
+  await page.evaluate(() => {
+    const { Editor, mentions } = (window as any).core;
+    const w = window as any;
+    w.known = new Set(['alice']);
+    w.editor.destroy();
+    w.editor = new Editor({
+      element: document.getElementById('editor'),
+      content: 'Hi @alice and @bob',
+      editable: false,
+      extensions: [mentions({ attributes: (m: string) => (w.known.has(m.slice(1)) ? { 'data-known': '' } : undefined) })],
+    });
+  });
+  const mentionEls = page.locator('#editor .mbe-mention');
+  await expect(mentionEls.nth(0)).toHaveAttribute('data-known', '');
+  await expect(mentionEls.nth(1)).not.toHaveAttribute('data-known');
+  // The set of known people changes outside the document: redecorate shows it.
+  await page.evaluate(() => {
+    (window as any).known.add('bob');
+    (window as any).editor.redecorate();
+  });
+  await expect(mentionEls.nth(1)).toHaveAttribute('data-known', '');
+});
+
+test('headingIds gives headings element ids that follow edits', async ({ page }) => {
+  await page.goto('/?empty');
+  await page.evaluate(() => {
+    const { Editor } = (window as any).core;
+    const w = window as any;
+    w.editor.destroy();
+    w.editor = new Editor({
+      element: document.getElementById('editor'),
+      content: '# Intro\n\ntext\n\n## Intro',
+      headingIds: (headings: { text: string }[]) => {
+        const seen = new Map<string, number>();
+        return headings.map(({ text }) => {
+          const slug = text.toLowerCase().replace(/\s+/g, '-');
+          const n = seen.get(slug) ?? 0;
+          seen.set(slug, n + 1);
+          return n ? `${slug}-${n}` : slug;
+        });
+      },
+    });
+  });
+  await expect(page.locator('#editor h1')).toHaveAttribute('id', 'intro');
+  await expect(page.locator('#editor h2')).toHaveAttribute('id', 'intro-1');
+  await page.locator('#editor h1').click();
+  await page.keyboard.press('End');
+  await page.keyboard.type(' more');
+  await expect(page.locator('#editor h1')).toHaveAttribute('id', 'intro-more');
+  await expect(page.locator('#editor h2')).toHaveAttribute('id', 'intro');
+});
+
 test('suggestion: #tag autocomplete with async items, picked with the keyboard', async ({ page }) => {
   await page.goto('/?empty');
   await page.evaluate(() => {

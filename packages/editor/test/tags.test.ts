@@ -142,6 +142,18 @@ describe('tag decorations', () => {
     expect(decorated('#**work** #wo**rk**')).toEqual(['#wo']);
     expect(decorated('`#code` [#link](u) https://x.com/#anchor bob@example.com \\#not @ok')).toEqual(['@ok']);
   });
+
+  it('takes a class and attributes per match', () => {
+    const block = parseMarkdown('#work and @alice @bob', TAGS).blocks[0]!;
+    const ctx = decorationContext(block, 'content' in block ? block.content : []);
+    const tag = tags({ class: (m) => `tag tag-${m.slice(1)}`, attributes: (m) => ({ 'data-tag': m.slice(1) }) });
+    const mention = mentions({ attributes: (m) => (m === '@alice' ? { 'data-known': '' } : undefined) });
+    expect(tag.decorations!(ctx)).toEqual([{ from: 0, to: 5, class: 'tag tag-work', attributes: { 'data-tag': 'work' } }]);
+    expect(mention.decorations!(ctx)).toEqual([
+      { from: 10, to: 16, class: 'mbe-mention', attributes: { 'data-known': '' } },
+      { from: 17, to: 21, class: 'mbe-mention' },
+    ]);
+  });
 });
 
 describe('tag escapes', () => {

@@ -267,7 +267,7 @@ test.describe('input method through the DevTools Protocol', () => {
       await ime.commit('日记');
       await expect(labels(page)).toHaveText(['#日记']);
       await page.keyboard.press('Enter');
-      expect(await md(page)).toBe('a #日记&#32;\n');
+      expect(await md(page)).toBe('a #日记\n');
     });
 
     test('a full-width ＃ opens the popup and a pick writes #', async ({ page }) => {
@@ -277,7 +277,7 @@ test.describe('input method through the DevTools Protocol', () => {
       await page.keyboard.type('re');
       await expect(labels(page)).toHaveText(['#reading']);
       await page.keyboard.press('Enter');
-      expect(await md(page)).toBe('a #reading&#32;\n');
+      expect(await md(page)).toBe('a #reading\n');
     });
 
     test('the Enter that commits a composition does not pick, and the block is not re-rendered while composing', async ({ page }) => {
@@ -299,7 +299,7 @@ test.describe('input method through the DevTools Protocol', () => {
       await expect(labels(page)).toHaveText(['#work', '#work/meeting', '#work/planning']);
       await tagMenu(page).locator('.mbe-menu-item', { hasText: '#work/planning' }).click();
       await frame(page);
-      expect(await md(page)).toBe('a #work/planning&#32;\n');
+      expect(await md(page)).toBe('a #work/planning\n');
       await page.keyboard.type('x');
       expect(await md(page)).toBe('a #work/planning x\n');
     });

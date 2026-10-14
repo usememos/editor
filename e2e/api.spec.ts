@@ -74,8 +74,8 @@ test('insertMarkdown inserts at the caret, as its own block, or at the end', asy
     editor.commands.insertMarkdown('![img](/a.png)', { at: editor.getSelection().focus, block: true, select: 'keep' });
     editor.commands.insertMarkdown('- end', { at: 'end', select: 'keep' });
   });
-  // The text after the split keeps its leading space, written as a character reference.
-  expect(await md(page)).toBe('hello\n\n![img](/a.png)\n\n&#32;world\n\n- end');
+  // The text after the split starts with a space, which is not saved: Markdown strips it.
+  expect(await md(page)).toBe('hello\n\n![img](/a.png)\n\nworld\n\n- end');
   const selected = await page.evaluate(() => (window as any).editor.selectionToJSON());
   expect(selected).toEqual({ anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 5 } });
 });
@@ -114,7 +114,7 @@ test('setOptions changes the placeholder, attributes, editability and image URLs
     editor.setOptions({
       placeholder: 'New placeholder',
       attributes: { autocorrect: 'on', 'aria-label': 'Note' },
-      resolveImageSrc: (src: string) => `https://cdn.example${src}`,
+      resolveUrl: (url: string, kind: string) => (kind === 'image' ? `https://cdn.example${url}` : url),
     });
   });
   const root = page.locator('#editor');
@@ -129,7 +129,52 @@ test('setOptions changes the placeholder, attributes, editability and image URLs
   await page.evaluate(() => (window as any).editor.setMarkdown(''));
   const placeholder = await root.evaluate((el) => getComputedStyle(el).getPropertyValue('--mbe-placeholder'));
   expect(placeholder).toBe('"New placeholder"');
+  await expect(root).toHaveAttribute('aria-placeholder', 'New placeholder');
   expect(await page.evaluate(() => (window as any).editor.isEmpty)).toBe(true);
+});
+
+test('resolveUrl decides which links and images are used, and images load lazily', async ({ page }) => {
+  const source = '[sms](sms:+44) [js](javascript:alert(1)) [web](https://a.com)\n\n![a](http://tracker.example/a.png) ![b](/b.png)';
+  await open(page, source);
+  const root = page.locator('#editor');
+  // The default policy drops sms: and javascript: links.
+  await expect(root.locator('a.mbe-link').nth(0)).not.toHaveAttribute('href');
+  await expect(root.locator('a.mbe-link').nth(1)).not.toHaveAttribute('href');
+  await expect(root.locator('img').first()).toHaveAttribute('loading', 'lazy');
+  await page.evaluate(() => {
+    const { defaultResolveUrl } = (window as any).core;
+    (window as any).editor.setOptions({
+      resolveUrl: (url: string, kind: string) =>
+        url.startsWith('sms:') ? url : kind === 'image' && url.startsWith('http:') ? null : defaultResolveUrl(url, kind),
+    });
+  });
+  await expect(root.locator('a.mbe-link').nth(0)).toHaveAttribute('href', 'sms:+44');
+  await expect(root.locator('a.mbe-link').nth(1)).not.toHaveAttribute('href');
+  await expect(root.locator('img').nth(0)).not.toHaveAttribute('src');
+  await expect(root.locator('img').nth(1)).toHaveAttribute('src', '/b.png');
+  // The saved Markdown keeps every URL as written.
+  expect(await md(page)).toBe(source);
+});
+
+test('onLinkClick can handle a link instead of opening it', async ({ page }) => {
+  await open(page, '[anchor](#intro) and [web](https://a.com)');
+  await page.evaluate(() => {
+    const w = window as any;
+    w.clicked = [];
+    w.opened = [];
+    w.open = (url: string) => void w.opened.push(url);
+    w.editor.setOptions({
+      editable: false,
+      onLinkClick: ({ href }: { href: string }) => {
+        w.clicked.push(href);
+        return href.startsWith('#');
+      },
+    });
+  });
+  await page.locator('#editor a.mbe-link', { hasText: 'anchor' }).click();
+  await page.locator('#editor a.mbe-link', { hasText: 'web' }).click();
+  expect(await page.evaluate(() => (window as any).clicked)).toEqual(['#intro', 'https://a.com']);
+  expect(await page.evaluate(() => (window as any).opened)).toEqual(['https://a.com']);
 });
 
 test("setMarkdown with history: 'keep' can be undone", async ({ page }) => {

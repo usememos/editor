@@ -66,7 +66,7 @@ const SELECTORS: Record<string, string> = {
   '#editor > p code': 't-code',
   '#editor a': 'extra',
   '#editor :is(.mbe-view-math, .mbe-token-math)': 't-math',
-  '#editor .mbe-token-footnote': 't-footnote',
+  '#editor :is(.mbe-view-footnote, .mbe-token-footnote)': 't-footnote',
 };
 
 async function missing(page: Page): Promise<string[]> {
@@ -99,7 +99,7 @@ test('theme classes go on every element of their type, editing and read-only', a
   await page.locator('#editor > p .mbe-view-math .katex-html').click();
   await expect(page.locator('#editor > p .mbe-token-math')).toHaveClass(/t-math/);
   // A raw block's source keeps the class too.
-  await page.locator('#editor > .mbe-view-block').click();
+  await page.locator('#editor > .mbe-view-block[data-syntax="math"]').click();
   await expect(page.locator('#editor > pre.mbe-raw[data-syntax="math"]')).toHaveClass(/t-raw/);
 
   await page.evaluate(() => (window as any).editor.setOptions({ editable: false }));
@@ -260,4 +260,12 @@ test('theme tokens and colorScheme restyle the editor and its menus without re-r
   await setTheme(undefined);
   expect(await look()).toEqual(before);
   expect(await first.evaluate((el) => el.isConnected)).toBe(true);
+});
+
+test('a font token of inherit keeps the sizes of the code language label and raw blocks', async ({ page }) => {
+  await page.goto(`/?md=${encodeURIComponent('```js\nlet a = 1;\n```\n\n> quote\n> > nested')}`);
+  await page.evaluate(() => (window as any).editor.setOptions({ theme: { tokens: { font: 'inherit', mono: 'inherit', fontSize: 20 } } }));
+  const size = (selector: string) => page.locator(selector).evaluate((el) => [getComputedStyle(el).fontSize, getComputedStyle(el).lineHeight]);
+  expect(await size('#editor .mbe-code-lang')).toEqual(['12px', '16px']);
+  expect(await size('#editor pre.mbe-raw')).toEqual(['14px', '22px']);
 });

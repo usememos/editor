@@ -5,7 +5,7 @@ A block editor for standard Markdown, for React or any web app.
 - Markdown in, Markdown out: CommonMark plus GFM tables, task lists, strikethrough and autolinks. Blocks you did not edit are saved byte for byte.
 - Block editing: slash menu, a formatting toolbar, Markdown shortcuts, and a block handle on tables and code blocks.
 - One package, `@usememos/editor`, with zero runtime dependencies. It works without a framework, and `@usememos/editor/react` is a thin React wrapper.
-- About 55 KB minified and gzipped, plus 3 KB of CSS: a third of what a comparable CodeMirror 6, Tiptap or Lexical setup adds (see [Performance](docs/architecture.md#performance)).
+- About 56 KB minified and gzipped, plus 3.5 KB of CSS: a third of what a comparable CodeMirror 6, Tiptap or Lexical setup adds (see [Performance](docs/architecture.md#performance)).
 
 Status: early releases, published to npm as [`@usememos/editor`](https://www.npmjs.com/package/@usememos/editor). Versions follow memos' CalVer (`26.10`, `26.10.1`) and do not signal breaking changes, so pin an exact version. [docs/syntax.md](docs/syntax.md) specifies the Markdown it reads and writes, and [docs/architecture.md](docs/architecture.md) explains how it works.
 
@@ -51,13 +51,17 @@ The same names work in `new Editor(options)` and as React props, except that Rea
 | `value` | `string` | React only. The editor updates only when `value` differs from the last Markdown it emitted. |
 | `defaultValue` | `string` | React only. Initial Markdown for uncontrolled use. |
 | `markdown` | `{ breaks?, setext?, autolinks? }` | Markdown dialect. `breaks: true` reads a single newline as a line break and saves line breaks as plain newlines (as GitHub comments do). `setext: false` turns off setext headings, so `Title`⏎`---` is a paragraph and a divider. `autolinks: false` turns off GFM autolink literals, so a bare `https://…`, `www.…` or e-mail address stays text. See [docs/syntax.md](docs/syntax.md). |
-| `extensions` | `Extension[]` | Adds syntax and behavior. Built in: `math()` (`$…$` and `$$` blocks), `footnotes()` (`[^1]` and `[^1]: …`), `tags()` (`#tag`) and `mentions()` (`@name`). Extension syntax is saved verbatim, and shown as source unless the extension renders it (see `views`). |
+| `extensions` | `Extension[]` | Adds syntax and behavior. Built in: `math()` (`$…$` and `$$` blocks), `footnotes()` (`[^1]` and `[^1]: …`, shown as a raised label and a small note; `footnotes({ render: false })` keeps the source), `tags()` (`#tag`) and `mentions()` (`@name`). Extension syntax is saved verbatim, and shown as source unless the extension renders it (see `views`). |
 | `placeholder` | `string` | Shown when the document is empty. |
 | `editable` | `boolean` | Default `true`. With `false`, no editing, and links open on click. |
 | `taskToggle` | `boolean` | Default `false`. While `editable` is `false`, lets the user tick and untick task items, for example for a memo's owner. Each tick emits `change` with Markdown in which only that item's `[ ]` or `[x]` changed. Ignored while `editable` is `true`. |
 | `autofocus` | `boolean \| 'start' \| 'end'` | Focuses the editor on creation, with the caret at the start or the end. |
 | `attributes` | `Record<string, string>` | Attributes for the editable root, such as `autocorrect`, `autocapitalize` or `aria-label`. |
-| `resolveImageSrc` | `(src) => string` | The URL to display for an image. The saved Markdown keeps the original `src`. |
+| `resolveUrl` | `(url, kind) => string \| null` | The URL to use for a link (`kind` `'link'`) or an image (`'image'`), or `null` to drop it: the link is not clickable, the image has no `src`. The saved Markdown keeps the original. Default `defaultResolveUrl`, exported: relative URLs, `http`, `https`, `mailto` and `tel`. Call it from your own policy to extend it, for example to allow `sms:` or to block `http:` images. |
+| `headingIds` | `(headings) => (string \| undefined)[]` | Element ids for headings, for in-page links and an outline. Called with every heading's `{ text, level }` in order, again when the document changes. |
+| `codeCopy` | `boolean` | A copy button at the end of each code block's bar, shown on hover or focus, that copies the code. Default `true`. Its text is `labels.copyCode` and `labels.copied`, its icons `icons.copyCode` and `icons.copied`. |
+| `referrerPolicy` | `ReferrerPolicy` | `referrerpolicy` for images, such as `no-referrer`. Images always load lazily. |
+| `onLinkClick` | `({ editor, href, event }) => boolean` | Called when a link is clicked to be opened: a plain click while read-only, Mod+click while editing. Return `true` to handle it, for example to route an in-app link or scroll to an anchor; otherwise the editor opens `href` in a new tab. |
 | `theme` | `{ classes?, tokens?, colorScheme? }` | Your own classes on rendered elements, colors and fonts, and light or dark. See [Theming](#theming). |
 | `toolbar` | `boolean` | Shows the formatting toolbar on selection. Default `true`. |
 | `popupContainer` | `HTMLElement` | Where menus, the toolbar and the autocomplete popup are appended. Default: the nearest open `<dialog>` or `aria-modal` ancestor of `element`, else `document.body`. |
@@ -71,9 +75,9 @@ The same names work in `new Editor(options)` and as React props, except that Rea
 
 For note-style Markdown, as in the playground, use `markdown: { breaks: true, setext: false }` and `extensions: [math(), footnotes(), tags(), mentions()]`.
 
-`editor.setOptions({ placeholder, editable, taskToggle, attributes, resolveImageSrc, theme })` changes those options while the editor runs. `setOptions({ extensions })` takes new callbacks for `suggestion()` extensions of the same names. The other options are fixed for the editor's lifetime.
+`editor.setOptions({ placeholder, editable, taskToggle, attributes, resolveUrl, onLinkClick, theme })` changes those options while the editor runs. `setOptions({ extensions })` takes new callbacks for `suggestion()` extensions of the same names. The other options are fixed for the editor's lifetime.
 
-In React, `placeholder`, `editable`, `taskToggle`, `attributes`, `resolveImageSrc` and `theme` update live. A change to the names in `extensions` recreates the editor and keeps its Markdown, so an inline array is fine; with the same names, the callbacks of `suggestion()` extensions update live, so `items` may read React state. Other props are read on mount; change the component's `key` to apply new values. A `ref` gives the core `Editor` instance. A `value` that arrives while an input method (IME) is composing text is applied when the composition ends.
+In React, `placeholder`, `editable`, `taskToggle`, `attributes`, `resolveUrl`, `onLinkClick` and `theme` update live. A change to the names in `extensions` recreates the editor and keeps its Markdown, so an inline array is fine; with the same names, the callbacks of `suggestion()` extensions update live, so `items` may read React state. Other props are read on mount; change the component's `key` to apply new values. A `ref` gives the core `Editor` instance. A `value` that arrives while an input method (IME) is composing text is applied when the composition ends.
 
 For apps that manage the editor instance themselves, `useEditor(options, deps)` creates one and `<EditorContent editor={editor} />` shows it:
 
@@ -105,6 +109,7 @@ function Composer() {
 | `suggestion.*` | The autocomplete popup: `state`, `open(name?)`, `close()`, `move(delta)`, `accept(index?)`. See [Autocomplete](#autocomplete). |
 | `addWidget({ at, render })` | Shows app UI after the block that contains `at` (a position or `'end'`), such as an upload placeholder. Returns a widget with `update(render?)`, `remove()` and `isRemoved`. A widget is never saved and is not part of undo history. It moves with its block; if the block is deleted, it moves to the nearest remaining block. `insertMarkdown(md, { at: widget })` inserts after the widget's block. |
 | `positionAtPoint(x, y)` | The document position at a viewport point, or `null`. |
+| `redecorate()` | Computes decorations again for every block, for when what they show depends on something outside the document: which mentioned people exist, a tag's color, a highlighter's language that finished loading. Waits for an input method to finish composing. |
 | `submit()` | Emits a pending `change`, then `submit` with the current Markdown, as Mod+Enter does. Returns `false` when nothing listens for `submit`. |
 | `root` | The editable element: `element`, or for `useEditor`, the element `<EditorContent>` shows. |
 | `isComposing` | True while an input method (IME) is composing text. Replacing the document then would break the composition; the React wrapper waits for it to end. |
@@ -128,13 +133,13 @@ const tags: Extension = {
 };
 ```
 
-`decorations` returns CSS classes for ranges of a block's text, for highlighting such as `#tags` and `@mentions`. It runs for each paragraph, heading, list item, quote and table cell, only when that block changes, and is never saved. `textDecorator({ pattern | scan, class })` builds one from a regular expression or a scanner function and skips matches inside inline code, links, images and tokens:
+`decorations` returns CSS classes for ranges of a block's text, for highlighting such as `#tags` and `@mentions`. It runs for each paragraph, heading, list item, quote and table cell, only when that block changes, and is never saved. `codeDecorations({ block, text, language })` does the same for the code of a code block, for syntax highlighting while editing and when read-only; when a highlighter loads a language later, call `editor.redecorate()`. `textDecorator({ pattern | scan, class })` builds one from a regular expression or a scanner function and skips matches inside inline code, links, images and tokens:
 
 ```ts
 textDecorator({ pattern: /\bTODO\b/, class: 'todo' })
 ```
 
-`tags()` and `mentions()` highlight `#tag` and `@name` (classes `mbe-tag` and `mbe-mention`) and keep `\#` and `\@` as written, so an escaped trigger survives edits. Tags and mentions stay plain text and are saved exactly as typed. `scan` replaces the default grammar (`scanTags`, `scanMentions`); see [docs/syntax.md](docs/syntax.md#tags-and-mentions). For autocomplete, add a `suggestion()` next to them.
+`tags()` and `mentions()` highlight `#tag` and `@name` (classes `mbe-tag` and `mbe-mention`) and keep `\#` and `\@` as written, so an escaped trigger survives edits. Their `class` and `attributes` can be functions of the match as written (`#work/planning`), for a color per tag or a `data-` attribute per person; call `editor.redecorate()` when what they read changes. Tags and mentions stay plain text and are saved exactly as typed. `scan` replaces the default grammar (`scanTags`, `scanMentions`); see [docs/syntax.md](docs/syntax.md#tags-and-mentions). For autocomplete, add a `suggestion()` next to them.
 
 #### Autocomplete
 
@@ -216,7 +221,7 @@ The popup lines up with the trigger under the caret's line, follows scrolling, r
 
 `markdown` adds syntax; see `math()`, `footnotes()`, [docs/syntax.md](docs/syntax.md) and [docs/architecture.md](docs/architecture.md).
 
-`views` shows a syntax rendered instead of as source, keyed by syntax name. While editing, a token shows its source when the caret touches it, and a raw block when the selection is in it; clicking either does the same. Read-only always shows the rendered view. `math()` uses this when given a render function; the core has no math renderer of its own, so pass one such as KaTeX:
+`views` shows a syntax rendered instead of as source, keyed by syntax name. A key of `code:` and a language (`code:mermaid`) renders code blocks of that language, such as diagrams. The key `html` renders raw HTML: HTML blocks (`kind` `'block'`), and inline HTML (`'inline'`) one run at a time, an opening tag through its closing tag with the Markdown between (`<kbd>**Ctrl**</kbd>`), or a single tag (`<br>`). The editor never renders HTML itself, so sanitize it in the view. While editing, a token shows its source when the caret touches it, and a block when the selection is in it; clicking either does the same. Read-only always shows the rendered view. A view that finishes later, such as a diagram library that loads on demand, fills in a placeholder and returns a promise: the editor shows the placeholder, then the finished element; a promise that rejects or resolves to `false` shows the source. `math()` uses this when given a render function; the core has no math renderer of its own, so pass one such as KaTeX. A render function may return a promise, for a renderer loaded on demand; the formula's source shows until it resolves:
 
 ```ts
 import katex from 'katex';

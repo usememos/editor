@@ -103,6 +103,26 @@
 
 /* Code */
 .mbe-root .mbe-code-bar { display: flex; align-items: center; }
+/* The copy button sits at the end of the bar and shows on hover or focus; always on touch screens. */
+.mbe-root .mbe-code-copy {
+  margin-inline-start: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: none;
+  padding: 2px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0;
+}
+.mbe-root .mbe-code:hover .mbe-code-copy,
+.mbe-root .mbe-code-copy:focus-visible,
+.mbe-root .mbe-code-copy.mbe-copied { opacity: 1; }
+@media (hover: none) {
+  .mbe-root .mbe-code-copy { opacity: 1; }
+}
 .mbe-root .mbe-code-lang {
   font: inherit;
   color: inherit;

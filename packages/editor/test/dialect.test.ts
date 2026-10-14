@@ -174,7 +174,7 @@ describe('typing a token', () => {
   it('leaves prices as text', () => {
     const block = type('costs $5 and $10 ');
     expect('content' in block && inlineText(block.content)).toBe('costs $5 and $10 ');
-    expect(serializeMarkdown({ blocks: [block] }, NOTES)).toBe('costs \\$5 and \\$10&#32;\n');
+    expect(serializeMarkdown({ blocks: [block] }, NOTES)).toBe('costs \\$5 and \\$10\n');
   });
 
   it('turns [^1] into a footnote reference', () => {

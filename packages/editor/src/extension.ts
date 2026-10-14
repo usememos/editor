@@ -2,11 +2,11 @@
 // decorations, and hooks into paste, drop and creation. An extension is a
 // plain object; built-in factories such as `math()` return one.
 
-import type { Decorator } from './decorations';
+import type { Decoration, Decorator } from './decorations';
 import type { Editor } from './editor';
 import type { SuggestionConfig } from './extensions/suggestion';
 import type { MarkdownSyntax } from './markdown/options';
-import type { Position } from './model';
+import type { CodeBlock, Position } from './model';
 import type { ThemeClasses } from './theme';
 
 export interface ExtensionContext {
@@ -21,11 +21,25 @@ export type KeyHandler = (ctx: ExtensionContext) => boolean;
 
 /**
  * Renders the Markdown source of a token (`kind` is `inline`, `element` a
- * span) or of a raw block (`block`, a div) into `element`. Returns false, or
- * throws, to show the source instead. Results are cached by source, so the
- * output must depend on nothing else.
+ * span), a raw block, or the code of a code block (`block`, a div) into
+ * `element`. Returns false, or throws, to show the source instead. Results
+ * are cached by source, so the output must depend on nothing else.
+ *
+ * A view that finishes later (a diagram, a renderer that loads on demand)
+ * fills in what it can at once and returns a promise: the editor shows that
+ * meanwhile, and the finished element when the promise resolves. A promise
+ * that rejects or resolves to false shows the source.
  */
-export type SyntaxView = (source: string, element: HTMLElement, kind: 'inline' | 'block') => void | false;
+export type SyntaxView = (source: string, element: HTMLElement, kind: 'inline' | 'block') => void | false | PromiseLike<void | false>;
+
+/** A code block's code, for decorations such as syntax highlighting. */
+export interface CodeDecorationContext {
+  readonly block: CodeBlock;
+  /** The code. */
+  readonly text: string;
+  /** The info string's language, as written; empty for none. */
+  readonly language: string;
+}
 
 export interface Extension {
   /** Unique name, for debugging and for replacing a built-in extension. */
@@ -53,11 +67,19 @@ export interface Extension {
    */
   readonly handleDrop?: (ctx: ExtensionContext & { readonly event: DragEvent; readonly position: Position | null }) => boolean;
   /**
+   * Classes on ranges of a code block's code, for syntax highlighting, in
+   * editing and read-only alike. Recomputed only for code blocks that
+   * changed; call `editor.redecorate()` when a language finishes loading.
+   * Never saved.
+   */
+  readonly codeDecorations?: (ctx: CodeDecorationContext) => readonly Decoration[];
+  /**
    * Shows tokens and raw blocks of a syntax rendered instead of as source,
-   * keyed by syntax name; `math()` uses this to show formulas. While editing,
-   * a token shows its source when the caret touches it, and a raw block when
-   * the selection is in it; clicking either does the same. Read-only always
-   * shows the rendered view.
+   * keyed by syntax name; `math()` uses this to show formulas. `code:` and a
+   * language (`code:mermaid`) renders code blocks of that language, such as
+   * diagrams. While editing, a token shows its source when the caret touches
+   * it, and a block when the selection is in it; clicking either does the
+   * same. Read-only always shows the rendered view.
    */
   readonly views?: Readonly<Record<string, SyntaxView>>;
   /**

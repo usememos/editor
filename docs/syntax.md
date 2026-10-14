@@ -233,7 +233,7 @@ Marks combine freely, except that text in a code span takes no other mark. The s
 
 - A link is an attribute on text spans. Links do not nest.
 - Link titles and reference labels are not kept: an edited block saves `[text](url "title")` and `[text][ref]` as `[text](url)`. Image titles are kept.
-- An image is one inline atom. Its alt text is plain text. `resolveImageSrc` can change the displayed `src` without changing the saved Markdown.
+- An image is one inline atom. Its alt text is plain text. `resolveUrl` can change or drop the displayed `src` without changing the saved Markdown.
 
 ### Autolink literals
 

@@ -33,6 +33,7 @@ import {
   normalizeInline,
   sameMarks,
   setMarkInRange,
+  deleteInline,
 } from '../model';
 import { AUTOLINK_EMAIL, AUTOLINK_URI, isUnicodePunctuation, isUnicodeWhitespace, parseInline } from './inline';
 import { emailLiterals, isLiteralBoundary, literalHref, urlLiteralAt } from './autolink';
@@ -301,6 +302,10 @@ const reSpecWhitespace = /^[\t\n\f\r\p{Zs}]+|[\t\n\f\r\p{Zs}]+$/gu;
  * - Whitespace at the edges of a bold, italic or strike run moves outside it,
  *   because `**foo **` is not valid emphasis.
  * - A "\n" in a code span is a hard break outside the code span.
+ * - Spaces and tabs that start or end a line of text are dropped, because
+ *   Markdown strips them. Writing them as character references instead would
+ *   leave "&#32;" behind wherever someone typed a space first or last. A line
+ *   of only whitespace keeps it, so the line is not lost.
  */
 export function representableInline(inline: Inline): Span[] {
   let spans = normalizeInline(
@@ -336,7 +341,37 @@ export function representableInline(inline: Inline): Span[] {
     endRun();
     for (const [from, to] of removals) spans = setMarkInRange(spans, from, to, mark, false);
   }
-  return spans;
+  return dropLineEdgeSpaces(spans);
+}
+
+/** Text a line-end space can be dropped from: not code, raw HTML, a link, an image or an extension token. */
+const isPlainSpan = (s: Span) => !s.link && !s.image && !s.token && !s.marks.includes('code') && !s.marks.includes('html');
+
+function dropLineEdgeSpaces(spans: Span[]): Span[] {
+  const text = spans.map((s) => s.text).join('');
+  if (!/[ \t](\n|$)|(^|\n)[ \t]/.test(text)) return spans;
+  // The span holding each character, to skip literal text.
+  const plain: boolean[] = [];
+  for (const s of spans) for (let i = 0; i < s.text.length; i++) plain.push(isPlainSpan(s));
+  const removals: [number, number][] = [];
+  let lineStart = 0;
+  for (let i = 0; i <= text.length; i++) {
+    if (i < text.length && text[i] !== '\n') continue;
+    const space = (k: number) => (text[k] === ' ' || text[k] === '\t') && plain[k];
+    let to = lineStart;
+    while (to < i && space(to)) to++;
+    let from = i;
+    while (from > lineStart && space(from - 1)) from--;
+    // A line of only whitespace keeps it.
+    if (to < from) {
+      if (to > lineStart) removals.push([lineStart, to]);
+      if (from < i) removals.push([from, i]);
+    }
+    lineStart = i + 1;
+  }
+  let out: Span[] = spans;
+  for (let k = removals.length - 1; k >= 0; k--) out = deleteInline(out, removals[k]![0], removals[k]![1]);
+  return normalizeInline(out);
 }
 
 // -- Tokens -----------------------------------------------------------------

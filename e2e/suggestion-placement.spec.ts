@@ -115,7 +115,7 @@ test('inside an open modal dialog, the popup is appended to the dialog', async (
   expect(await page.evaluate(() => document.querySelector('.tag-menu')!.parentElement!.tagName)).toBe('DIALOG');
   // It is not inert: a click picks an item.
   await page.locator('.tag-menu .mbe-menu-item', { hasText: '#reading' }).click();
-  expect(await page.evaluate(() => (window as any).editor.getMarkdown())).toBe('x #reading&#32;\n');
+  expect(await page.evaluate(() => (window as any).editor.getMarkdown())).toBe('x #reading\n');
 });
 
 test('in a transformed container given as popupContainer, the popup still lines up with the trigger', async ({ page }) => {

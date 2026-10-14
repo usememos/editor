@@ -296,13 +296,20 @@ describe('serializer conventions', () => {
     );
   });
 
-  it('keeps leading, trailing and line-edge spaces as entities', () => {
-    expect(serializeInline([t('  a  \n    b')])).toBe('&#32; a &#32;\\\n&#32;   b');
+  it('drops spaces that start or end a line', () => {
+    expect(serializeInline([t('  a  \n    b')])).toBe('a\\\nb');
+    expect(serializeInline([t('    indented, not code')])).toBe('indented, not code');
+    // A space typed last, as after picking an autocomplete item, leaves nothing behind.
+    expect(serializeInline([t('a #work ')])).toBe('a #work');
+    expect(serializeInline([t('a '), t('b', 'code'), t(' ')])).toBe('a `b`');
+    // Not inside code or links, and not a line of only whitespace.
+    expect(serializeInline([t('a', 'code'), t(' x '), t('b ', 'code')])).toBe('`a` x `b `');
+    expect(serializeInline([t('  ')])).toBe('&#32;&#32;');
     expect(md(heading(1, [t('x\ny')]), paragraph([t('end\n')]))).toBe('# x&#10;y\n\nend&#10;\n');
   });
 
   it('moves whitespace out of marks', () => {
-    expect(serializeInline([t(' bold ', 'bold'), t('x')])).toBe('&#32;**bold** x');
+    expect(serializeInline([t('a'), t(' bold ', 'bold'), t('x')])).toBe('a **bold** x');
   });
 
   it('uses "_" where "*" would merge with a neighbouring delimiter', () => {
@@ -319,7 +326,7 @@ describe('serializer conventions', () => {
   });
 
   it('escapes pipes in table cells, including code spans', () => {
-    expect(md(table([null], [[[t('a|b', 'code')]], [[t(' x ')]]]))).toBe('| `a\\|b` |\n| --- |\n| &#32;x&#32; |\n');
+    expect(md(table([null], [[[t('a|b', 'code')]], [[t(' x ')]]]))).toBe('| `a\\|b` |\n| --- |\n| x |\n');
   });
 });
 

@@ -70,6 +70,11 @@ export class BlockHandle {
     this.el.style.top = `${Math.round(rect.top + firstLine / 2 - size / 2 - offset.y)}px`;
   }
 
+  /** True when `node` is the handle or inside it. */
+  contains(node: Node): boolean {
+    return this.el.contains(node);
+  }
+
   hide(): void {
     this.cancelHide();
     this.el.hidden = true;

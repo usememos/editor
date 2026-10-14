@@ -133,21 +133,39 @@ function pickAction(rng: Rng): Action {
 const shape = (page: Page) =>
   page.evaluate(() => {
     const emphasis = new Set(['bold', 'italic', 'strike']);
+    // Spaces and tabs that start or end a line of plain text are not saved (Markdown strips them),
+    // so they are left out here too, as the serializer's representableInline does.
+    const plain = (span: any) => !span.link && !span.image && !span.token && !span.marks.includes('code') && !span.marks.includes('html');
+    const withoutLineEndSpaces = (spans: any[]) => {
+      const chars = spans.flatMap((span) => [...(span.text as string)].map((ch) => ({ ch, span })));
+      const drop = new Set<number>();
+      let lineStart = 0;
+      for (let i = 0; i <= chars.length; i++) {
+        if (i < chars.length && chars[i]!.ch !== '\n') continue;
+        const space = (k: number) => /[ \t]/.test(chars[k]!.ch) && plain(chars[k]!.span);
+        let to = lineStart;
+        while (to < i && space(to)) to++;
+        let from = i;
+        while (from > lineStart && space(from - 1)) from--;
+        if (to < from) for (const k of [...Array(i - lineStart).keys()].map((n) => n + lineStart)) if (k < to || k >= from) drop.add(k);
+        lineStart = i + 1;
+      }
+      return chars.filter((_, i) => !drop.has(i));
+    };
     const inline = (spans: any[]) => {
       const out: any[] = [];
-      for (const span of spans)
-        for (const ch of span.text as string) {
-          const marks =
-            ch === '\n'
-              ? span.marks.filter((m: string) => !emphasis.has(m) && m !== 'code')
-              : /\s/.test(ch) && !span.marks.includes('code')
-                ? span.marks.filter((m: string) => !emphasis.has(m))
-                : span.marks;
-          const format = JSON.stringify({ marks, link: span.link, token: span.token, image: span.image });
-          const last = out[out.length - 1];
-          if (last && last.format === format) last.text += ch;
-          else out.push({ text: ch, format });
-        }
+      for (const { ch, span } of withoutLineEndSpaces(spans)) {
+        const marks =
+          ch === '\n'
+            ? span.marks.filter((m: string) => !emphasis.has(m) && m !== 'code')
+            : /\s/.test(ch) && !span.marks.includes('code')
+              ? span.marks.filter((m: string) => !emphasis.has(m))
+              : span.marks;
+        const format = JSON.stringify({ marks, link: span.link, token: span.token, image: span.image });
+        const last = out[out.length - 1];
+        if (last && last.format === format) last.text += ch;
+        else out.push({ text: ch, format });
+      }
       return out.map((s) => `${JSON.stringify(s.text)}${s.format}`).join(' ');
     };
     const blocks = [...((window as any).editor.state.doc.blocks as any[])];

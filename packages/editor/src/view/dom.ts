@@ -9,6 +9,7 @@
 import {
   type Block,
   type Cell,
+  type CodeBlock,
   type Doc,
   type Inline,
   type Mark,
@@ -18,13 +19,21 @@ import {
   ATOM_CHAR,
   inlineLength,
   inlineText,
+  sliceInline,
 } from '../model';
 import type { SyntaxView } from '../extension';
 import type { Labels } from '../labels';
+import type { IconName } from '../icons';
 import type { ThemeClasses } from '../theme';
 import { type Decoration, decorationContext, splitByDecorations } from '../decorations';
+import { serializeInline } from '../markdown/serialize';
 
 export const BLOCK_ATTR = 'data-block-id';
+
+/** The view name for code blocks of a language: `code:mermaid`. */
+export function codeViewName(language: string): string {
+  return `code:${language.trim().toLowerCase()}`;
+}
 const CONTENT_ATTR = 'data-content';
 const FILL_ATTR = 'data-mbe-fill';
 const ATOM_ATTR = 'data-atom';
@@ -68,27 +77,46 @@ function blockClasses(block: Block, theme: ThemeClasses): string | undefined {
   }
 }
 
-/** Only these URL schemes become clickable `href`s. Others are kept in the model but not linked. */
-export function safeHref(href: string): string | null {
-  const trimmed = href.trim();
+/** What a URL in the document is used for. */
+export type UrlKind = 'link' | 'image';
+
+/** Maps a link or image URL from the document to the URL to use, or null to drop it. The saved Markdown keeps the original. */
+export type ResolveUrl = (url: string, kind: UrlKind) => string | null;
+
+/**
+ * The default URL policy: relative URLs and fragments, and the schemes
+ * `http`, `https`, `mailto` and `tel`. Other URLs (`javascript:`, `data:`)
+ * are kept in the model but not used. Apps that allow more can call this
+ * for everything else.
+ */
+export const defaultResolveUrl: ResolveUrl = (url) => {
+  const trimmed = url.trim();
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(trimmed);
   if (!scheme) return trimmed; // relative URL or fragment
   return ['http', 'https', 'mailto', 'tel'].includes(scheme[1]!.toLowerCase()) ? trimmed : null;
-}
+};
 
 /** What rendering needs besides the block. */
 export interface RenderContext {
   readonly doc: Document;
   readonly labels: Labels;
-  readonly resolveImageSrc?: (src: string) => string;
+  readonly resolveUrl: ResolveUrl;
+  /** `referrerpolicy` for images. */
+  readonly referrerPolicy?: ReferrerPolicy;
   /** Decorations for a text container. */
   readonly decorate?: (block: Block, content: Inline, cell?: Cell) => readonly Decoration[];
+  /** Decorations for a code block's code, such as syntax highlighting. */
+  readonly decorateCode?: (block: CodeBlock) => readonly Decoration[];
   /** Syntaxes that have a view. */
   readonly views?: ReadonlyMap<string, SyntaxView>;
   /** A token or raw block of an extension syntax, rendered; null shows its source. */
   readonly view?: (syntax: string, source: string, kind: 'inline' | 'block') => HTMLElement | null;
   /** Theme classes for rendered elements. */
   readonly classes: ThemeClasses;
+  /** The icon of a UI control, or null for none. */
+  readonly icon?: (name: IconName) => Node | null;
+  /** Code blocks get a copy button. */
+  readonly codeCopy?: boolean;
 }
 
 /**
@@ -146,6 +174,15 @@ function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HT
       break;
     }
     case 'code': {
+      // Rendered by a view of its language, such as a diagram, unless the selection is in it.
+      const view = reveal?.has(REVEAL_BLOCK) ? null : ctx.view?.(codeViewName(block.language), inlineText(block.content), 'block');
+      if (view) {
+        root = view;
+        root.classList.add('mbe-view-block');
+        root.contentEditable = 'false';
+        root.dataset.language = block.language;
+        break;
+      }
       root = el('div');
       root.dataset.language = block.language;
       const bar = el('div', 'mbe-code-bar');
@@ -156,6 +193,7 @@ function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HT
       lang.setAttribute('aria-label', labels.language);
       lang.placeholder = labels.plainText;
       bar.appendChild(lang);
+      if (ctx.codeCopy) bar.appendChild(copyButton(ctx));
       const pre = el('pre');
       const code = el('code');
       code.spellcheck = false;
@@ -238,7 +276,8 @@ function fillContent(
     target.appendChild(fill(doc));
     return;
   }
-  const decorations = decorated && ctx.decorate ? ctx.decorate(block, inline, cell) : [];
+  const decorations =
+    block.type === 'code' ? (ctx.decorateCode?.(block) ?? []) : decorated && ctx.decorate ? ctx.decorate(block, inline, cell) : [];
   const only = inline.length === 1 ? inline[0]! : null;
   if (only && decorations.length === 0 && only.marks.length === 0 && !only.link && !only.token && !only.image) {
     // Plain text, the most common content: one text node.
@@ -251,10 +290,69 @@ function fillContent(
   if (last && last.text.endsWith('\n')) target.appendChild(fill(doc));
 }
 
+/** A code block's copy button. The editor handles its clicks (see `Editor.copyCode`). */
+function copyButton(ctx: RenderContext): HTMLElement {
+  const button = ctx.doc.createElement('button');
+  button.type = 'button';
+  button.className = 'mbe-code-copy';
+  button.tabIndex = -1;
+  button.setAttribute('aria-label', ctx.labels.copyCode);
+  button.title = ctx.labels.copyCode;
+  const icon = ctx.icon?.('copyCode');
+  if (icon) button.appendChild(icon);
+  return button;
+}
+
 function fill(doc: Document): HTMLElement {
   const br = doc.createElement('br');
   br.setAttribute(FILL_ATTR, '');
   return br;
+}
+
+const VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
+
+/**
+ * Runs of inline raw HTML that render as one piece: an opening tag through
+ * its closing tag, with the text between (`<kbd>Ctrl</kbd>`), or a single tag
+ * (`<br>`, an unmatched tag, a comment). Runs that would cross a link are
+ * left out. Offsets are into the container's text.
+ */
+export function htmlRuns(inline: Inline): { from: number; to: number }[] {
+  const spans: { span: Span; from: number; to: number }[] = [];
+  let pos = 0;
+  for (const span of inline) {
+    spans.push({ span, from: pos, to: pos + span.text.length });
+    pos += span.text.length;
+  }
+  const isHtml = (span: Span) => span.marks.includes('html');
+  const runs: { from: number; to: number }[] = [];
+  for (let i = 0; i < spans.length; i++) {
+    const { span, from, to } = spans[i]!;
+    if (!isHtml(span)) continue;
+    const open = /^<([A-Za-z][A-Za-z0-9-]*)\b[^>]*?(\/?)>$/.exec(span.text);
+    let end = i;
+    if (open && !open[2] && !VOID_TAGS.has(open[1]!.toLowerCase())) {
+      const name = open[1]!.toLowerCase();
+      let depth = 0;
+      for (let j = i + 1; j < spans.length; j++) {
+        const t = spans[j]!.span;
+        if (t.link) break;
+        if (!isHtml(t)) continue;
+        const tag = /^<(\/?)([A-Za-z][A-Za-z0-9-]*)\b[^>]*?(\/?)>$/.exec(t.text);
+        if (!tag || tag[2]!.toLowerCase() !== name || tag[3]) continue;
+        if (!tag[1]) depth++;
+        else if (depth > 0) depth--;
+        else {
+          end = j;
+          break;
+        }
+      }
+    }
+    if (spans.slice(i, end + 1).some((s) => s.span.link)) continue;
+    runs.push({ from, to: end === i ? to : spans[end]!.to });
+    i = end;
+  }
+  return runs;
 }
 
 function renderInline(
@@ -271,16 +369,37 @@ function renderInline(
   const viewed = views
     ? (span: Span, from: number) => !!span.token && views.has(span.token) && !reveal?.has(tokenKey(cell, from))
     : undefined;
-  const pieces = splitByDecorations(inline, decorations, viewed);
+  // Inline raw HTML renders through the `html` view, one run at a time, unless revealed.
+  const runs = views?.has('html') && inline.some((s) => s.marks.includes('html'))
+    ? htmlRuns(inline).filter((run) => !reveal?.has(tokenKey(cell, run.from)))
+    : [];
+  const inRun = (from: number) => runs.some((run) => from >= run.from && from < run.to);
+  const atomic = viewed || runs.length > 0 ? (span: Span, from: number) => !!viewed?.(span, from) || inRun(from) : undefined;
+  const pieces = splitByDecorations(inline, decorations, atomic);
   const render = (piece: (typeof pieces)[number]) =>
-    decorate(renderSpan(piece.span, ctx, piece.atomic), piece.decorations, doc);
+    decorate(renderSpan(piece.span, ctx, piece.atomic && !inRun(offsets.get(piece) ?? -1)), piece.decorations, doc);
+  const offsets = new Map<(typeof pieces)[number], number>();
+  let offset = 0;
+  for (const piece of pieces) {
+    offsets.set(piece, offset);
+    offset += piece.span.text.length;
+  }
   // Consecutive spans with the same link share one <a>.
   let i = 0;
   while (i < pieces.length) {
     const span = pieces[i]!.span;
+    const run = runs.find((r) => r.from === offsets.get(pieces[i]!));
+    const view = run && ctx.view?.('html', serializeInline(sliceInline(inline, run.from, run.to)), 'inline');
+    if (run && view) {
+      // One atom as long as the run's text, so DOM-to-model mapping still sees it.
+      const text = inlineText(sliceInline(inline, run.from, run.to));
+      parent.appendChild(atom(view, classes('mbe-view', 'mbe-view-html', ctx.classes.token?.html), text));
+      while (i < pieces.length && offsets.get(pieces[i]!)! < run.to) i++;
+      continue;
+    }
     if (span.link) {
       const a = doc.createElement('a');
-      const href = safeHref(span.link);
+      const href = ctx.resolveUrl(span.link, 'link');
       if (href !== null) a.setAttribute('href', href);
       a.dataset.href = span.link;
       a.className = classes('mbe-link', ctx.classes.link);
@@ -325,7 +444,11 @@ function renderSpan(span: Span, ctx: RenderContext, viewed = false): Node {
   if (view) return wrapMarks(span, atom(view, classes('mbe-view', `mbe-view-${span.token}`, ctx.classes.token?.[span.token!]), span.text), ctx);
   if (span.image) {
     const img = doc.createElement('img');
-    const src = safeHref(ctx.resolveImageSrc ? ctx.resolveImageSrc(span.image.src) : span.image.src);
+    // Off-screen images load when they come near the viewport.
+    img.setAttribute('loading', 'lazy');
+    img.setAttribute('decoding', 'async');
+    if (ctx.referrerPolicy) img.setAttribute('referrerpolicy', ctx.referrerPolicy);
+    const src = ctx.resolveUrl(span.image.src, 'image');
     if (src !== null) img.src = src;
     img.alt = span.image.alt;
     if (span.image.title) img.title = span.image.title;
@@ -370,16 +493,30 @@ export class BlockRenderer {
   /** Last number written into each ordered item's marker, keyed by element. */
   private readonly numbers = new WeakMap<HTMLElement, number>();
 
-  /** Maps an image `src` to the URL to display. Set before a full render. */
-  resolveImageSrc?: (src: string) => string;
+  /** The URL policy for links and images. Set before a full render. */
+  resolveUrl: ResolveUrl = defaultResolveUrl;
+  /** `referrerpolicy` for images. */
+  referrerPolicy?: ReferrerPolicy;
   /** Decorations for a text container. */
   decorate?: RenderContext['decorate'];
+  /** Decorations for a code block's code. */
+  decorateCode?: RenderContext['decorateCode'];
+  /**
+   * Called when views that returned a promise settle, with the blocks that
+   * showed them. Those blocks must render again to show the finished view,
+   * or their source if it failed.
+   */
+  onViewSettled?: (blockIds: readonly string[]) => void;
   /** Widget elements to place after a block. */
   widgetsAfter?: (blockId: string) => readonly HTMLElement[] | undefined;
   /** Views of extension syntaxes, by syntax name. */
   views?: ReadonlyMap<string, SyntaxView>;
   /** Theme classes for rendered elements. Set before a full render. */
   classes: ThemeClasses = NO_CLASSES;
+  /** The icon of a UI control. */
+  icon?: (name: IconName) => Node | null;
+  /** Code blocks get a copy button. */
+  codeCopy = false;
   /** Per block, the views that show their source. A block re-renders when its entry changes. */
   revealed: ReadonlyMap<string, BlockReveal> = new Map();
   /**
@@ -387,6 +524,12 @@ export class BlockRenderer {
    * Cloned on reuse: typing re-renders a block and every formula in it.
    */
   private readonly viewCache = new Map<string, HTMLElement>();
+  /** Views whose promise has not settled, by cache key, with the blocks showing them. */
+  private readonly pendingViews = new Map<string, Set<string>>();
+  /** Views whose promise rejected or resolved to false: their source shows. */
+  private readonly failedViews = new Set<string>();
+  /** The block being rendered, so a pending view knows which blocks to render again. */
+  private renderingBlock = '';
 
   constructor(
     private readonly root: HTMLElement,
@@ -397,11 +540,15 @@ export class BlockRenderer {
     return {
       doc: this.root.ownerDocument,
       labels: this.labels,
-      resolveImageSrc: this.resolveImageSrc,
+      resolveUrl: this.resolveUrl,
+      referrerPolicy: this.referrerPolicy,
       decorate: this.decorate,
+      decorateCode: this.decorateCode,
       views: this.views,
       view: this.views && ((syntax, source, kind) => this.renderView(syntax, source, kind)),
       classes: this.classes,
+      icon: this.icon,
+      codeCopy: this.codeCopy,
     };
   }
 
@@ -409,20 +556,46 @@ export class BlockRenderer {
     const view = this.views?.get(syntax);
     if (!view) return null;
     const key = `${kind}\0${syntax}\0${source}`;
+    if (this.failedViews.has(key)) return null;
     let el = this.viewCache.get(key);
     if (el) {
       this.viewCache.delete(key);
     } else {
       el = this.root.ownerDocument.createElement(kind === 'inline' ? 'span' : 'div');
+      let result: ReturnType<SyntaxView>;
       try {
-        if (view(source, el, kind) === false) return null;
+        result = view(source, el, kind);
       } catch {
         return null;
       }
+      if (result === false) return null;
+      if (result && typeof result.then === 'function') this.awaitView(key, result);
       if (this.viewCache.size >= 500) this.viewCache.delete(this.viewCache.keys().next().value!);
     }
+    this.pendingViews.get(key)?.add(this.renderingBlock);
     this.viewCache.set(key, el);
     return el.cloneNode(true) as HTMLElement;
+  }
+
+  /**
+   * A view that renders later (a diagram, a lazily loaded renderer) shows what
+   * it filled in at once, and its blocks render again when it settles.
+   */
+  private awaitView(key: string, result: PromiseLike<void | false>): void {
+    this.pendingViews.set(key, new Set());
+    const settle = (ok: boolean) => {
+      const blocks = this.pendingViews.get(key);
+      this.pendingViews.delete(key);
+      if (!ok) {
+        this.failedViews.add(key);
+        this.viewCache.delete(key);
+      }
+      if (blocks && blocks.size > 0) this.onViewSettled?.([...blocks]);
+    };
+    result.then(
+      (value) => settle(value !== false),
+      () => settle(false),
+    );
   }
 
   /**
@@ -433,6 +606,7 @@ export class BlockRenderer {
     const ctx = this.context();
     const next = new Map<string, { block: Block; el: HTMLElement; reveal?: BlockReveal }>();
     for (const block of doc.blocks) {
+      this.renderingBlock = block.id;
       const prev = this.rendered.get(block.id);
       const reveal = this.revealed.get(block.id);
       const reuse = !force && prev && prev.block === block && prev.el.parentNode === this.root && sameReveal(prev.reveal, reveal);

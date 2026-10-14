@@ -101,7 +101,7 @@ test('the sample shows every kind of block and saves byte for byte', async ({ pa
   await expect(editor.locator('.mbe-code')).toHaveCount(1);
   await expect(editor.locator('table th')).toHaveText(['Feature', 'Status']);
   await expect(editor.locator('hr')).toHaveCount(1);
-  await expect(editor.locator('.mbe-token-footnote')).toHaveText('[^1]');
+  await expect(editor.locator('.mbe-footnote-ref')).toHaveText('1');
   await expect(editor.locator('.tag')).toHaveText(['#work/planning', '#work']);
   await expect(editor.locator('.mention')).toHaveText('@alice');
   await expect(editor.locator('a.mbe-link')).toHaveText('CommonMark');

@@ -30,7 +30,7 @@ test('tags and mentions highlight as typed, but not in URLs, e-mail addresses or
   await expect(page.locator('#editor .mbe-tag')).toHaveText(['#work/q1']);
   await expect(page.locator('#editor .mbe-mention')).toHaveText(['@alice']);
   await expect(page.locator('#editor a')).toHaveText(['https://x.com/#anchor', 'bob@example.com']);
-  expect(await md(page)).toBe('Plan #work/q1 with @alice, see https://x.com/#anchor and mail bob@example.com C#&#32;\n');
+  expect(await md(page)).toBe('Plan #work/q1 with @alice, see https://x.com/#anchor and mail bob@example.com C#\n');
 });
 
 test('a typed \\# is an escape: saved as written and never a tag', async ({ page }) => {
@@ -53,7 +53,7 @@ test('the # menu opens at the start of a block and after a space only', async ({
   await expect(menu.locator('.mbe-menu-item')).toHaveText(['#work']);
   await page.keyboard.press('Enter');
   await expect(menu).toBeHidden();
-  expect(await md(page)).toBe('a# #work&#32;\n');
+  expect(await md(page)).toBe('a# #work\n');
 });
 
 test('# then a space at the start of a paragraph makes a heading, and the menu closes', async ({ page }) => {

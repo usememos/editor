@@ -18,9 +18,14 @@ import type { InlineSyntax } from '../markdown/options';
 export type TagScanner = (text: string, from: number, to: number) => Iterable<TextRange>;
 
 export interface TagsOptions {
-  /** Class on each match. Default `mbe-tag` for tags and `mbe-mention` for mentions. */
-  readonly class?: string;
-  readonly attributes?: Readonly<Record<string, string>>;
+  /**
+   * Class on each match. Default `mbe-tag` for tags and `mbe-mention` for
+   * mentions. A function gets the match as written (`#work/planning`), for a
+   * class per tag or per person.
+   */
+  readonly class?: string | ((match: string) => string);
+  /** Attributes on each match, or a function of the match, such as `data-tag` or a custom color. */
+  readonly attributes?: Readonly<Record<string, string>> | ((match: string) => Readonly<Record<string, string>> | undefined);
   /** Finds matches in a run of text. Default `scanTags` or `scanMentions`. */
   readonly scan?: TagScanner;
 }
@@ -110,7 +115,7 @@ export function* scanMentions(text: string, from = 0, to = text.length): Generat
 }
 
 /** Runs the scanner over each run of text with one format, skipping excluded spans. */
-function decorate(scan: TagScanner, cls: string, attributes: Readonly<Record<string, string>> | undefined) {
+function decorate(scan: TagScanner, cls: NonNullable<TagsOptions['class']>, attributes: TagsOptions['attributes']) {
   return ({ text, content }: DecorationContext): Decoration[] => {
     const out: Decoration[] = [];
     let pos = 0;
@@ -120,7 +125,11 @@ function decorate(scan: TagScanner, cls: string, attributes: Readonly<Record<str
         for (const r of scan(text, pos, end)) {
           const from = Math.max(r.from, pos);
           const to = Math.min(r.to, end);
-          if (to > from) out.push(attributes ? { from, to, class: cls, attributes } : { from, to, class: cls });
+          if (to <= from) continue;
+          const match = text.slice(from, to);
+          const className = typeof cls === 'function' ? cls(match) : cls;
+          const attrs = typeof attributes === 'function' ? attributes(match) : attributes;
+          out.push(attrs ? { from, to, class: className, attributes: attrs } : { from, to, class: className });
         }
       }
       pos = end;

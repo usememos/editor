@@ -75,9 +75,10 @@ export interface MathOptions {
    * Renders TeX into `element`. `displayMode` is true for a `$$` block.
    * KaTeX's `render` has this shape:
    * `render: (tex, el, options) => katex.render(tex, el, { ...options, throwOnError: false })`.
-   * Throwing shows the source instead.
+   * Throwing shows the source instead. A renderer that loads on demand can
+   * return a promise; the source shows until it resolves (see `views`).
    */
-  readonly render?: (tex: string, element: HTMLElement, options: { readonly displayMode: boolean }) => void;
+  readonly render?: (tex: string, element: HTMLElement, options: { readonly displayMode: boolean }) => void | PromiseLike<void>;
 }
 
 /** The TeX inside a token (`$x$`, `$$x$$`) or a fenced block (`$$` lines around it). */
@@ -101,7 +102,11 @@ export function math(options: MathOptions = {}): Extension {
       math(source, element, kind) {
         const tex = mathSource(source, kind);
         if (!tex.trim()) return false;
-        render(tex, element, { displayMode: kind === 'block' });
+        const result = render(tex, element, { displayMode: kind === 'block' });
+        if (!result) return;
+        // While the renderer loads, the formula's source shows in its place.
+        if (!element.hasChildNodes()) element.textContent = source;
+        return result;
       },
     },
   };

@@ -85,7 +85,7 @@ test('the default command writes the first trigger, the value and a space, unles
   await page.keyboard.type(' ＃wo');
   await expect(items(page)).toHaveText(['#work', '#work/planning']);
   await page.keyboard.press('Enter');
-  expect(await md(page)).toBe('b #work&#32;');
+  expect(await md(page)).toBe('b #work');
 });
 
 test('allow keeps a bare # at the start of a paragraph closed; Ctrl+Space opens it', async ({ page }) => {
@@ -96,7 +96,7 @@ test('allow keeps a bare # at the start of a paragraph closed; Ctrl+Space opens 
   await page.keyboard.type('r');
   await expect(items(page)).toHaveText(['#reading']);
   await page.keyboard.press('Enter');
-  expect(await md(page)).toBe('#reading&#32;\n');
+  expect(await md(page)).toBe('#reading\n');
   // "# " still makes a heading.
   await page.keyboard.press('Enter');
   await page.keyboard.type('# Title');
@@ -258,7 +258,7 @@ test.describe('items, keys and accessibility', () => {
     await expect(menu(page).locator('mark.mbe-menu-match')).toHaveText(['Al', 'Al']);
     // The default command writes the value: the id.
     await page.keyboard.press('Enter');
-    expect(await md(page)).toBe('@alan&#32;\n');
+    expect(await md(page)).toBe('@alan\n');
   });
 
   test('arrows wrap, Page keys jump, Tab accepts and Shift+Tab is not taken', async ({ page }) => {
@@ -277,7 +277,7 @@ test.describe('items, keys and accessibility', () => {
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Tab');
     await expect(menu(page)).toBeHidden();
-    expect(await md(page)).toBe('x @alan&#32;\n');
+    expect(await md(page)).toBe('x @alan\n');
   });
 
   test('the highlight stays on the same item when the items change; a hidden popup takes no keys', async ({ page }) => {

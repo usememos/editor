@@ -16,7 +16,7 @@ import { docToHtml } from './clipboard/toHtml';
 import { htmlToDoc } from './clipboard/fromHtml';
 import { type ChangeKind, History } from './history';
 import { DEFAULT_LABELS, type Labels } from './labels';
-import { type Icon, type IconName, type Icons, builtinIcon } from './icons';
+import { type Icon, type IconName, type Icons, builtinIcon, iconNode } from './icons';
 import { parseMarkdown } from './markdown/parse';
 import { serializeBlocks, serializeMarkdown } from './markdown/serialize';
 import { type MarkdownSource, loadMarkdown } from './markdown/source';
@@ -32,6 +32,8 @@ import {
   type Block,
   type Doc,
   type EditorState,
+  type HeadingBlock,
+  type CodeBlock,
   type HeadingLevel,
   type Mark,
   type Position,
@@ -56,7 +58,7 @@ import {
 import { FormatToolbar, LinkPopover } from './ui/toolbar';
 import { BlockHandle } from './ui/handle';
 import { Menu, type MenuSection, isMac, isSafari, isTouch, matches, setPopupContainer } from './ui/popup';
-import { BLOCK_ATTR, BlockRenderer, childIndex, contentElement, domText, domToPosition, positionToDom, safeHref } from './view/dom';
+import { BLOCK_ATTR, BlockRenderer, childIndex, contentElement, domText, domToPosition, positionToDom, type ResolveUrl, defaultResolveUrl } from './view/dom';
 import { revealedViews, sameRevealed, viewEntry } from './view/reveal';
 import { scrollRectIntoView } from './view/scroll';
 import { type Theme, mergeClasses, tokenProperties } from './theme';
@@ -80,8 +82,30 @@ export interface EditorOptions {
   autofocus?: boolean | 'start' | 'end';
   /** Attributes for the editable root, such as `autocorrect` or `aria-label`. */
   attributes?: Readonly<Record<string, string>>;
-  /** Maps an image `src` to the URL to display. The saved Markdown keeps the original `src`. */
-  resolveImageSrc?: (src: string) => string;
+  /**
+   * Maps a link's or image's URL to the URL to use, or null to drop it: the
+   * link is not clickable, the image has no `src`. The saved Markdown keeps
+   * the original. Default `defaultResolveUrl`: relative URLs, `http`, `https`,
+   * `mailto` and `tel`.
+   */
+  resolveUrl?: ResolveUrl;
+  /** `referrerpolicy` for images, such as `no-referrer`. Fixed for the editor's lifetime. */
+  referrerPolicy?: ReferrerPolicy;
+  /** A copy button on code blocks, which copies the code. Default true. Fixed for the editor's lifetime. */
+  codeCopy?: boolean;
+  /**
+   * Element ids for the document's headings, for in-page links and an
+   * outline: called with every heading in order, returns an id (or
+   * undefined) for each. Called again when the document changes. Fixed for
+   * the editor's lifetime.
+   */
+  headingIds?: (headings: readonly { readonly text: string; readonly level: HeadingLevel }[]) => readonly (string | undefined)[];
+  /**
+   * Called when a link is clicked to be opened: a plain click while read-only,
+   * Mod+click while editing. Return true to handle it, for example to route an
+   * in-app link; otherwise the editor opens `href` in a new tab.
+   */
+  onLinkClick?: (ctx: { readonly editor: Editor; readonly href: string; readonly event: MouseEvent }) => boolean | void;
   /** Classes for rendered elements, colors and fonts, and the color scheme. See `Theme`. */
   theme?: Theme;
   /** Overrides UI strings. */
@@ -107,7 +131,10 @@ export interface EditorOptions {
 }
 
 /** Options that `setOptions` can change while the editor runs. */
-export type RuntimeOptions = Pick<EditorOptions, 'placeholder' | 'editable' | 'taskToggle' | 'attributes' | 'resolveImageSrc' | 'theme' | 'extensions'>;
+export type RuntimeOptions = Pick<
+  EditorOptions,
+  'placeholder' | 'editable' | 'taskToggle' | 'attributes' | 'resolveUrl' | 'onLinkClick' | 'theme' | 'extensions'
+>;
 
 export interface EditorEvents {
   /** After document changes, at most once per animation frame. */
@@ -352,6 +379,12 @@ export class Editor {
   private blockSel: { anchor: string; head: string } | null = null;
   /** Block elements that carry the selected class. */
   private selectedEls: HTMLElement[] = [];
+  /** The ids `headingIds` gave the headings of `doc`, by block ID. */
+  private headingIdsFor: { doc: Doc; ids: Map<string, string | undefined> } | null = null;
+  /** `redecorate()` was called during a composition; it runs when the composition settles. */
+  private redecoratePending = false;
+  /** The frame that renders blocks again after their views settled. */
+  private viewFrame = 0;
 
   constructor(options: EditorOptions) {
     const root = options.element;
@@ -379,6 +412,14 @@ export class Editor {
     };
     const views = new Map(this.extensions.flatMap((e) => Object.entries(e.views ?? {})));
     if (views.size > 0) this.renderer.views = views;
+    this.renderer.onViewSettled = (ids) => this.viewsSettled(ids);
+    const codeDecorators = this.extensions.flatMap((e) => (e.codeDecorations ? [e.codeDecorations] : []));
+    if (codeDecorators.length > 0) {
+      this.renderer.decorateCode = (block) => {
+        const ctx = { block, text: inlineText(block.content), language: block.language };
+        return codeDecorators.flatMap((fn) => fn(ctx));
+      };
+    }
     const decorators = this.extensions.flatMap((e) => (e.decorations ? [e.decorations] : []));
     if (decorators.length > 0) {
       this.renderer.decorate = (block, content, cell) => {
@@ -395,8 +436,11 @@ export class Editor {
     root.translate = false;
     root.style.setProperty('--mbe-slash-hint', JSON.stringify(this.labels.slashHint));
     this.applyRuntime({ placeholder: options.placeholder, attributes: options.attributes });
-    this.runtime = { ...this.runtime, resolveImageSrc: options.resolveImageSrc };
-    this.renderer.resolveImageSrc = options.resolveImageSrc;
+    this.runtime = { ...this.runtime, resolveUrl: options.resolveUrl, onLinkClick: options.onLinkClick };
+    this.renderer.resolveUrl = options.resolveUrl ?? defaultResolveUrl;
+    this.renderer.referrerPolicy = options.referrerPolicy;
+    this.renderer.codeCopy = options.codeCopy !== false;
+    this.renderer.icon = (name) => iconNode(root.ownerDocument, this.icon(name));
     this.applyTheme(options.theme);
 
     setPopupContainer(root, options.popupContainer);
@@ -450,6 +494,7 @@ export class Editor {
     this.listen(root.ownerDocument, 'selectionchange', () => this.onSelectionChange());
     this.listen(root.ownerDocument, 'mouseup', () => this.onMouseUp());
     this.listen(root.ownerDocument, 'scroll', () => this.onScroll(), true);
+    this.listen(root.ownerDocument, 'pointerdown', (e) => this.onDocumentPointerDown(e), true);
 
     this.paint(true, true);
     this.afterRender();
@@ -665,7 +710,7 @@ export class Editor {
 
   /**
    * Changes `placeholder`, `editable`, `taskToggle`, `attributes`,
-   * `resolveImageSrc` or `theme`. `extensions` only updates the callbacks of
+   * `resolveUrl`, `onLinkClick` or `theme`. `extensions` only updates the callbacks of
    * `suggestion()` extensions (`items`, `command`, `match`, `allow`), matched
    * by name; other changes to extensions need a new editor.
    */
@@ -701,8 +746,14 @@ export class Editor {
   private applyRuntime(options: RuntimeOptions): void {
     const root = this.root;
     if ('placeholder' in options) {
-      if (options.placeholder) root.style.setProperty('--mbe-placeholder', JSON.stringify(options.placeholder));
-      else root.style.removeProperty('--mbe-placeholder');
+      // Shown through CSS, and named for assistive technology, which does not read CSS content.
+      if (options.placeholder) {
+        root.style.setProperty('--mbe-placeholder', JSON.stringify(options.placeholder));
+        root.setAttribute('aria-placeholder', options.placeholder);
+      } else {
+        root.style.removeProperty('--mbe-placeholder');
+        root.removeAttribute('aria-placeholder');
+      }
       this.runtime = { ...this.runtime, placeholder: options.placeholder };
     }
     if ('attributes' in options) {
@@ -710,11 +761,12 @@ export class Editor {
       for (const [name, value] of Object.entries(options.attributes ?? {})) root.setAttribute(name, value);
       this.runtime = { ...this.runtime, attributes: options.attributes };
     }
-    if ('resolveImageSrc' in options && options.resolveImageSrc !== this.runtime.resolveImageSrc) {
-      this.runtime = { ...this.runtime, resolveImageSrc: options.resolveImageSrc };
-      this.renderer.resolveImageSrc = options.resolveImageSrc;
+    if ('resolveUrl' in options && options.resolveUrl !== this.runtime.resolveUrl) {
+      this.runtime = { ...this.runtime, resolveUrl: options.resolveUrl };
+      this.renderer.resolveUrl = options.resolveUrl ?? defaultResolveUrl;
       this.paint(true);
     }
+    if ('onLinkClick' in options) this.runtime = { ...this.runtime, onLinkClick: options.onLinkClick };
     if ('theme' in options && this.applyTheme(options.theme)) this.paint(true);
   }
 
@@ -1163,7 +1215,8 @@ export class Editor {
   /** Where the caret goes moving into `block` from above (`forward`) or below: its first or last line, at `x`. */
   private blockEntry(block: Block, forward: boolean, x: number): Position {
     const el = this.renderer.elementFor(block.id);
-    if (block.type === 'raw' && el?.classList.contains('mbe-view-block')) return viewEntry(block, forward);
+    const viewed = this.viewBlock(block);
+    if (viewed) return viewEntry(viewed, forward);
     if (el) {
       const range = el.ownerDocument.createRange();
       range.selectNodeContents(contentElement(el) ?? el);
@@ -1189,10 +1242,74 @@ export class Editor {
     const views = this.renderer.views;
     if (views && !this.pointerDown && !this.composing) this.renderer.revealed = revealedViews(this.state, views, !this.readOnly && hadFocus);
     this.renderer.render(this.state.doc, force, lazy);
+    this.applyHeadingIds();
     this.applyReadOnly();
     this.paintBlockSelection();
     // Moving the browser selection would end the composition.
     if (!this.composing) this.syncDomSelection(hadFocus);
+  }
+
+  /** Heading ids from the `headingIds` option, computed again only when the document changes. */
+  private applyHeadingIds(): void {
+    const headingIds = this.options.headingIds;
+    if (!headingIds) return;
+    const doc = this.state.doc;
+    if (this.headingIdsFor?.doc !== doc) {
+      const headings = doc.blocks.filter((b): b is HeadingBlock => b.type === 'heading');
+      const ids = headingIds(headings.map((h) => ({ text: inlineText(h.content), level: h.level })));
+      this.headingIdsFor = { doc, ids: new Map(headings.map((h, i) => [h.id, ids[i]])) };
+    }
+    for (const [blockId, id] of this.headingIdsFor.ids) {
+      const el = this.renderer.elementFor(blockId);
+      if (!el) continue;
+      if (id) {
+        if (el.id !== id) el.id = id;
+      } else if (el.id) {
+        el.removeAttribute('id');
+      }
+    }
+  }
+
+  /**
+   * Computes decorations again for every block and renders the blocks whose
+   * decorations depend on something outside the document changed, such as
+   * which mentioned people exist or a highlighter's language that finished
+   * loading. Waits for an input method to finish composing.
+   */
+  redecorate(): void {
+    if (this.destroyed) return;
+    if (this.composing || this.composition) {
+      this.redecoratePending = true;
+      return;
+    }
+    this.redecoratePending = false;
+    this.paint(true);
+    this.afterRender();
+  }
+
+  /**
+   * Views that returned a promise settled: their blocks render again on the
+   * next frame, or when a composition settles, since rendering would end it.
+   */
+  private viewsSettled(ids: readonly string[]): void {
+    if (this.destroyed) return;
+    if (this.composing || this.composition) {
+      for (const id of ids) this.unsettled.add(id);
+      return;
+    }
+    for (const id of ids) this.renderer.invalidate(id);
+    this.viewFrame ||= requestAnimationFrame(() => {
+      this.viewFrame = 0;
+      if (this.destroyed || this.composing || this.composition) return;
+      this.paint();
+      this.afterRender();
+    });
+  }
+
+  /** A block rendered by a view (a formula block, a diagram), or null. */
+  private viewBlock(block: Block | undefined): RawBlock | CodeBlock | null {
+    if (!block || (block.type !== 'raw' && block.type !== 'code')) return null;
+    return this.renderer.elementFor(block.id)?.classList.contains('mbe-view-block') ? block : null;
   }
 
   /** Re-renders if the views that show their source changed: after the selection, focus or editability changes. */
@@ -1224,7 +1341,7 @@ export class Editor {
     const index = blockIndex(this.state.doc, pos.blockId);
     const forward = key === 'ArrowDown' || key === 'ArrowRight';
     const next = blocks[index + (forward ? 1 : -1)];
-    const view = next?.type === 'raw' && this.renderer.elementFor(next.id)?.classList.contains('mbe-view-block');
+    const view = this.viewBlock(next);
     if (!next || (!view && next.type !== 'table')) return null;
     const current = blocks[index]!;
     if (!isTextBlock(current)) return null;
@@ -1239,7 +1356,7 @@ export class Editor {
       const row = forward ? 0 : next.rows.length - 1;
       return { blockId: next.id, offset: forward ? 0 : inlineLength(next.rows[row]![0]!), cell: { row, col: 0 } };
     }
-    return viewEntry(next as RawBlock, forward);
+    return viewEntry(view!, forward);
   }
 
   /**
@@ -1273,7 +1390,8 @@ export class Editor {
         const c = Math.min(col, next.align.length - 1);
         return { blockId: next.id, offset: dir === 1 ? 0 : inlineLength(next.rows[r]![c]!), cell: { row: r, col: c } };
       }
-      if (next.type === 'raw' && this.renderer.elementFor(next.id)?.classList.contains('mbe-view-block')) return viewEntry(next, dir === 1);
+      const viewed = this.viewBlock(next);
+      if (viewed) return viewEntry(viewed, dir === 1);
       return dir === 1 ? startOf(next) : endOf(next);
     }
     return null;
@@ -1300,7 +1418,11 @@ export class Editor {
   /** A click on a rendered view puts the caret in its source: at the end of a token, or of a block's formula. */
   private revealView(view: HTMLElement): void {
     const block = view.hasAttribute(BLOCK_ATTR) ? getBlock(this.state.doc, view.getAttribute(BLOCK_ATTR)!) : null;
-    const pos = block ? (block.type === 'raw' ? viewEntry(block, false) : null) : domToPosition(this.root, view.parentNode!, childIndex(view) + 1);
+    const pos = block
+      ? block.type === 'raw' || block.type === 'code'
+        ? viewEntry(block, false)
+        : null
+      : domToPosition(this.root, view.parentNode!, childIndex(view) + 1);
     if (!pos) return;
     this.root.focus({ preventScroll: true });
     this.setSelection({ anchor: pos, focus: pos });
@@ -1505,7 +1627,8 @@ export class Editor {
     this.composition = null;
     for (const id of this.unsettled) this.renderer.invalidate(id);
     this.unsettled.clear();
-    this.paint();
+    this.paint(this.redecoratePending);
+    this.redecoratePending = false;
     this.afterRender();
     // Composed text opens a popup as typing does: a full-width slash opens the slash menu.
     if (composed) this.typedForSuggestion();
@@ -1743,8 +1866,42 @@ export class Editor {
       const plain = !mod && !e.shiftKey && !e.altKey;
       const vertical = !plain ? 0 : e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
       const from = blockIndex(this.state.doc, this.state.selection.focus.blockId);
-      this.caretKey = { from, x: this.selectionRect()?.left ?? 0, vertical };
+      const key = { from, x: this.selectionRect()?.left ?? 0, vertical } as const;
+      this.caretKey = key;
+      if (vertical) this.unlessCaretMoves(key);
     }
+  }
+
+  /**
+   * WebKit skips code blocks and tables with ArrowDown and ArrowUp. When no
+   * editable text follows them (a rendered footnote or formula is not), it
+   * does not move the caret at all. If the browser left the caret on the edge
+   * line of its block, move it into the next block that holds a caret.
+   */
+  private unlessCaretMoves(key: { from: number; x: number; vertical: 0 | 1 | -1 }): void {
+    const before = this.state.selection.focus;
+    if (before.cell || !isCollapsed(this.state.selection)) return;
+    const content = contentElement(this.renderer.elementFor(before.blockId) ?? this.root);
+    if (!content || !this.onEdgeLine(content, key.vertical === 1)) return;
+    setTimeout(() => {
+      if (this.destroyed || this.caretKey !== key) return;
+      const now = this.readDomSelection();
+      if (!now || !samePosition(now.focus, before)) return;
+      const blocks = this.state.doc.blocks;
+      for (let i = key.from + key.vertical; i >= 0 && i < blocks.length; i += key.vertical) {
+        const block = blocks[i]!;
+        if (block.type === 'divider') continue;
+        this.caretKey = null;
+        const row = key.vertical === 1 ? 0 : block.type === 'table' ? block.rows.length - 1 : 0;
+        const pos: Position =
+          block.type === 'table'
+            ? { blockId: block.id, offset: key.vertical === 1 ? 0 : inlineLength(block.rows[row]![0]!), cell: { row, col: 0 } }
+            : this.blockEntry(block, key.vertical === 1, key.x);
+        this.setSelection({ anchor: pos, focus: pos });
+        this.scrollCaretIntoView();
+        return;
+      }
+    });
   }
 
   /** Selects all the text of the block (or table cell) holding `target`. False if it holds none. */
@@ -1755,7 +1912,7 @@ export class Editor {
     const cellEl = target.closest<HTMLElement>('[data-row]');
     const cell = block.type === 'table' && cellEl ? { row: Number(cellEl.dataset.row), col: Number(cellEl.dataset.col) } : undefined;
     const content = containerContent(block, cell);
-    if (!content || (block.type === 'raw' && blockEl.classList.contains('mbe-view-block'))) return false;
+    if (!content || blockEl.classList.contains('mbe-view-block')) return false;
     const at = (offset: number): Position => (cell ? { blockId: block.id, offset, cell } : { blockId: block.id, offset });
     this.setSelection({ anchor: at(0), focus: at(inlineLength(content)) });
     return true;
@@ -1769,6 +1926,11 @@ export class Editor {
   private onMouseDown(e: MouseEvent): void {
     this.caretKey = null;
     const target = e.target as HTMLElement;
+    // The copy button of a code block keeps the caret and the focus where they are.
+    if (target.closest?.('.mbe-code-copy')) {
+      e.preventDefault();
+      return;
+    }
     this.dropBlockSelection();
     if (target === this.root && e.button === 0 && !this.readOnly && this.clickBelowLastBlock(e)) return;
     const view = e.button === 0 && !this.readOnly ? target.closest?.<HTMLElement>('.mbe-view, .mbe-view-block') : null;
@@ -1817,14 +1979,57 @@ export class Editor {
       if (e.detail === 0) this.toggleTaskAt(target);
       return;
     }
+    const copy = target.closest?.<HTMLElement>('.mbe-code-copy');
+    if (copy) {
+      e.preventDefault();
+      this.copyCode(copy);
+      return;
+    }
     const link = target.closest?.<HTMLAnchorElement>('a.mbe-link');
     if (!link) return;
     // Links open on click when read-only, and on Mod+click while editing.
     e.preventDefault();
     if (this.readOnly || (isMac ? e.metaKey : e.ctrlKey)) {
-      const href = safeHref(link.dataset.href ?? '');
-      if (href) this.root.ownerDocument.defaultView?.open(href, '_blank', 'noopener,noreferrer');
+      // The rendered href is the resolved URL; a link the policy dropped has none.
+      const href = link.getAttribute('href');
+      if (!href || this.runtime.onLinkClick?.({ editor: this, href, event: e })) return;
+      this.root.ownerDocument.defaultView?.open(href, '_blank', 'noopener,noreferrer');
     }
+  }
+
+  /** Copies the code of the code block holding `button`, and shows that it did for a moment. */
+  private copyCode(button: HTMLElement): void {
+    const blockEl = button.closest<HTMLElement>(`[${BLOCK_ATTR}]`);
+    const block = blockEl && this.state.doc.blocks.find((b) => b.id === blockEl.getAttribute(BLOCK_ATTR));
+    if (!block || block.type !== 'code') return;
+    const text = inlineText(block.content);
+    const doc = this.root.ownerDocument;
+    const show = (name: 'copyCode' | 'copied') => {
+      const icon = iconNode(doc, this.icon(name));
+      button.replaceChildren(...(icon ? [icon] : []));
+      button.setAttribute('aria-label', this.labels[name]);
+      button.title = this.labels[name];
+      button.classList.toggle('mbe-copied', name === 'copied');
+    };
+    const done = () => {
+      show('copied');
+      setTimeout(() => button.isConnected && show('copyCode'), 1500);
+    };
+    // Without the async clipboard (an insecure origin), copy through a selected textarea.
+    const fallback = () => {
+      const area = doc.createElement('textarea');
+      area.value = text;
+      area.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+      doc.body.appendChild(area);
+      area.select();
+      const ok = doc.execCommand('copy');
+      area.remove();
+      this.syncDomSelection(this.hasFocus());
+      if (ok) done();
+    };
+    const clipboard = doc.defaultView?.navigator.clipboard;
+    if (clipboard?.writeText) clipboard.writeText(text).then(done, fallback);
+    else fallback();
   }
 
   /** The code block language input. */
@@ -2206,10 +2411,13 @@ export class Editor {
     this.suggestions.close();
     this.toolbar?.hide();
     // Keep the caret in the table cell for table actions; otherwise move it into the block.
+    // Either way the editor takes focus, so the menu's keys work and a press outside closes it.
     if (this.state.selection.focus.blockId !== blockId) {
       const block = getBlock(this.state.doc, blockId);
       const start = startOf(block);
       this.current = { ...this.state, selection: { anchor: start, focus: start } };
+      this.focus();
+    } else if (!this.hasFocus()) {
       this.focus();
     }
     this.blockMenu.setSections(this.blockMenuSections(blockId));
@@ -2221,6 +2429,14 @@ export class Editor {
   private closeBlockMenu(): void {
     this.blockMenu.hide();
     this.syncActiveDescendant();
+  }
+
+  /** A press anywhere but the block menu or the block handle closes the menu, in the editor's text too. */
+  private onDocumentPointerDown(e: Event): void {
+    if (!this.blockMenu.isOpen) return;
+    const target = e.target as Node | null;
+    if (target && (this.blockMenu.popup.el.contains(target) || this.handle.contains(target))) return;
+    this.closeBlockMenu();
   }
 
   // -------------------------------------------------------------------------

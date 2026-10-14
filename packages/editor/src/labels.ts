@@ -37,6 +37,10 @@ export const DEFAULT_LABELS = {
   language: 'Language',
   /** Shown in a code block's language field when it has none. */
   plainText: 'text',
+  /** The copy button of a code block. */
+  copyCode: 'Copy code',
+  /** The copy button of a code block, just after copying. */
+  copied: 'Copied',
   addRowAbove: 'Add row above',
   addRowBelow: 'Add row below',
   addColumnLeft: 'Add column left',

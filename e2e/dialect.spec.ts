@@ -9,7 +9,7 @@ test('line-break dialect: an untouched note saves byte for byte', async ({ page 
   expect(await md(page)).toBe(note);
   await expect(page.locator('#editor > .mbe-raw[data-syntax="math"]')).toHaveCount(1);
   await expect(page.locator('#editor > .mbe-raw[data-syntax="markdown"]')).toHaveCount(1);
-  await expect(page.locator('#editor .mbe-token-footnote')).toHaveText('[^1]');
+  await expect(page.locator('#editor .mbe-footnote-ref')).toHaveText('1');
 });
 
 test('line-break dialect: editing one block leaves the others as they were', async ({ page }) => {

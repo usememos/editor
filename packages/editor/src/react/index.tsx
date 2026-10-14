@@ -14,7 +14,10 @@ type EditorProps = Pick<
   | 'taskToggle'
   | 'autofocus'
   | 'attributes'
-  | 'resolveImageSrc'
+  | 'resolveUrl'
+  | 'referrerPolicy'
+  | 'headingIds'
+  | 'onLinkClick'
   | 'theme'
   | 'toolbar'
   | 'slashMenu'
@@ -38,7 +41,7 @@ export interface MarkdownEditorProps extends EditorProps {
 }
 
 /** Options that `setOptions` applies without recreating the editor. `extensions` updates suggestion callbacks only. */
-const LIVE = ['placeholder', 'editable', 'taskToggle', 'attributes', 'resolveImageSrc', 'theme', 'extensions'] as const;
+const LIVE = ['placeholder', 'editable', 'taskToggle', 'attributes', 'resolveUrl', 'onLinkClick', 'theme', 'extensions'] as const;
 
 /** The extension list's identity for recreating the editor: names, so an inline array does not recreate it on every render. */
 const extensionKey = (extensions: EditorOptions['extensions']) => (extensions ?? []).map((e) => e.name).join('\n');
@@ -46,7 +49,7 @@ const extensionKey = (extensions: EditorOptions['extensions']) => (extensions ??
 /**
  * The editor as a controlled React component. A `ref` gives the core `Editor`.
  *
- * `placeholder`, `editable`, `taskToggle`, `attributes`, `resolveImageSrc` and `theme` update live.
+ * `placeholder`, `editable`, `taskToggle`, `attributes`, `resolveUrl`, `onLinkClick` and `theme` update live.
  * A change to the names in `extensions` recreates the editor, keeping its
  * Markdown; with the same names, the callbacks of `suggestion()` extensions
  * (`items`, `command`, `match`, `allow`) update live. Other props are read
@@ -189,6 +192,7 @@ export function useEditor(options: Omit<EditorOptions, 'element'>, deps: readonl
       onSubmit: (markdown, e) => latest.current.onSubmit?.(markdown, e),
       onFocus: (e) => latest.current.onFocus?.(e),
       onBlur: (e) => latest.current.onBlur?.(e),
+      onLinkClick: (ctx) => latest.current.onLinkClick?.(ctx),
     });
     if (o.autofocus) pendingAutofocus.set(instance, o.autofocus === 'end' ? 'end' : 'start');
     setEditor(instance);

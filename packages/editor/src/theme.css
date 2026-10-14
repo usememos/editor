@@ -93,6 +93,11 @@
 .mbe-root :is(.mbe-raw-html, .mbe-token) { color: var(--mbe-muted); }
 .mbe-root code { background: var(--mbe-code-bg); border-radius: 4px; padding: 2px 4px; }
 .mbe-root .mbe-image { border-radius: 8px; }
+/* Footnotes, rendered: a reference is a small raised label, a definition a small muted note. */
+.mbe-root .mbe-footnote-ref { font-size: 0.75em; line-height: 0; color: var(--mbe-link); }
+.mbe-root.mbe-readonly .mbe-footnote-ref { cursor: pointer; }
+.mbe-root > .mbe-footnote { font-size: 0.875em; color: var(--mbe-muted); }
+.mbe-root .mbe-footnote-label { margin-inline-end: 0.375em; color: var(--mbe-link); }
 
 /* Quote */
 .mbe-root > blockquote {
@@ -118,17 +123,21 @@
 }
 
 /* Code: a quiet panel, with the language as a small label above the code. */
-.mbe-root > .mbe-code {
+.mbe-root > .mbe-code:not(.mbe-view-block) {
   background: var(--mbe-block-code-bg);
   border-radius: var(--mbe-radius);
   overflow: hidden;
 }
 .mbe-root .mbe-code-bar { padding: 6px 12px 0; }
-.mbe-root .mbe-code-lang { font: 12px/16px var(--mbe-font); color: var(--mbe-muted); }
+/* Sizes and family apart: a font token of `inherit` leaves the family to inherit, without dropping the size. */
+.mbe-root .mbe-code-lang { font-size: 12px; line-height: 16px; font-family: var(--mbe-font); color: var(--mbe-muted); }
 .mbe-root .mbe-code-lang::placeholder { color: var(--mbe-muted); opacity: 1; }
+.mbe-root .mbe-code-copy { color: var(--mbe-muted); border-radius: 4px; }
+.mbe-root .mbe-code-copy:hover { color: var(--mbe-text); background: var(--mbe-hover); }
+.mbe-root .mbe-code-copy.mbe-copied { color: var(--mbe-accent); }
 /* Block source text: code blocks and raw blocks. */
 .mbe-root > .mbe-code pre,
-.mbe-root > pre.mbe-raw { font: 14px/22px var(--mbe-mono); }
+.mbe-root > pre.mbe-raw { font-size: 14px; line-height: 22px; font-family: var(--mbe-mono); }
 .mbe-root > .mbe-code pre { padding: 2px 12px 10px; }
 .mbe-root > .mbe-code pre code { background: none; padding: 0; border-radius: 0; font: inherit; }
 

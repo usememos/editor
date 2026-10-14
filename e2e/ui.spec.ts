@@ -227,6 +227,34 @@ test('block handle: only tables and code blocks have it; the menu duplicates and
   expect(await blocks(page)).toEqual(['p:intro', 'code(js):let a = 1;']);
 });
 
+test('block menu: a press outside closes it, in the editor text or with the editor unfocused', async ({ page }) => {
+  await page.goto(`/?md=${encodeURIComponent('intro\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\nafter')}`);
+  const handle = page.locator('.mbe-handle');
+  const menu = page.locator('.mbe-block-menu');
+  const open = async () => {
+    await page.locator('#editor table').hover();
+    await handle.click();
+    await expect(menu).toBeVisible();
+  };
+  // A press in another paragraph keeps focus in the editor, and still closes the menu.
+  await page.locator('#editor td').first().click();
+  await open();
+  await page.locator('#editor p').last().click();
+  await expect(menu).toBeHidden();
+  // Opened while the editor is not focused, with the caret already in the table: the
+  // editor takes focus, so the menu's keys work and a press outside closes it.
+  await page.locator('#editor td').first().click();
+  await page.mouse.click(2, 2);
+  await open();
+  expect(await page.evaluate(() => document.activeElement?.closest('#editor') !== null)).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  await page.mouse.click(2, 2);
+  await open();
+  await page.mouse.click(2, 2);
+  await expect(menu).toBeHidden();
+});
+
 test('block menu with Ctrl+/: opens in a table cell, not in a paragraph', async ({ page }) => {
   await page.keyboard.type('item');
   await page.keyboard.press('Control+/');
@@ -376,4 +404,43 @@ test('links: Ctrl+click opens a link while editing, a plain click places the car
   await page.evaluate(() => (window as any).editor.setOptions({ editable: false }));
   const [again] = await Promise.all([context.waitForEvent('page'), link.click()]);
   expect(again.url()).toBe('https://example.com/docs');
+});
+
+test('code blocks have a copy button that copies the code, editing and read-only', async ({ page, context, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Reading the clipboard needs Chromium permissions');
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.goto(`/?md=${encodeURIComponent('before\n\n```js\nconst a = 1;\nconst b = 2;\n```')}`);
+  const editor = page.locator('#editor');
+  await editor.locator('p').click();
+  await page.keyboard.press('End');
+  await expect.poll(() => page.evaluate(() => (window as any).editor.selectionToJSON().focus.offset)).toBe(6);
+  const caret = await page.evaluate(() => (window as any).editor.selectionToJSON());
+  const button = editor.locator('.mbe-code-copy');
+  await expect(button).toHaveAttribute('aria-label', 'Copy code');
+  await editor.locator('.mbe-code').hover();
+  await button.click();
+  await expect(button).toHaveAttribute('aria-label', 'Copied');
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('const a = 1;\nconst b = 2;');
+  // The click kept the caret where it was, and the button never reaches the Markdown.
+  expect(await page.evaluate(() => (window as any).editor.selectionToJSON())).toEqual(caret);
+  expect(await md(page)).toBe('before\n\n```js\nconst a = 1;\nconst b = 2;\n```');
+  await expect(button).toHaveAttribute('aria-label', 'Copy code', { timeout: 3000 });
+
+  await page.evaluate(() => navigator.clipboard.writeText(''));
+  await page.evaluate(() => (window as any).editor.setOptions({ editable: false }));
+  await editor.locator('.mbe-code').hover();
+  await button.click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('const a = 1;\nconst b = 2;');
+});
+
+test('codeCopy: false leaves code blocks without a copy button', async ({ page }) => {
+  await page.goto('/?empty');
+  await page.evaluate(() => {
+    const { Editor } = (window as any).core;
+    const w = window as any;
+    w.editor.destroy();
+    w.editor = new Editor({ element: document.getElementById('editor'), content: '```\nx\n```', codeCopy: false });
+  });
+  await expect(page.locator('#editor .mbe-code')).toHaveCount(1);
+  await expect(page.locator('#editor .mbe-code-copy')).toHaveCount(0);
 });
