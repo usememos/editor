@@ -15,6 +15,8 @@ import {
   ATOM_CHAR,
   type Align,
   type Block,
+  CALLOUT_TYPES,
+  type CalloutType,
   type Doc,
   type HeadingLevel,
   type ImageAtom,
@@ -23,6 +25,8 @@ import {
   MAX_INDENT,
   type Span,
   codeBlock,
+  details,
+  detailsEnd,
   divider,
   heading,
   listItem,
@@ -32,6 +36,7 @@ import {
   quote,
   sortMarks,
   table,
+  withQuote,
 } from '../model';
 
 export function htmlToDoc(html: string, parser?: DOMParser): Doc {
@@ -142,6 +147,17 @@ function formatOf(el: Element, parent: Format): Format {
   return link === undefined ? { marks: sorted, whiteSpace } : { marks: sorted, link, whiteSpace };
 }
 
+/** The callout type of a GitHub alert element (class `markdown-alert-note` and the like). */
+function calloutOf(el: Element): CalloutType | undefined {
+  const m = /(?:^|\s)markdown-alert-([a-z]+)(?:\s|$)/.exec(el.getAttribute('class') ?? '');
+  const type = m?.[1] as CalloutType | undefined;
+  return type && CALLOUT_TYPES.includes(type) ? type : undefined;
+}
+
+function hasClass(el: Element, name: string): boolean {
+  return (el.getAttribute('class') ?? '').split(/\s+/).includes(name);
+}
+
 // ---------------------------------------------------------------------------
 // Converter
 
@@ -154,12 +170,12 @@ class Converter {
     return this.out;
   }
 
-  /** Converts the children of a block-level element. */
-  blocks(parent: Element, format: Format): void {
+  /** Converts the children of a block-level element, except those `skip` names. */
+  blocks(parent: Element, format: Format, skip?: (node: Element) => boolean): void {
     for (const node of Array.from(parent.childNodes)) {
       if (node.nodeType === TEXT_NODE) {
         this.text(node.nodeValue ?? '', format);
-      } else if (node.nodeType === ELEMENT_NODE) {
+      } else if (node.nodeType === ELEMENT_NODE && !skip?.(node as Element)) {
         this.element(node as Element, format);
       }
     }
@@ -181,7 +197,16 @@ class Converter {
       // A list item outside a list.
       this.flush();
       this.listItem(el, 'bullet', 0, undefined, format);
-    } else if (tag === 'blockquote') {
+    } else if (tag === 'details') {
+      // A collapsible section: its summary is the title, everything else the body.
+      this.flush();
+      const summary = Array.from(el.children).find((c) => tagOf(c) === 'summary');
+      const title = (summary?.textContent ?? '').replace(/\s+/g, ' ').trim();
+      this.out.push(details(plain(title), { open: el.hasAttribute('open') }));
+      this.blocks(el, format, (child) => child === summary);
+      this.flush();
+      this.out.push(detailsEnd());
+    } else if (tag === 'blockquote' || calloutOf(el)) {
       this.flush();
       this.blockquote(el, format);
     } else if (tag === 'pre') {
@@ -392,23 +417,24 @@ class Converter {
 
   // -- Quotes and tables ----------------------------------------------------
 
+  /** A blockquote, or a callout as GitHub renders an alert (its title is dropped). */
   private blockquote(el: Element, format: Format): void {
+    const callout = calloutOf(el);
     const inner = new Converter();
-    inner.blocks(el, format);
-    for (const block of inner.finish()) {
+    inner.blocks(el, format, callout ? (child) => hasClass(child, 'markdown-alert-title') : undefined);
+    const blocks = inner.finish();
+    for (const block of blocks) {
       switch (block.type) {
         case 'paragraph':
         case 'heading':
         case 'quote':
         case 'code':
         case 'raw':
-          this.out.push(quote(block.content));
+          this.out.push(quote(block.content, undefined, callout));
           break;
-        case 'listItem': {
-          const marker = block.listType === 'ordered' ? '1. ' : block.listType === 'task' ? (block.checked ? '- [x] ' : '- [ ] ') : '- ';
-          this.out.push(quote([...plain(marker), ...block.content]));
+        case 'listItem':
+          this.out.push(withQuote(block, callout ?? 'quote'));
           break;
-        }
         default:
           this.out.push(block);
       }

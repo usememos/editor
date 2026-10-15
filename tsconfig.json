@@ -22,6 +22,9 @@
       "@usememos/editor/react": [
         "./packages/editor/src/react/index.tsx"
       ],
+      "@usememos/editor/emoji": [
+        "./packages/editor/src/emoji/index.ts"
+      ],
       "#entities": [
         "./packages/editor/src/markdown/entities.ts"
       ]

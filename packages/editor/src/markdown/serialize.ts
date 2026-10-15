@@ -7,15 +7,21 @@
 // - ATX headings, `-` bullets, ordered items numbered from the list's start,
 //   `- [ ]` / `- [x]` tasks, nested items indented to the parent's content
 //   column, backtick-fenced code, `---` dividers, GFM tables.
-// - One blank line between blocks, except between list items (tight lists)
-//   and between adjacent quote blocks (one blockquote, a `>` line between
-//   paragraphs).
+// - One blank line between blocks, except between list items (tight lists).
+//   Adjacent quote blocks and quoted list items with the same callout are
+//   one blockquote: its blocks are written the same way, then every line is
+//   prefixed with `> ` (a `>` line between paragraphs).
 // - Hard line breaks are a backslash at the end of the line. Where Markdown
 //   has no line breaks (headings, table cells), "\n" is written as `&#10;`.
 // - An empty paragraph is written as `&nbsp;`, a paragraph holding only a
 //   no-break space, which renders as an empty line and reads back as an
-//   empty paragraph. Empty paragraphs at the end of the document and empty
-//   quotes are dropped.
+//   empty paragraph. Empty paragraphs at the end of the document are
+//   dropped. An empty quote is written as `> &nbsp;` the same way.
+// - A callout is a blockquote whose first line is a GitHub alert marker, such
+//   as `> [!NOTE]`. Quotes with different callouts are separate blockquotes.
+// - A collapsible section is `<details>` and `<summary>title</summary>`, its
+//   body, and `</details>`, each part with a blank line around it, so the
+//   body is Markdown.
 //
 // Text is escaped so that it reads back as the same content, escaping only
 // what could change meaning. The invariant, checked by the tests for every
@@ -32,11 +38,15 @@ import {
   type Span,
   inlineText,
   normalizeInline,
+  quoteKind,
+  sameQuote,
+  unquote,
   sameMarks,
   setMarkInRange,
   deleteInline,
 } from '../model';
 import { imageSuffix, imageSuffixText } from './ast';
+import { interruptsParagraph } from './blocks';
 import { AUTOLINK_EMAIL, AUTOLINK_URI, isUnicodePunctuation, isUnicodeWhitespace, parseInline } from './inline';
 import { emailLiterals, isLiteralBoundary, literalHref, urlLiteralAt } from './autolink';
 import { type InlineSyntax, type MarkdownOptions, type ResolvedMarkdown, resolveMarkdown } from './options';
@@ -66,28 +76,43 @@ export function serializeBlocks(blocks: readonly Block[], options?: MarkdownOpti
   let prev: Block | null = null;
   const lists = new ListState(ctx.paragraph);
 
-  for (const block of blocks) {
-    if (block.type === 'quote' && block.content.length === 0) continue;
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i]!;
     let text: string;
     let separator = '\n\n';
+    const kind = quoteKind(block);
+    if (kind) {
+      // Adjacent quotes and quoted list items of the same kind are one
+      // blockquote: its blocks written as they are inside it, then quoted.
+      let end = i + 1;
+      while (end < blocks.length && sameQuote(block, blocks[end])) end++;
+      const inner = blocks.slice(i, end).map(unquote);
+      let body = serializeBlocks(inner, options);
+      // A list that cannot interrupt a paragraph needs a blank line after the marker.
+      if (kind !== 'quote') body = `[!${kind.toUpperCase()}]\n${interrupts(inner[0]!) ? '' : '\n'}${body}`;
+      if (out) out += separator;
+      out += prefixLines(body, '> ', '>');
+      prev = blocks[end - 1]!;
+      i = end - 1;
+      continue;
+    }
     switch (block.type) {
       case 'paragraph':
         // Markdown has no empty paragraph.
         text = block.content.length === 0 ? '&nbsp;' : inlineToMarkdown(block.content, ctx.paragraph);
         break;
-      case 'quote': {
-        text = prefixLines(inlineToMarkdown(block.content, ctx.paragraph), '> ', '>');
-        // Adjacent quotes are paragraphs of one blockquote.
-        if (prev?.type === 'quote') separator = '\n>\n';
-        break;
-      }
+      case 'quote':
+        // Handled above.
+        continue;
       case 'heading':
         text = serializeHeading(block.level, block.content, ctx.heading);
         break;
       case 'listItem': {
-        const item = lists.next(block, prev?.type === 'listItem' ? prev : null);
+        // A list in a quote ended at the quote.
+        const before = prev?.type === 'listItem' && !prev.quote ? prev : null;
+        const item = lists.next(block, before);
         text = item.text;
-        if (prev?.type === 'listItem' && !item.blankLineBefore) separator = '\n';
+        if (before && !item.blankLineBefore) separator = '\n';
         break;
       }
       case 'code':
@@ -102,12 +127,28 @@ export function serializeBlocks(blocks: readonly Block[], options?: MarkdownOpti
       case 'divider':
         text = '---';
         break;
+      case 'details': {
+        // The title is HTML text, so only &, < and > need escaping.
+        const title = inlineText(block.content).replace(/[&<>]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'));
+        text = `<details${block.open ? ' open' : ''}>\n<summary>${title}</summary>`;
+        break;
+      }
+      case 'detailsEnd':
+        text = '</details>';
+        break;
     }
     if (out) out += separator;
     out += text;
     prev = block;
   }
   return out;
+}
+
+/** False for a list item that cannot start a list right after a paragraph line: an empty one, or numbered from other than 1. */
+function interrupts(block: Block): boolean {
+  if (block.type !== 'listItem') return true;
+  if (block.listType === 'task') return true;
+  return block.content.length > 0 && (block.start ?? 1) === 1;
 }
 
 export function isEmptyParagraph(block: Block): boolean {
@@ -153,7 +194,7 @@ function serializeTable(align: readonly (string | null)[], rows: readonly (reado
   // Pipes are escaped everywhere in a row, even in code spans: GFM splits
   // cells before parsing inlines and turns `\|` back into `|`.
   const row = (cells: readonly Inline[]) =>
-    '| ' + cells.map((cell) => inlineToMarkdown(cell, ctx).replace(/\|/g, '\\|')).join(' | ') + ' |';
+    '| ' + cells.map((cell) => inlineToMarkdown(representableCell(cell), ctx).replace(/\|/g, '\\|')).join(' | ') + ' |';
   const delimiter =
     '| ' +
     align.map((a) => (a === 'left' ? ':--' : a === 'center' ? ':-:' : a === 'right' ? '--:' : '---')).join(' | ') +
@@ -301,11 +342,41 @@ function sameInline(a: Inline, b: Inline): boolean {
 
 const reSpecWhitespace = /^[\t\n\f\r\p{Zs}]+|[\t\n\f\r\p{Zs}]+$/gu;
 
+/** A pipe after an odd number of backslashes. */
+const ODD_BACKSLASH_PIPE = /(?<!\\)(?:\\\\)*\\\|/;
+
+/**
+ * A table cell's content as GFM can write it. GFM splits a row into cells
+ * before it parses code spans, and a backslash escapes the character after it
+ * there, so a pipe after an odd number of backslashes in a code span cannot be
+ * written: `\\|` ends the cell, and `\\\|` reads back as two backslashes.
+ * Such a pipe is written outside the code span, keeping its other marks.
+ */
+export function representableCell(inline: Inline): Inline {
+  if (!inline.some((s) => s.marks.includes('code') && ODD_BACKSLASH_PIPE.test(s.text))) return inline;
+  return normalizeInline(
+    inline.flatMap((s): Span[] => {
+      if (!s.marks.includes('code')) return [s];
+      const marks = s.marks.filter((m) => m !== 'code');
+      const out: Span[] = [];
+      let from = 0;
+      for (const m of s.text.matchAll(new RegExp(ODD_BACKSLASH_PIPE, 'g'))) {
+        const pipe = m.index + m[0].length - 1;
+        out.push({ ...s, text: s.text.slice(from, pipe) }, { ...s, text: '|', marks });
+        from = pipe + 1;
+      }
+      out.push({ ...s, text: s.text.slice(from) });
+      return out.filter((span) => span.text !== '');
+    }),
+  );
+}
+
 /**
  * The inline content as Markdown can represent it, which is what parsing the
  * serialized output gives back:
  * - Whitespace at the edges of a bold, italic or strike run moves outside it,
- *   because `**foo **` is not valid emphasis.
+ *   because `**foo **` is not valid emphasis. Whitespace in a code span
+ *   stays: the delimiter then sits next to the backtick, as in `` **` a`** ``.
  * - A "\n" in a code span is a hard break outside the code span.
  * - Spaces and tabs that start or end a line of text are dropped, because
  *   Markdown strips them. Writing them as character references instead would
@@ -337,7 +408,8 @@ export function representableInline(inline: Inline): Span[] {
     for (const span of spans) {
       if (span.marks.includes(mark)) {
         if (runStart < 0) runStart = pos;
-        runText += span.text;
+        // Code is never at the edge for this, so it stands in as non-whitespace.
+        runText += span.marks.includes('code') ? 'x'.repeat(span.text.length) : span.text;
       } else {
         endRun();
       }
@@ -583,7 +655,13 @@ function render(spans: readonly Span[], ctx: InlineContext, strategy: Strategy, 
   let out = '';
   tokens.forEach((tok, i) => {
     if (tok.kind === 'delim') out += tok.ch.repeat(tok.count);
-    else if (tok.kind === 'raw') out += tok.text;
+    else if (tok.kind === 'raw') {
+      // Inline HTML such as a comment, first on a line after a line break, would start an HTML
+      // block there. Four spaces keep the line in the paragraph: an indented line cannot start an
+      // HTML block, indented code cannot interrupt a paragraph, and the spaces are stripped.
+      if (ctx.lineStart && out.endsWith('\n') && interruptsParagraph(tok.text)) out += '    ';
+      out += tok.text;
+    }
     else {
       out += escapeText(tok, ctx, {
         before: out ? out[out.length - 1] : undefined,

@@ -9,9 +9,9 @@
 // by the normalizing serializer. With no edits, saving returns the input
 // byte for byte.
 
-import { type Block, type Doc, htmlBlock } from '../model';
-import type { BlockNode } from './ast';
+import { type Block, type Doc, htmlBlock, quoteKind, sameQuote } from '../model';
 import { parseAst } from './blocks';
+import { detailsSections, htmlSectionEnd } from './htmlSection';
 import { lowerTopLevel } from './lower';
 import { DEFAULT_MARKDOWN, type MarkdownOptions } from './options';
 import { isEmptyParagraph, serializeBlocks } from './serialize';
@@ -56,15 +56,18 @@ export function loadMarkdown(text: string, options?: MarkdownOptions): { doc: Do
   const groups: SourceGroup[] = [];
   const groupOf = new WeakMap<Block, SourceGroup>();
   let lastEnd = 0;
+  const sections = (options ?? DEFAULT_MARKDOWN).details === false ? null : detailsSections(root.children);
   for (let i = 0; i < root.children.length; i++) {
     const node = root.children[i]!;
-    // A collapsible section is one raw HTML block, from <details> to its </details>.
-    const last = detailsEnd(root.children, i);
+    // The tags of a collapsible section are blocks of their own; the Markdown between them is lowered as usual.
+    const section = sections?.get(i);
+    // Any other HTML element with Markdown between its tags is one raw HTML block (see htmlSection.ts).
+    const last = section ? i : htmlSectionEnd(root.children, i);
     const from = lineStarts[root.lines[i]!.start - 1] ?? text.length;
     const lines = root.lines[last]!;
     const to = lineEnds[Math.max(lines.start, lines.end) - 1] ?? text.length;
     const source = text.slice(from, to);
-    const lowered = last > i ? [htmlBlock(source)] : lowerTopLevel(node, options ?? DEFAULT_MARKDOWN, source);
+    const lowered = section ? [section] : last > i ? [htmlBlock(source)] : lowerTopLevel(node, options ?? DEFAULT_MARKDOWN, source);
     i = last;
     blocks.push(...lowered);
     // Line ranges never overlap; if they ever did, the block is just not kept.
@@ -76,26 +79,6 @@ export function loadMarkdown(text: string, options?: MarkdownOptions): { doc: Do
     for (const block of lowered) groupOf.set(block, group);
   }
   return { doc: { blocks }, source: { text, groups, groupOf, definitions: root.definitions } };
-}
-
-/**
- * When top-level block `i` is an HTML block that opens a <details> element
- * and does not close it, the index of the HTML block that does. CommonMark
- * ends an HTML block at a blank line, so a section with blank lines inside
- * parses as several blocks; the editor keeps the whole section as one raw
- * HTML block instead. Returns `i` when there is nothing to join, including
- * a section that is never closed.
- */
-function detailsEnd(nodes: readonly BlockNode[], i: number): number {
-  if (nodes[i]!.type !== 'htmlBlock') return i;
-  let depth = 0;
-  for (let j = i; j < nodes.length; j++) {
-    const node = nodes[j]!;
-    if (node.type !== 'htmlBlock') continue;
-    depth += (node.value.match(/<details\b/gi)?.length ?? 0) - (node.value.match(/<\/details\s*>/gi)?.length ?? 0);
-    if (depth <= 0) return j;
-  }
-  return i;
 }
 
 /** True if a block's source would swallow a paragraph written after it. */
@@ -110,9 +93,10 @@ interface Chunk {
   text?: string;
 }
 
-/** Lists and quotes next to each other in Markdown merge into one. */
+/** Lists, and quotes with the same callout, next to each other in Markdown merge into one. */
 function joins(a: Block | undefined, b: Block | undefined): boolean {
-  return !!a && !!b && a.type === b.type && (a.type === 'listItem' || a.type === 'quote');
+  if (quoteKind(a) !== null || quoteKind(b) !== null) return sameQuote(a, b);
+  return a?.type === 'listItem' && b?.type === 'listItem';
 }
 
 export function saveWithSource(blocks: readonly Block[], source: MarkdownSource, options?: MarkdownOptions): string {
@@ -237,8 +221,8 @@ export function saveWithSource(blocks: readonly Block[], source: MarkdownSource,
   return out + ending;
 }
 
-/** A task list item marker: indentation, a bullet or number, spaces, then `[ ]`, `[x]` or `[X]`. */
-const reTaskLine = /^([ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]+\[)([ xX])(?=\][ \t]|\]$)/gm;
+/** A task list item marker: indentation and any quote markers, a bullet or number, spaces, then `[ ]`, `[x]` or `[X]`. */
+const reTaskLine = /^((?:[ \t]*>)*[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]+\[)([ xX])(?=\][ \t]|\]$)/gm;
 
 /**
  * The group that starts at `blocks[i]` as a kept chunk, when the only

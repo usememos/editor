@@ -49,11 +49,11 @@ export function sameRevealed(a: ReadonlyMap<string, BlockReveal>, b: ReadonlyMap
  * Where the caret goes in a rendered block's source. A raw block: past its
  * opening line going forward (such as a `$$` fence), at the end of its
  * next-to-last line going back or on a click. A code block holds only the
- * code: its start or its end.
+ * code, and raw Markdown has no fence: their start or their end.
  */
 export function viewEntry(block: RawBlock | CodeBlock, forward: boolean): Position {
   const text = inlineText(block.content);
-  if (block.type === 'code') return { blockId: block.id, offset: forward ? 0 : text.length };
+  if (block.type === 'code' || block.syntax === 'markdown') return { blockId: block.id, offset: forward ? 0 : text.length };
   if (forward) {
     const firstBreak = text.indexOf('\n');
     return { blockId: block.id, offset: firstBreak >= 0 && firstBreak < text.length - 1 ? firstBreak + 1 : 0 };

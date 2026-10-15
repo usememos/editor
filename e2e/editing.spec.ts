@@ -479,3 +479,14 @@ test('a nested item whose parent stops being a list item moves out with it, as i
   await page.keyboard.press('Control+z');
   expect(await blocks(page)).toEqual(['ul0:parent', 'ul1:child', 'ul2:grandchild']);
 });
+
+test('Mod+Alt+1 to 4 make headings, and Mod+Alt+0 makes a paragraph', async ({ page }) => {
+  await page.keyboard.type('Title');
+  for (const level of [1, 2, 3, 4]) {
+    await page.keyboard.press(`Control+Alt+${level}`);
+    expect(await blocks(page)).toEqual([`h${level}:Title`]);
+  }
+  expect(await md(page)).toBe('#### Title\n');
+  await page.keyboard.press('Control+Alt+0');
+  expect(await blocks(page)).toEqual(['p:Title']);
+});

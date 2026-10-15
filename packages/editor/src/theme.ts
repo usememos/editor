@@ -26,6 +26,8 @@ export interface ThemeClasses {
   readonly table?: string;
   /** The `<hr>` of a divider. */
   readonly divider?: string;
+  /** The title row of a collapsible section. */
+  readonly details?: string;
   /** Raw blocks: Markdown kept as source, or rendered by a view. */
   readonly raw?: string;
   /** `<img>` */
@@ -58,6 +60,12 @@ export interface ThemeColors {
   /** Highlighted menu items and toolbar buttons. */
   readonly hover?: string;
   readonly danger?: string;
+  /** The icon of each callout type, and a light tint of it behind the text. */
+  readonly calloutNote?: string;
+  readonly calloutTip?: string;
+  readonly calloutImportant?: string;
+  readonly calloutWarning?: string;
+  readonly calloutCaution?: string;
 }
 
 /** Values written as --mbe-* custom properties on the root and on popups. Numbers are pixels. */
@@ -112,6 +120,11 @@ const COLOR_VARS: Record<keyof ThemeColors, string> = {
   popupBorder: '--mbe-popup-border',
   hover: '--mbe-hover',
   danger: '--mbe-danger',
+  calloutNote: '--mbe-callout-note',
+  calloutTip: '--mbe-callout-tip',
+  calloutImportant: '--mbe-callout-important',
+  calloutWarning: '--mbe-callout-warning',
+  calloutCaution: '--mbe-callout-caution',
 };
 
 const SIZE_VARS = {

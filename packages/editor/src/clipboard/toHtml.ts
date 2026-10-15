@@ -1,13 +1,26 @@
 // Document model → semantic HTML, for the `text/html` clipboard flavour.
 //
 // Consecutive list items become properly nested <ul>/<ol> elements, task
-// items get a disabled checkbox, adjacent quote blocks share one
-// <blockquote>, and code blocks carry their language as a `language-x` class
+// items get a disabled checkbox, adjacent quote blocks and quoted list items
+// share one <blockquote> (a callout's with GitHub's alert classes), and code blocks carry their language as a `language-x` class
 // (the convention most sites and editors read back). Raw HTML (html blocks
 // and `html`-marked text) is written verbatim, as a Markdown renderer would;
 // all other text is escaped.
 
-import { type Block, type Doc, type Inline, type ListItemBlock, type Span, imageBlockOffset, inlineText, sliceInline } from '../model';
+import {
+  type Block,
+  type CalloutType,
+  type Doc,
+  type Inline,
+  type ListItemBlock,
+  type Span,
+  imageBlockOffset,
+  inlineText,
+  quoteKind,
+  sameQuote,
+  sliceInline,
+  unquote,
+} from '../model';
 
 export function docToHtml(doc: Doc): string {
   let out = '';
@@ -15,20 +28,17 @@ export function docToHtml(doc: Doc): string {
   let i = 0;
   while (i < blocks.length) {
     const block = blocks[i]!;
-    if (block.type === 'listItem') {
-      let j = i;
-      while (j < blocks.length && blocks[j]!.type === 'listItem') j++;
-      out += listHtml(blocks.slice(i, j) as ListItemBlock[]);
+    const kind = quoteKind(block);
+    if (kind) {
+      // One blockquote holds the quote's paragraphs and lists.
+      let j = i + 1;
+      while (j < blocks.length && sameQuote(block, blocks[j])) j++;
+      out += quoteHtml(kind === 'quote' ? undefined : kind, docToHtml({ blocks: blocks.slice(i, j).map(unquote) }));
       i = j;
-    } else if (block.type === 'quote') {
+    } else if (block.type === 'listItem') {
       let j = i;
-      let inner = '';
-      while (j < blocks.length && blocks[j]!.type === 'quote') {
-        const quote = blocks[j]!;
-        if (quote.type === 'quote') inner += `<p>${inlineHtml(quote.content)}</p>`;
-        j++;
-      }
-      out += `<blockquote>${inner}</blockquote>`;
+      while (j < blocks.length && blocks[j]!.type === 'listItem' && quoteKind(blocks[j]) === null) j++;
+      out += listHtml(blocks.slice(i, j) as ListItemBlock[]);
       i = j;
     } else {
       out += blockHtml(block);
@@ -56,6 +66,11 @@ function blockHtml(block: Block): string {
       return block.syntax === 'html' ? inlineText(block.content) : `<pre>${escapeHtml(inlineText(block.content))}</pre>`;
     case 'divider':
       return '<hr>';
+    // The body's blocks come between, so the two parts make one element.
+    case 'details':
+      return `<details${block.open ? ' open' : ''}><summary>${escapeHtml(inlineText(block.content))}</summary>`;
+    case 'detailsEnd':
+      return '</details>';
     case 'table': {
       const cell = (tag: string, content: Inline, c: number) => {
         const align = block.align[c];
@@ -68,10 +83,19 @@ function blockHtml(block: Block): string {
       return html + '</table>';
     }
     case 'listItem':
-      return listHtml([block]);
     case 'quote':
-      return `<blockquote><p>${inlineHtml(block.content)}</p></blockquote>`;
+      return docToHtml({ blocks: [block] });
   }
+}
+
+/**
+ * A blockquote. A callout gets GitHub's alert classes, which htmlToDoc reads
+ * back, and a bold title that shows in apps that drop the classes.
+ */
+function quoteHtml(callout: CalloutType | undefined, inner: string): string {
+  if (!callout) return `<blockquote>${inner}</blockquote>`;
+  const title = callout[0]!.toUpperCase() + callout.slice(1);
+  return `<blockquote class="markdown-alert markdown-alert-${callout}"><p class="markdown-alert-title"><strong>${title}</strong></p>${inner}</blockquote>`;
 }
 
 /**

@@ -1,4 +1,4 @@
-// The block handle shown to the left of the hovered table, code block or image block.
+// The block handle shown to the left of the hovered table, code block, image block or callout.
 // Clicking it opens the block menu. On touch devices it follows the block
 // with the caret. Other blocks have no block handle.
 
@@ -47,8 +47,8 @@ export class BlockHandle {
     let node: Element | null = target;
     while (node && node.parentElement !== this.editor.root) node = node.parentElement;
     if (!node || !node.hasAttribute(BLOCK_ATTR)) return;
-    const blockId = node.getAttribute(BLOCK_ATTR)!;
-    if (this.editor.hasBlockMenu(blockId)) this.showFor(blockId);
+    const owner = this.editor.blockMenuOwner(node.getAttribute(BLOCK_ATTR)!);
+    if (owner) this.showFor(owner);
     else if (this.blockId !== null) this.scheduleHide();
   }
 
@@ -62,12 +62,14 @@ export class BlockHandle {
     this.el.hidden = false;
     const offset = attach(this.el, this.editor.root);
     const rect = blockEl.getBoundingClientRect();
-    // Center on the first line of the block.
+    // Center on the first line of the block, or on a callout's icon, which sits in its padding.
+    const icon = blockEl.querySelector<HTMLElement>(':scope > .mbe-callout-icon');
+    const iconRect = icon?.getBoundingClientRect();
     const lineHeight = parseFloat(doc.defaultView!.getComputedStyle(blockEl).lineHeight) || 24;
-    const firstLine = Math.min(rect.height, lineHeight);
+    const middle = iconRect?.height ? iconRect.top + iconRect.height / 2 : rect.top + Math.min(rect.height, lineHeight) / 2;
     const size = this.el.offsetHeight || 22;
     this.el.style.left = `${Math.round(rect.left - (this.el.offsetWidth || 20) - 6 - offset.x)}px`;
-    this.el.style.top = `${Math.round(rect.top + firstLine / 2 - size / 2 - offset.y)}px`;
+    this.el.style.top = `${Math.round(middle - size / 2 - offset.y)}px`;
   }
 
   /** True when `node` is the block handle or inside it. */

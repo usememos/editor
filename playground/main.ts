@@ -1,7 +1,8 @@
 // The playground: a note composer built only on the public API. It uses
 // line breaks, no setext headings, math rendered with KaTeX and footnotes;
 // #tag and @mention highlighting; three autocomplete popups as examples of
-// callers (#tags, @people from a fake async search, and [[ page links);
+// callers (#tags, @people from a fake async search, and [[ page links),
+// plus :emoji from @usememos/editor/emoji;
 // a formatting bar with active state; upload placeholders for
 // pasted and dropped images; the draft and caret kept across reloads; and
 // Mod+Enter to save.
@@ -43,6 +44,7 @@ import {
   suggestion,
   tags,
 } from '@usememos/editor';
+import { emoji } from '@usememos/editor/emoji';
 import style from '../packages/editor/src/style.css?inline';
 import baseStyle from '../packages/editor/src/base.css?inline';
 import { SAMPLE } from './sample';
@@ -194,6 +196,8 @@ const composer: Partial<EditorOptions> = {
         editor.commands.insertMarkdown(`[${item.label}](#${item.label.toLowerCase().replace(/\s+/g, '-')})`);
       },
     }),
+    // :emoji by GitHub's names; a pick writes the emoji itself.
+    emoji(),
     fileHandler({
       accept: ['image/*'],
       onPaste: ({ editor, files }) => {

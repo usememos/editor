@@ -268,5 +268,7 @@ test('a font token of inherit keeps the sizes of the code language label and raw
   await page.evaluate(() => (window as any).editor.setOptions({ theme: { tokens: { font: 'inherit', mono: 'inherit', fontSize: 20 } } }));
   const size = (selector: string) => page.locator(selector).evaluate((el) => [getComputedStyle(el).fontSize, getComputedStyle(el).lineHeight]);
   expect(await size('#editor .mbe-code-lang')).toEqual(['12px', '16px']);
+  // A raw block shows its source when clicked.
+  await page.locator('#editor > .mbe-raw').click();
   expect(await size('#editor pre.mbe-raw')).toEqual(['14px', '22px']);
 });

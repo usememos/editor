@@ -28,6 +28,17 @@ await build({
   external: ['@usememos/editor', 'react', 'react/*', 'react-dom'],
 });
 
+// The emoji entry, like the React one, imports the core by package name. Its
+// list of emoji is a separate file that it loads on first use.
+await build({
+  ...shared,
+  entryPoints: { emoji: src('emoji/index.ts') },
+  outdir: dist,
+  splitting: true,
+  chunkNames: 'emoji-[name]-[hash]',
+  external: ['@usememos/editor'],
+});
+
 await build({
   ...shared,
   bundle: false,

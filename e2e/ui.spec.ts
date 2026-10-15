@@ -10,9 +10,9 @@ const slashMenu = (page: import('@playwright/test').Page) => page.locator('.mbe-
 test('slash menu: opens, filters, picks with the keyboard', async ({ page }) => {
   await page.keyboard.type('/');
   await expect(slashMenu(page)).toBeVisible();
-  await expect(slashMenu(page).locator('.mbe-menu-item')).toHaveCount(11);
+  await expect(slashMenu(page).locator('.mbe-menu-item')).toHaveCount(14);
   await page.keyboard.type('head');
-  await expect(slashMenu(page).locator('.mbe-menu-item')).toHaveText([/Heading 1/, /Heading 2/, /Heading 3/]);
+  await expect(slashMenu(page).locator('.mbe-menu-item')).toHaveText([/Heading 1/, /Heading 2/, /Heading 3/, /Heading 4/]);
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
   await expect(slashMenu(page)).toBeHidden();
@@ -150,7 +150,7 @@ test('formatting toolbar: the text style menu sets a style on every selected blo
   await expect(toolbar).toBeVisible();
   await toolbar.locator('.mbe-tool-text-style').click();
   const menu = page.locator('.mbe-text-style-menu');
-  await expect(menu.locator('.mbe-menu-item')).toHaveText(['Text', 'Heading 1', 'Heading 2', 'Heading 3']);
+  await expect(menu.locator('.mbe-menu-item')).toHaveText(['Text', 'Heading 1', 'Heading 2', 'Heading 3', 'Heading 4']);
   await expect(menu.locator('[aria-checked=true]')).toHaveText('Text');
   await menu.locator('.mbe-menu-item', { hasText: 'Heading 2' }).click();
   await expect(menu).toBeHidden();
@@ -277,8 +277,8 @@ test('formatting toolbar: a tooltip names the button after a pause, and hides wh
 test('icons: every menu row, toolbar button and the block handle shows a Lucide icon', async ({ page }) => {
   await page.keyboard.type('/');
   const rows = slashMenu(page).locator('.mbe-menu-item');
-  await expect(rows).toHaveCount(11);
-  await expect(slashMenu(page).locator('.mbe-menu-icon > svg.mbe-icon')).toHaveCount(11);
+  await expect(rows).toHaveCount(14);
+  await expect(slashMenu(page).locator('.mbe-menu-icon > svg.mbe-icon')).toHaveCount(14);
   await page.keyboard.type('table');
   await page.keyboard.press('Enter');
   await page.keyboard.press('Control+/');
@@ -372,7 +372,7 @@ test('link: pasting a URL over selected text', async ({ page }) => {
   expect(await md(page)).toBe('click [here](https://x.dev)\n');
 });
 
-test('block handle: only tables and code blocks have it; the block menu duplicates and deletes', async ({ page }) => {
+test('block handle: paragraphs do not have it, code blocks do; the block menu duplicates and deletes', async ({ page }) => {
   await page.keyboard.type('intro');
   await page.keyboard.press('Enter');
   await page.keyboard.type('```js ');
@@ -466,10 +466,13 @@ for (const [item, expected] of [
   ['Heading 1', ['h1:word']],
   ['Heading 2', ['h2:word']],
   ['Heading 3', ['h3:word']],
+  ['Heading 4', ['h4:word']],
   ['Bulleted list', ['ul0:word']],
   ['Numbered list', ['ol0:word']],
   ['To-do list', ['task0[ ]:word']],
   ['Quote', ['quote:word']],
+  ['Callout', ['note:word']],
+  ['Collapsible section', ['details:word', 'p:', '/details']],
   ['Code block', ['code():word']],
   ['Table', ['p:word', 'table:||/||/||']],
   ['Divider', ['p:word', 'hr', 'p:']],
@@ -616,4 +619,59 @@ test('codeCopy: false leaves code blocks without a copy button', async ({ page }
   });
   await expect(page.locator('#editor .mbe-code')).toHaveCount(1);
   await expect(page.locator('#editor .mbe-code-copy')).toHaveCount(0);
+});
+
+/** Replaces the playground editor with one made from `options`, then focuses it. */
+const remount = async (page: import('@playwright/test').Page, options: Record<string, unknown>) => {
+  await page.evaluate((options) => {
+    const { Editor } = (window as any).core;
+    (window as any).editor.destroy();
+    (window as any).editor = new Editor({ element: document.getElementById('editor'), ...options });
+  }, options);
+  await page.locator('#editor').click();
+};
+
+const hintedBlocks = (page: import('@playwright/test').Page) => page.locator('#editor .mbe-show-hint');
+const beforeContent = (page: import('@playwright/test').Page, selector: string) =>
+  page.locator(selector).evaluate((el) => getComputedStyle(el, '::before').content);
+
+test('slash hint: off by default, so a new empty line shows nothing', async ({ page }) => {
+  await page.keyboard.type('one');
+  await page.keyboard.press('Enter');
+  await expect(hintedBlocks(page)).toHaveCount(0);
+});
+
+test('slash hint: with slashHint, only the empty paragraph that has the caret shows it', async ({ page }) => {
+  await remount(page, { placeholder: 'Write…', slashHint: true });
+  // A single empty paragraph shows the placeholder, not the hint.
+  await expect(hintedBlocks(page)).toHaveCount(0);
+  await page.keyboard.type('one');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await expect(hintedBlocks(page)).toHaveCount(1);
+  expect(await beforeContent(page, '#editor .mbe-show-hint')).toBe(`"Type '/' for commands"`);
+  await page.keyboard.type('x');
+  await expect(hintedBlocks(page)).toHaveCount(0);
+});
+
+test('slash hint: no hint without a slash menu', async ({ page }) => {
+  await remount(page, { slashHint: true, slashMenu: false });
+  await page.keyboard.type('one');
+  await page.keyboard.press('Enter');
+  await expect(hintedBlocks(page)).toHaveCount(0);
+});
+
+test('block hints: empty headings and quotes show their type only while editable', async ({ page }) => {
+  await remount(page, { content: '# \n\n> &nbsp;\n\ntext' });
+  // Firefox reports the computed content as `attr(data-hint)`, not the text, so
+  // the text is read from the attribute and the pseudo-element only for 'none'.
+  const hints = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>('#editor [data-hint]')].map((el) =>
+        getComputedStyle(el, '::before').content === 'none' ? null : el.dataset.hint,
+      ),
+    );
+  expect(await hints()).toEqual(['Heading 1', 'Quote']);
+  await page.evaluate(() => (window as any).editor.setOptions({ editable: false }));
+  expect(await hints()).toEqual([null, null]);
 });

@@ -35,7 +35,7 @@ export const test = base.extend<{ pageErrors: string[]; clipboardEvents: void }>
 
 export const md = (page: Page) => page.evaluate(() => (window as any).editor.getMarkdown() as string);
 
-/** Compact form of the document: "p:text", "h2:text", "ul0:text", "task1[x]:text", "code(js):text", "hr", "table:a|b/c|d". */
+/** Compact form of the document: "p:text", "h2:text", "ul0:text", "task1[x]:text", "quote:text", "note:text" (a callout), "quote/ul0:text" (a list item in a quote), "details:title", "/details", "code(js):text", "hr", "table:a|b/c|d". */
 export const blocks = (page: Page) =>
   page.evaluate(() => {
     const text = (c: any[]) => c.map((s) => s.text).join('');
@@ -47,14 +47,19 @@ export const blocks = (page: Page) =>
           return `h${b.level}:${text(b.content)}`;
         case 'listItem': {
           const kind = b.listType === 'bullet' ? 'ul' : b.listType === 'ordered' ? 'ol' : 'task';
-          return `${kind}${b.indent}${b.listType === 'task' ? (b.checked ? '[x]' : '[ ]') : ''}:${text(b.content)}`;
+          const quoted = b.quote ? `${b.callout ?? 'quote'}/` : '';
+          return `${quoted}${kind}${b.indent}${b.listType === 'task' ? (b.checked ? '[x]' : '[ ]') : ''}:${text(b.content)}`;
         }
         case 'quote':
-          return `quote:${text(b.content)}`;
+          return `${b.callout ?? 'quote'}:${text(b.content)}`;
         case 'code':
           return `code(${b.language}):${text(b.content)}`;
         case 'divider':
           return 'hr';
+        case 'details':
+          return `details:${text(b.content)}`;
+        case 'detailsEnd':
+          return '/details';
         case 'table':
           return `table:${b.rows.map((r: any[]) => r.map(text).join('|')).join('/')}`;
         default:

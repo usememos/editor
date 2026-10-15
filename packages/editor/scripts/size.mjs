@@ -2,7 +2,7 @@
 // for browsers as an app's bundler would, minified, then gzipped. There is
 // no limit; see "Performance" in docs/architecture.md. Run `npm run size`,
 // which builds dist/ first.
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
@@ -15,6 +15,9 @@ const entries = [
   ['Core, `Editor` only', "import { Editor } from '@usememos/editor'; new Editor({ element: document.body });"],
   ['Core, every export', "export * from '@usememos/editor';"],
   ['React entry, on top of the core', "export * from '@usememos/editor/react';", ['@usememos/editor', 'react', 'react/*', 'react-dom']],
+  // The emoji list is a separate file, loaded the first time the popup opens.
+  ['Emoji entry, on top of the core', "export * from '@usememos/editor/emoji';", ['@usememos/editor', './emoji-data-*']],
+  ['Emoji list, loaded on first use', `export * from './dist/${readdirSync(dist).find((f) => /^emoji-data-.*\.js$/.test(f))}';`],
 ];
 
 const kb = (bytes) => `${(bytes / 1000).toFixed(1)} KB`;
@@ -30,7 +33,9 @@ for (const [name, contents, external = []] of entries) {
     external,
     // The built files, with #entities resolved through the package's
     // imports map as in an app, not through the repo's tsconfig paths.
-    alias: external.length ? { '@usememos/editor/react': join(dist, 'react.js') } : { '@usememos/editor': join(dist, 'index.js') },
+    alias: external.length
+      ? { '@usememos/editor/react': join(dist, 'react.js'), '@usememos/editor/emoji': join(dist, 'emoji.js') }
+      : { '@usememos/editor': join(dist, 'index.js') },
     tsconfigRaw: {},
     logLevel: 'warning',
   });

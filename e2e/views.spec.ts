@@ -148,7 +148,9 @@ test('an html view renders inline raw HTML a run at a time, and its source shows
     });
   });
   const views = page.locator('#editor .mbe-view-html');
-  await expect(views).toHaveText(['[<kbd>**Ctrl**</kbd>]', '[<br>]', '[<span>]']);
+  // The view gets the tags; the Markdown between them renders as the editor's own.
+  await expect(views).toHaveText(['[<kbd>Ctrl</kbd>]', '[<br>]', '[<span>]']);
+  await expect(views.first().locator('strong')).toHaveText('Ctrl');
   await expect(page.locator('#editor .mbe-raw-html')).toHaveCount(0);
   // Typing after a run keeps it rendered; the saved Markdown never changes.
   await page.locator('#editor').click();
@@ -197,4 +199,159 @@ test('math renders through a renderer that loads on demand', async ({ page }) =>
   await expect(view).toHaveText('$e$');
   await page.evaluate(() => (window as any).load());
   await expect(view).toHaveText('formula e');
+});
+
+// HTML sections: an element whose tags are in different HTML blocks, with Markdown between them (memos#6477).
+const SECTION = [
+  '<details><summary>Test</summary>',
+  '',
+  '> 💡 **Tip**',
+  '> Test[^1] #tag',
+  '',
+  '',
+  '```',
+  'Some code here',
+  '```',
+  '',
+  '</details>',
+  '',
+  '[^1]: very important',
+].join('\n');
+
+/** An editor whose `html` view parses HTML as is: a test stand-in for a sanitizing renderer. */
+const sectionEditor = (page: import('@playwright/test').Page, content: string, options: { editable?: boolean; markdownView?: boolean } = {}) =>
+  page.evaluate(
+    ({ content, options }) => {
+      const { Editor, footnotes, tags } = (window as any).core;
+      const w = window as any;
+      w.editor.destroy();
+      w.views = [] as string[];
+      const html = (source: string, el: HTMLElement) => {
+        w.views.push(source);
+        const template = document.createElement('template');
+        // A Markdown renderer wraps a line of its own in a paragraph, as memos' remark pipeline does.
+        template.innerHTML = options.markdownView ? source.replace(/\n\n(\uE000\d+\uE001)\n\n/g, '<p>$1</p>') : source;
+        el.append(template.content);
+      };
+      w.editor = new Editor({
+        element: document.getElementById('editor'),
+        content,
+        editable: options.editable ?? true,
+        // <details> as an HTML section, not a collapsible section of blocks, so the view renders it.
+        markdown: { breaks: true, details: false },
+        extensions: [footnotes(), tags(), { name: 'html', views: { html } }],
+      });
+    },
+    { content, options },
+  );
+
+test('an HTML section renders its HTML through the view and the Markdown inside as blocks', async ({ page }) => {
+  await page.goto('/?empty');
+  await sectionEditor(page, SECTION, { editable: false });
+  const editor = page.locator('#editor');
+  const details = editor.locator('.mbe-view-html > details');
+  await expect(details).toHaveCount(1);
+  await expect(details.locator('summary')).toHaveText('Test');
+  // The view never sees the Markdown, only the HTML around it.
+  expect(await page.evaluate(() => (window as any).views)).toEqual(['<details><summary>Test</summary>\n\n\uE0000\uE001\n\n</details>']);
+  // The quote, code block, footnote reference and tag inside render as they do anywhere else.
+  await details.locator('summary').click();
+  await expect(details.locator('.mbe-flow > blockquote.mbe-block')).toHaveText('💡 Tip\nTest1 #tag');
+  await expect(details.locator('.mbe-flow strong')).toHaveText('Tip');
+  await expect(details.locator('.mbe-footnote-ref')).toHaveText('1');
+  await expect(details.locator('.mbe-tag')).toHaveText('#tag');
+  await expect(details.locator('.mbe-flow > .mbe-code pre code')).toHaveText('Some code here');
+  await expect(editor.locator(':scope > .mbe-footnote')).toHaveText('1very important');
+  // Styled as blocks: a quote has its bar, and code is a block, not inline code.
+  expect(await details.locator('blockquote').evaluate((el) => getComputedStyle(el).borderInlineStartWidth)).toBe('3px');
+  expect(await details.locator('pre code').evaluate((el) => getComputedStyle(el).display)).toBe('block');
+  // Line breaks between the tags are not text: the summary sits one block gap above the quote.
+  const gap = await details.evaluate((el) => el.querySelector('blockquote')!.getBoundingClientRect().top - el.querySelector('summary')!.getBoundingClientRect().bottom);
+  expect(gap).toBe(8);
+  // Nothing inside is a block of the document, editable, or in the saved Markdown.
+  await expect(details.locator('[data-block-id], [data-content], [contenteditable]')).toHaveCount(0);
+  expect(await md(page)).toBe(SECTION);
+});
+
+test('a reference inside a section leads to its note, and the section stays open when its block renders again', async ({ page }) => {
+  await page.goto('/?empty');
+  await sectionEditor(page, `<div style="margin-top: 1500px"></div>\n\n${SECTION}`, { editable: false });
+  const details = page.locator('#editor details');
+  await details.locator('summary').click();
+  await expect(details).toHaveAttribute('open', '');
+  await page.evaluate(() => (window as any).editor.redecorate());
+  await expect(details).toHaveAttribute('open', '');
+  await details.locator('.mbe-footnote-ref').click();
+  await expect(page.locator('#editor .mbe-footnote')).toBeInViewport();
+});
+
+test('a section reads the same through a view that renders Markdown, which wraps a slot in a paragraph', async ({ page }) => {
+  await page.goto('/?empty');
+  await sectionEditor(page, SECTION, { editable: false, markdownView: true });
+  const details = page.locator('#editor details');
+  await expect(details.locator(':scope > .mbe-flow > blockquote')).toHaveCount(1);
+  await expect(details.locator('p:has(.mbe-flow)')).toHaveCount(0);
+});
+
+test('any HTML element can hold Markdown: centered text, table cells and nested sections', async ({ page }) => {
+  await page.goto('/?empty');
+  const content = [
+    '<div align="center">',
+    '',
+    '# Title',
+    '',
+    '- one',
+    '- two',
+    '',
+    '<details>',
+    '<summary>More</summary>',
+    '',
+    '1. first',
+    '',
+    '</details>',
+    '',
+    '</div>',
+    '',
+    '<table>',
+    '<tr>',
+    '<td>',
+    '',
+    '**cell**',
+    '',
+    '</td>',
+    '</tr>',
+    '</table>',
+  ].join('\n');
+  await sectionEditor(page, content, { editable: false });
+  const editor = page.locator('#editor');
+  const div = editor.locator('.mbe-view-html > div[align="center"]');
+  await expect(div.locator(':scope > .mbe-flow > h1')).toHaveText('Title');
+  await expect(div.locator(':scope > .mbe-flow > .mbe-list-item')).toHaveText(['one', 'two']);
+  await expect(div.locator('details > .mbe-flow .mbe-marker')).toHaveText('1.');
+  await expect(editor.locator('td > .mbe-flow strong')).toHaveText('cell');
+  expect(await md(page)).toBe(content);
+});
+
+test('clicking a section while editing shows its source to edit', async ({ page }) => {
+  await page.goto('/?empty');
+  await sectionEditor(page, `before\n\n${SECTION}`);
+  const editor = page.locator('#editor');
+  await editor.locator('details summary').click();
+  await expect(editor.locator('pre.mbe-raw[data-syntax="html"]')).toHaveText(SECTION.slice(0, SECTION.indexOf('\n\n[^1]')));
+  await expect(editor.locator('details')).toHaveCount(0);
+  // Moving away renders it again.
+  await editor.locator('p').first().click();
+  await expect(editor.locator('details')).toHaveCount(1);
+  expect(await md(page)).toBe(`before\n\n${SECTION}`);
+});
+
+test('the copy button of a code block inside a section copies its code', async ({ page, context, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Reading the clipboard needs Chromium permissions');
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.goto('/?empty');
+  await sectionEditor(page, '<details open>\n<summary>S</summary>\n\n```js\nconst a = 1;\n```\n\n</details>', { editable: false });
+  const code = page.locator('#editor details .mbe-code');
+  await code.hover();
+  await code.locator('.mbe-code-copy').click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('const a = 1;');
 });

@@ -20,7 +20,9 @@ type EditorProps = Pick<
   | 'onLinkClick'
   | 'theme'
   | 'toolbar'
+  | 'linkCard'
   | 'slashMenu'
+  | 'slashHint'
   | 'labels'
   | 'icons'
 >;

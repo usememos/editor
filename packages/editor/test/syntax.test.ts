@@ -130,6 +130,37 @@ describe('blocks', () => {
     [">", [], ""],
   ]);
 
+  section('Lists in quotes', NONE, [
+    ["> ✏️ **Quick note**\n> - Item 1: check xyz\n> - Item 2: check abc", ["quote ✏️ <b>Quick note</b>", "quote/bullet:0 Item 1: check xyz", "quote/bullet:0 Item 2: check abc"], "> ✏️ **Quick note**\n>\n> - Item 1: check xyz\n> - Item 2: check abc\n"],
+    ["> Note\n>\n> - a\n> - b", ["quote Note", "quote/bullet:0 a", "quote/bullet:0 b"], SAME],
+    ["> Note\n> * a\n> * b", ["quote Note", "quote/bullet:0 a", "quote/bullet:0 b"], "> Note\n>\n> - a\n> - b\n"],
+    ["> - a\n>   - b\n> 1. c\n> - [x] d", ["quote/bullet:0 a", "quote/bullet:1 b", "quote/ordered:0 c", "quote/task[x]:0 d"], SAME],
+    ["> - a\n>\n> after", ["quote/bullet:0 a", "quote after"], SAME],
+    ["> - a\n\n- b", ["quote/bullet:0 a", "bullet:0 b"], SAME],
+    ["- a\n\n> - b", ["bullet:0 a", "quote/bullet:0 b"], SAME],
+    ["> 3. a\n> 4. b", ["quote/ordered@3:0 a", "quote/ordered:0 b"], SAME],
+  ]);
+
+  section('Callouts', NONE, [
+    ["> [!TIP]\n> First paragraph\n>\n> Second paragraph", ["callout(tip) First paragraph", "callout(tip) Second paragraph"], SAME],
+    ["> [!note]\n> a", ["callout(note) a"], "> [!NOTE]\n> a\n"],
+    ["> [!WARNING]  \n> a", ["callout(warning) a"], "> [!WARNING]\n> a\n"],
+    ["> [!NOTE]\n>\n> a", ["callout(note) a"], "> [!NOTE]\n> a\n"],
+    ["> [!TIP]", ["callout(tip) "], "> [!TIP]\n> &nbsp;\n"],
+    ["> [!NOTE]\n> a\n\n> [!CAUTION]\n> b", ["callout(note) a", "callout(caution) b"], SAME],
+    ["> [!NOTE]\n> a\n\n> b", ["callout(note) a", "quote b"], SAME],
+    ["> [!NOTE] text", ["quote [!NOTE] text"], "> \\[!NOTE\\] text\n"],
+    ["> [!FYI]\n> a", ["quote [!FYI] a"], "> \\[!FYI\\] a\n"],
+    ["> a\n> [!NOTE]", ["quote a [!NOTE]"], "> a \\[!NOTE\\]\n"],
+    ["> [!NOTE]\n> - a\n> - b", ["callout(note)/bullet:0 a", "callout(note)/bullet:0 b"], SAME],
+    ["> [!TIP]\n> Steps:\n> 1. a\n> 2. b", ["callout(tip) Steps:", "callout(tip)/ordered:0 a", "callout(tip)/ordered:0 b"], "> [!TIP]\n> Steps:\n>\n> 1. a\n> 2. b\n"],
+    ["> [!NOTE]\n>\n> 2. a", ["callout(note)/ordered@2:0 a"], SAME],
+  ]);
+
+  section('Callouts with callouts: false', { callouts: false }, [
+    ["> [!NOTE]\n> a", ["quote [!NOTE] a"], "> \\[!NOTE\\] a\n"],
+  ]);
+
   section('Code blocks', NONE, [
     ["```ts\nconst x = 1;\n```", ["code(ts) const x = 1;"], SAME],
     ["~~~\ntilde\n~~~", ["code() tilde"], "```\ntilde\n```\n"],
@@ -164,21 +195,44 @@ describe('blocks', () => {
     ["<br>", ["raw(html) <br>"], SAME],
     ["</close>", ["raw(html) </close>"], SAME],
     ["<not a link>", ["raw(html) <not a link>"], SAME],
-    // A collapsible section is one raw HTML block, blank lines and Markdown inside included.
-    ["<details>\n<summary>S</summary>\n\nBody\n</details>", ["raw(html) <details>⏎<summary>S</summary>⏎⏎Body⏎</details>"], SAME],
-    ["<details open>\n<summary>S</summary>\n\n- a\n- b\n\n</details>", ["raw(html) <details open>⏎<summary>S</summary>⏎⏎- a⏎- b⏎⏎</details>"], SAME],
-    ["<details>\n<summary>Outer</summary>\n\n<details>\n<summary>Inner</summary>\n\nx\n\n</details>\n\n</details>", ["raw(html) <details>⏎<summary>Outer</summary>⏎⏎<details>⏎<summary>Inner</summary>⏎⏎x⏎⏎</details>⏎⏎</details>"], SAME],
+    // A <details> element with its title on the next line and a body after a
+    // blank line is a collapsible section: a title, the blocks inside, an end.
+    ["<details>\n<summary>S</summary>\n\nBody\n</details>", ["details S", "p Body", "/details"], "<details>\n<summary>S</summary>\n\nBody\n\n</details>\n"],
+    ["<details open>\n<summary>S</summary>\n\n- a\n- b\n\n</details>", ["details(open) S", "bullet:0 a", "bullet:0 b", "/details"], SAME],
+    ["<details>\n<summary>Outer</summary>\n\n<details>\n<summary>Inner</summary>\n\nx\n\n</details>\n\n</details>", ["details Outer", "details Inner", "p x", "/details", "/details"], SAME],
+    ["<details>\n<summary>A &amp; B</summary>\n\nx\n\n</details>", ["details A & B", "p x", "/details"], SAME],
+    ["<details>\n  <summary>S</summary>\n\nx\n</details>", ["details S", "p x", "/details"], "<details>\n<summary>S</summary>\n\nx\n\n</details>\n"],
+    ["para\n\n<details>\n<summary>S</summary>\n\nBody\n</details>\n\nafter", ["p para", "details S", "p Body", "/details", "p after"], "para\n\n<details>\n<summary>S</summary>\n\nBody\n\n</details>\n\nafter\n"],
+    // Other shapes stay raw HTML.
     ["<details><summary>S</summary>Body</details>", ["raw(html) <details><summary>S</summary>Body</details>"], SAME],
+    ["<details>\n<summary>S</summary>\n</details>", ["raw(html) <details>⏎<summary>S</summary>⏎</details>"], SAME],
     // Never closed: CommonMark's blocks, as before.
     ["<details>\n<summary>S</summary>\n\nBody", ["raw(html) <details>⏎<summary>S</summary>", "p Body"], SAME],
-    ["para\n\n<details>\n<summary>S</summary>\n\nBody\n</details>\n\nafter", ["p para", "raw(html) <details>⏎<summary>S</summary>⏎⏎Body⏎</details>", "p after"], SAME],
+    // Any element with Markdown between its tags, not only <details>.
+    ["<div align=\"center\">\n\n**Hi**\n\n</div>", ["raw(html) <div align=\"center\">⏎⏎**Hi**⏎⏎</div>"], SAME],
+    ["<p align=\"center\">\n\n![logo](a.png)\n\n</p>\n\nafter", ["raw(html) <p align=\"center\">⏎⏎![logo](a.png)⏎⏎</p>", "p after"], SAME],
+    ["<table>\n<tr>\n<td>\n\n- a\n\n</td>\n</tr>\n</table>", ["raw(html) <table>⏎<tr>⏎<td>⏎⏎- a⏎⏎</td>⏎</tr>⏎</table>"], SAME],
+    ["<div>\n<details>\n<summary>S</summary>\n\nx\n\n</details>\n\ny\n\n</div>", ["raw(html) <div>⏎<details>⏎<summary>S</summary>⏎⏎x⏎⏎</details>⏎⏎y⏎⏎</div>"], SAME],
+    // Closing an outer element closes the ones opened inside it, as in a browser.
+    ["<div>\n<span>\n\nx\n\n</div>", ["raw(html) <div>⏎<span>⏎⏎x⏎⏎</div>"], SAME],
+    // Void and self-closing tags, comments and closed elements leave nothing open.
+    ["<div><img src=\"a.png\"><br/></div>\n\nx", ["raw(html) <div><img src=\"a.png\"><br/></div>", "p x"], SAME],
+    ["<!-- <div> -->\n\nx\n\n<div></div>", ["raw(html) <!-- <div> -->", "p x", "raw(html) <div></div>"], SAME],
+    ["<div title=\"a > b\">\n\nx\n\n</div>", ["raw(html) <div title=\"a > b\">⏎⏎x⏎⏎</div>"], SAME],
+    // A closing tag inside a paragraph is not an HTML block, so it does not close the section.
+    ["<div>\n\ntext</div>", ["raw(html) <div>", "p text<html></div></html>"], SAME],
+  ]);
+
+  section('HTML blocks with details: false', { details: false }, [
+    ["<details>\n<summary>S</summary>\n\nBody\n</details>", ["raw(html) <details>⏎<summary>S</summary>⏎⏎Body⏎</details>"], SAME],
   ]);
 
   section('Structure kept as source', NONE, [
     ["- a\n\n  para2", ["raw(markdown) - a⏎⏎  para2"], SAME],
     ["- a\n  ```\n  code\n  ```", ["raw(markdown) - a⏎  ```⏎  code⏎  ```"], SAME],
     ["> # h", ["raw(markdown) > # h"], SAME],
-    ["> - list", ["raw(markdown) > - list"], SAME],
+    ["> - a\n>\n>   para2", ["raw(markdown) > - a⏎>⏎>   para2"], SAME],
+    ["> ```\n> code\n> ```", ["raw(markdown) > ```⏎> code⏎> ```"], SAME],
     [">> nested", ["raw(markdown) >> nested"], SAME],
     ["- a\n  - b\n    - c\n      - d\n        - e\n          - f\n            - g", ["raw(markdown) - a⏎  - b⏎    - c⏎      - d⏎        - e⏎          - f⏎            - g"], SAME],
   ]);
@@ -509,6 +563,11 @@ describe('typing', () => {
     ['[x] a', ['task[x]:0 a']],
     ['- [ ] a', ['task[ ]:0 a']],
     ['> a', ['quote a']],
+    ['[!tip] a', ['callout(tip) a']],
+    ['> [!WARNING] a', ['callout(warning) a']],
+    ['[!fyi] a', ['p [!fyi] a']],
+    ['>>> a', ['details a', 'p ', '/details']],
+    ['>> a', ['p >> a']],
     ['```ts ', ['code(ts) ']],
     ['---', ['hr', 'p ']],
     ['a # b', ['p a # b']],

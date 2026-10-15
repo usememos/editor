@@ -42,6 +42,12 @@ const reHtmlBlockOpen: readonly RegExp[] = [
   new RegExp(`^(?:${OPENTAG}|${CLOSETAG})[ \\t]*$`, 'i'),
 ];
 
+/** True when `text` at the start of a line would start an HTML block that can interrupt a paragraph (types 1 to 6). */
+export function interruptsParagraph(text: string): boolean {
+  for (let type = 1; type <= 6; type++) if (reHtmlBlockOpen[type]!.test(text)) return true;
+  return false;
+}
+
 const reHtmlBlockClose: readonly RegExp[] = [
   /^$/,
   /<\/(?:script|pre|textarea|style)>/i,

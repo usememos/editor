@@ -30,6 +30,8 @@ import { type Widget, WidgetImpl, type WidgetRender } from './widgets';
 import { type Binding, matchesKey, parseKeyName } from './keymap';
 import {
   type Block,
+  CALLOUT_TYPES,
+  type CalloutType,
   type Doc,
   type EditorState,
   type HeadingBlock,
@@ -52,18 +54,22 @@ import {
   isCollapsed,
   isImageBlock,
   isPlainTextBlock,
+  isTextless,
   isTextBlock,
+  linkAt,
   paragraph,
   plain,
   samePosition,
   sliceInline,
   startOf,
+  quoteKind,
 } from './model';
 import { FormatToolbar, InputPopover, type ToolbarItem } from './ui/toolbar';
 import { BlockHandle } from './ui/blockHandle';
+import { LinkCard, type LinkTarget } from './ui/linkCard';
 import { ResizeHandles, type ImageTarget } from './ui/resizeHandles';
 import { Menu, type MenuItem, type MenuSection, isMac, isSafari, isTouch, matches, setPopupContainer } from './ui/popup';
-import { BLOCK_ATTR, BlockRenderer, atomAt, childIndex, contentElement, domText, domToPosition, positionToDom, type ResolveUrl, defaultResolveUrl } from './view/dom';
+import { BLOCK_ATTR, BlockRenderer, atomAt, calloutName, childIndex, contentElement, domText, MARKDOWN_VIEW, domToPosition, positionToDom, type ResolveUrl, defaultResolveUrl } from './view/dom';
 import { revealedViews, sameRevealed, viewEntry } from './view/reveal';
 import { scrollRectIntoView } from './view/scroll';
 import { type Theme, mergeClasses, tokenProperties } from './theme';
@@ -123,6 +129,12 @@ export interface EditorOptions {
    */
   toolbar?: boolean | { items?: readonly ToolbarItem[] };
   /**
+   * Shows the link card while editing: the link's URL and buttons to open,
+   * copy, edit and remove it, when the pointer rests on a link or the caret
+   * is inside one. Default true.
+   */
+  linkCard?: boolean;
+  /**
    * The element menus, the toolbar and other popups are appended to.
    * Default: the nearest open `<dialog>` or `aria-modal` ancestor of
    * `element`, else `document.body`.
@@ -130,6 +142,12 @@ export interface EditorOptions {
   popupContainer?: HTMLElement;
   /** IDs of built-in slash menu items to show, in order, or false for no slash menu. See SLASH_ITEM_IDS. */
   slashMenu?: false | readonly SlashItemId[];
+  /**
+   * Shows `labels.slashHint` in the empty paragraph that has the caret.
+   * Default false. Has no effect when `slashMenu` is false. Fixed for the
+   * editor's lifetime.
+   */
+  slashHint?: boolean;
   /** Shortcut for `on('change')`, with the new Markdown. */
   onChange?: (markdown: string, editor: Editor) => void;
   /** Shortcut for `on('submit')`, with the current Markdown. */
@@ -191,6 +209,8 @@ export type ActiveName =
   | 'table'
   | 'divider'
   | 'raw'
+  /** The title of a collapsible section. */
+  | 'details'
   /** The selection is exactly one image. */
   | 'image';
 
@@ -230,6 +250,12 @@ export interface EditorCommands {
   toggleOrderedList(): boolean;
   toggleTaskList(): boolean;
   toggleBlockquote(): boolean;
+  /** Turns the selected blocks into a callout of `type` (default `note`), or back into paragraphs when they are one already. */
+  toggleCallout(attrs?: { type?: CalloutType }): boolean;
+  /** Changes the type of the callout with the caret, or turns the quote with the caret into a callout; `null` makes it a plain quote. */
+  setCallout(attrs: { type: CalloutType | null }): boolean;
+  /** Turns the block with the caret into the title of a collapsible section with an empty body, or, on a title, removes the section and keeps its blocks. */
+  toggleDetails(): boolean;
   toggleCodeBlock(attrs?: { language?: string }): boolean;
   setLink(attrs: { href: string }): boolean;
   unsetLink(): boolean;
@@ -262,10 +288,13 @@ export const SLASH_ITEM_IDS = [
   'heading1',
   'heading2',
   'heading3',
+  'heading4',
   'bulletList',
   'numberedList',
   'todoList',
   'quote',
+  'callout',
+  'details',
   'code',
   'table',
   'divider',
@@ -284,10 +313,13 @@ const BLOCK_ITEMS: readonly BlockItem[] = [
   { id: 'heading1', aliases: ['h1', 'title'], spec: { type: 'heading', level: 1 } },
   { id: 'heading2', aliases: ['h2', 'subtitle'], spec: { type: 'heading', level: 2 } },
   { id: 'heading3', aliases: ['h3'], spec: { type: 'heading', level: 3 } },
+  { id: 'heading4', aliases: ['h4'], spec: { type: 'heading', level: 4 } },
   { id: 'bulletList', aliases: ['ul', 'unordered', 'bullet'], spec: { type: 'listItem', listType: 'bullet' } },
   { id: 'numberedList', aliases: ['ol', 'ordered'], spec: { type: 'listItem', listType: 'ordered' } },
   { id: 'todoList', aliases: ['task', 'checkbox', 'checklist'], spec: { type: 'listItem', listType: 'task' } },
   { id: 'quote', aliases: ['blockquote', 'citation'], spec: { type: 'quote' } },
+  { id: 'callout', aliases: ['alert', 'admonition', 'note', 'tip', 'important', 'warning', 'caution'], spec: { type: 'quote', callout: 'note' } },
+  { id: 'details', aliases: ['toggle', 'collapse', 'collapsible', 'summary', 'spoiler', 'fold'], spec: { type: 'details' } },
   { id: 'code', aliases: ['pre', 'snippet', 'fence'], spec: { type: 'code' } },
   { id: 'table', aliases: ['grid'], spec: { type: 'table' } },
   { id: 'divider', aliases: ['hr', 'separator', 'line', 'rule'], spec: { type: 'divider' } },
@@ -396,6 +428,9 @@ export class Editor {
   /** The link popover, and the field for an image's alt text. */
   private readonly inputPopover: InputPopover;
   private readonly blockHandle: BlockHandle;
+  /** Collapsible sections shown collapsed, by the ID of their title. View state: not saved, not undone. */
+  private readonly collapsed = new Set<string>();
+  private readonly linkCard: LinkCard | null;
   private readonly resizeHandles: ResizeHandles;
   /** The selected image's element, which carries the selected class. */
   private selectedImageEl: HTMLElement | null = null;
@@ -435,13 +470,16 @@ export class Editor {
     this.source = loaded.source;
     this.current = createState(loaded.doc);
     this.renderer = new BlockRenderer(root, this.labels);
+    this.renderer.collapsed = this.collapsed;
+    this.collapseClosedSections(this.current.doc);
     this.renderer.widgetsAfter = (blockId) => {
       if (this.widgets.length === 0) return undefined;
       const els = this.widgets.filter((w) => w.blockId === blockId).map((w) => w.element);
       return els.length ? els : undefined;
     };
-    const views = new Map(this.extensions.flatMap((e) => Object.entries(e.views ?? {})));
-    if (views.size > 0) this.renderer.views = views;
+    // Raw Markdown blocks are rendered by the editor itself (see MARKDOWN_VIEW).
+    this.renderer.views = new Map([['markdown', MARKDOWN_VIEW], ...this.extensions.flatMap((e) => Object.entries(e.views ?? {}))]);
+    this.renderer.markdown = this.markdown;
     this.renderer.onViewSettled = (ids) => this.viewsSettled(ids);
     const codeDecorators = this.extensions.flatMap((e) => (e.codeDecorations ? [e.codeDecorations] : []));
     if (codeDecorators.length > 0) {
@@ -506,6 +544,15 @@ export class Editor {
     this.toolbar = options.toolbar === false ? null : new FormatToolbar(this, typeof options.toolbar === 'object' ? options.toolbar.items : undefined);
     if (this.toolbar) this.toolbar.onMenuChange = () => this.syncActiveDescendant();
     this.blockHandle = new BlockHandle(this);
+    this.linkCard =
+      options.linkCard === false
+        ? null
+        : new LinkCard(this, {
+            open: (target, event) => this.openHref(target.el.getAttribute('href'), event),
+            edit: (target) => this.editLink(target),
+            remove: (target) => this.removeLink(target),
+            targetOf: (el) => this.linkTargetOf(el),
+          });
     this.resizeHandles = new ResizeHandles(this);
     this.renderer.onImageError = () => {
       if (this.destroyed) return;
@@ -566,6 +613,8 @@ export class Editor {
     this.blockSel = null;
     this.suggestions.reset();
     const next = createState(loaded.doc);
+    this.collapsed.clear();
+    this.collapseClosedSections(next.doc);
     this.relocateWidgets(this.current.doc, next.doc, true);
     this.current = next;
     this.paint(true, true);
@@ -619,13 +668,13 @@ export class Editor {
       }
     }
     const block = getBlock(s.doc, s.selection.focus.blockId);
-    if (blockName(block) !== name) return false;
+    if (blockName(block) !== name && !(name === 'blockquote' && quoteKind(block))) return false;
     if (!attrs) return true;
     const actual = this.getAttributes(name);
     return Object.entries(attrs).every(([k, v]) => actual[k] === v);
   }
 
-  /** Attributes of `name` at the selection: `src`, `alt`, `title`, `align`, `width`, `height` and `block` (true for an image block) for a selected image, `href` for a link, `level` for a heading, `language` for a code block, `checked` for a task, `syntax` for a raw block. */
+  /** Attributes of `name` at the selection: `src`, `alt`, `title`, `align`, `width`, `height` and `block` (true for an image block) for a selected image, `href` for a link, `level` for a heading, `language` for a code block, `checked` for a task, `syntax` for a raw block, `callout` for a callout, `open` (saved as `<details open>`) and `collapsed` (shown collapsed now) for a section title. */
   getAttributes(name: ActiveName): Record<string, unknown> {
     const s = this.current;
     if (name === 'link') {
@@ -637,6 +686,9 @@ export class Editor {
       return selected ? { ...selected.image, block: cmd.selectedImageBlock(s) !== null } : {};
     }
     const block = getBlock(s.doc, s.selection.focus.blockId);
+    // A list item in a quote is in the list and in the quote.
+    const kind = quoteKind(block);
+    if (name === 'blockquote' && kind) return kind === 'quote' ? {} : { callout: kind };
     if (blockName(block) !== name) return {};
     switch (block.type) {
       case 'heading':
@@ -647,6 +699,10 @@ export class Editor {
         return block.listType === 'task' ? { checked: block.checked, indent: block.indent } : { indent: block.indent };
       case 'raw':
         return { syntax: block.syntax };
+      case 'quote':
+        return block.callout ? { callout: block.callout } : {};
+      case 'details':
+        return { open: block.open, collapsed: this.collapsed.has(block.id) };
       default:
         return {};
     }
@@ -850,6 +906,7 @@ export class Editor {
     if (!next || next === this.current) return false;
     next = cmd.dropBrokenTokens(next, this.current, this.markdown.inline);
     next = cmd.clampListIndents(next, this.current);
+    next = cmd.balanceSections(next);
     // A command that rebuilt the block list without changing any block changed nothing.
     if (next.doc !== this.current.doc && sameBlocks(next.doc, this.current.doc)) next = { ...next, doc: this.current.doc };
     if (next.doc === this.current.doc && next.selection === this.current.selection && next.storedMarks === this.current.storedMarks) {
@@ -873,6 +930,10 @@ export class Editor {
       toggleOrderedList: () => block({ type: 'listItem', listType: 'ordered' }),
       toggleTaskList: () => block({ type: 'listItem', listType: 'task' }),
       toggleBlockquote: () => block({ type: 'quote' }),
+      // Without callouts or sections in the Markdown dialect, they would not read back as such.
+      toggleCallout: (attrs = {}) => this.markdown.callouts && block({ type: 'quote', callout: attrs.type ?? 'note' }),
+      toggleDetails: () => this.markdown.details && block({ type: 'details' }),
+      setCallout: ({ type }) => (this.markdown.callouts || type === null) && run((s) => cmd.setCallout(s, s.selection.focus.blockId, type)),
       toggleCodeBlock: (attrs = {}) => block({ type: 'code', language: attrs.language }),
       setLink: ({ href }) => run((s) => cmd.setLink(s, href)),
       unsetLink: () => run((s) => cmd.setLink(s, null)),
@@ -1039,6 +1100,7 @@ export class Editor {
     this.toolbar?.destroy();
     this.inputPopover.destroy();
     this.blockHandle.destroy();
+    this.linkCard?.destroy();
     this.resizeHandles.destroy();
     setPopupContainer(this.root, undefined);
     for (const name of Object.keys(this.runtime.attributes ?? {})) this.root.removeAttribute(name);
@@ -1168,9 +1230,10 @@ export class Editor {
       const el = this.renderer.elementFor(block.id);
       if (!el || !el.classList.contains('mbe-empty')) continue;
       let hint = '';
-      if (block.type === 'heading') hint = this.labels[`heading${Math.min(block.level, 3)}` as 'heading1'];
+      if (block.type === 'heading') hint = this.labels[`heading${Math.min(block.level, 4)}` as 'heading1'];
       else if (block.type === 'listItem') hint = this.labels.listHint;
-      else if (block.type === 'quote') hint = this.labels.quoteHint;
+      else if (block.type === 'quote' && !block.callout) hint = this.labels.quoteHint;
+      else if (block.type === 'details') hint = this.labels.detailsHint;
       if (hint && el.dataset.hint !== hint) el.dataset.hint = hint;
     }
     this.updateUi();
@@ -1278,7 +1341,7 @@ export class Editor {
     const end = blockIndex(this.state.doc, to.blockId);
     for (let i = from + dir; (end - i) * dir > 0; i += dir) {
       const block = blocks[i]!;
-      if (block.type !== 'divider') return this.blockEntry(block, dir === 1, x);
+      if (!this.skipsCaret(block)) return this.blockEntry(block, dir === 1, x);
     }
     return null;
   }
@@ -1445,7 +1508,7 @@ export class Editor {
       const index = blockIndex(this.state.doc, selected.pos.blockId);
       for (let i = index + (forward ? 1 : -1); i >= 0 && i < blocks.length; i += forward ? 1 : -1) {
         const block = blocks[i]!;
-        if (block.type === 'divider') continue;
+        if (this.skipsCaret(block)) continue;
         const offset = imageBlockOffset(block);
         if (offset !== null) return { anchor: { blockId: block.id, offset }, focus: { blockId: block.id, offset: offset + 1 } };
         const vertical = key === 'ArrowDown' || key === 'ArrowUp';
@@ -1494,7 +1557,7 @@ export class Editor {
     }
     for (let i = index + dir; i >= 0 && i < blocks.length; i += dir) {
       const next = blocks[i]!;
-      if (next.type === 'divider') continue;
+      if (this.skipsCaret(next)) continue;
       if (next.type === 'table') {
         const r = dir === 1 ? 0 : next.rows.length - 1;
         const c = Math.min(col, next.align.length - 1);
@@ -1606,7 +1669,7 @@ export class Editor {
         // Android keyboards send Enter as keyCode 229, which keydown ignores,
         // so an open suggestion popup takes it here.
         if (this.suggestions.isOpen && this.suggestions.accept()) return;
-        this.run(cmd.splitBlock);
+        this.run((s) => (this.collapsed.has(s.selection.focus.blockId) ? cmd.splitCollapsedTitle(s) : cmd.splitBlock(s)));
         return;
       }
       case 'insertLineBreak':
@@ -1687,7 +1750,7 @@ export class Editor {
   private afterTyping(text: string): void {
     // Shortcuts are separate undo steps, so undo restores the typed characters.
     const typed = this.state;
-    if (text === ' ' || text === '-') this.run((s) => cmd.applyBlockInputRules(s));
+    if (text === ' ' || text === '-') this.run((s) => cmd.applyBlockInputRules(s, this.markdown));
     if (text.length === 1 && '*_`~'.includes(text)) this.run((s) => cmd.applyInlineInputRules(s));
     if (this.markdown.inline.length > 0) this.run((s) => cmd.applyTokenInputRules(s, this.markdown.inline) ?? s);
     if (text === ' ' && this.markdown.autolinks) this.run((s) => cmd.applyAutolinkInputRule(s) ?? s);
@@ -1856,7 +1919,7 @@ export class Editor {
       const containers: { cell?: { row: number; col: number } }[] =
         block.type === 'table'
           ? block.rows.flatMap((row, r) => row.map((_, c) => ({ cell: { row: r, col: c } })))
-          : block.type === 'divider'
+          : isTextless(block)
             ? []
             : [{}];
       for (const { cell } of containers) {
@@ -1980,6 +2043,8 @@ export class Editor {
     }
 
     if (mod && !e.altKey) {
+      // Read the caret first: a click just before the key may not have reached selectionchange yet.
+      if (e.key === '/' && !e.shiftKey) this.refreshSelection();
       if (e.key === '/' && !e.shiftKey && this.hasBlockMenu(this.state.selection.focus.blockId)) {
         return handled(() => this.openBlockMenu(this.state.selection.focus.blockId));
       }
@@ -2053,7 +2118,7 @@ export class Editor {
       const blocks = this.state.doc.blocks;
       for (let i = key.from + key.vertical; i >= 0 && i < blocks.length; i += key.vertical) {
         const block = blocks[i]!;
-        if (block.type === 'divider') continue;
+        if (this.skipsCaret(block)) continue;
         this.caretKey = null;
         const row = key.vertical === 1 ? 0 : block.type === 'table' ? block.rows.length - 1 : 0;
         const pos: Position =
@@ -2063,6 +2128,11 @@ export class Editor {
         this.setSelection({ anchor: pos, focus: pos });
         this.scrollCaretIntoView();
         return;
+      }
+      // Past the last line of a collapsible section that ends the document: add a paragraph after it.
+      if (key.vertical === 1 && blocks[blocks.length - 1]!.type === 'detailsEnd') {
+        this.caretKey = null;
+        this.run((s) => cmd.appendParagraph(s));
       }
     });
   }
@@ -2094,6 +2164,14 @@ export class Editor {
       e.preventDefault();
       return;
     }
+    // A section's toggle collapses or expands it, while editing and read-only alike.
+    const toggle = e.button === 0 ? target.closest?.<HTMLElement>('.mbe-details-toggle') : null;
+    const toggleBlock = toggle?.closest<HTMLElement>(`[${BLOCK_ATTR}]`)?.getAttribute(BLOCK_ATTR);
+    if (toggleBlock && this.root.contains(toggle!)) {
+      e.preventDefault();
+      this.setSectionCollapsed(toggleBlock, !this.collapsed.has(toggleBlock));
+      return;
+    }
     this.dropBlockSelection();
     if (target === this.root && e.button === 0 && !this.readOnly && this.clickBelowLastBlock(e)) return;
     // Clicking an image selects it as one unit; Shift+click extends the text selection as usual.
@@ -2116,6 +2194,14 @@ export class Editor {
       e.preventDefault();
       return;
     }
+    // Clicking a callout's icon opens its type menu.
+    const icon = e.button === 0 && !this.readOnly ? target.closest?.<HTMLElement>('.mbe-callout-icon') : null;
+    const iconBlock = icon?.parentElement?.getAttribute(BLOCK_ATTR);
+    if (icon && iconBlock && icon.parentElement!.parentElement === this.root) {
+      e.preventDefault();
+      this.openBlockMenu(iconBlock, icon.getBoundingClientRect());
+      return;
+    }
     if (e.button === 0) this.pointerDown = true;
     if (target.classList?.contains('mbe-checkbox')) {
       // Toggle in the model; keep the caret where it is.
@@ -2133,7 +2219,7 @@ export class Editor {
     const blocks = this.state.doc.blocks;
     const last = blocks[blocks.length - 1];
     const image = last ? imageBlockOffset(last) : null;
-    if (!last || (last.type !== 'code' && last.type !== 'table' && last.type !== 'divider' && image === null)) return false;
+    if (!last || (last.type !== 'code' && last.type !== 'table' && !isTextless(last) && image === null)) return false;
     const el = this.root.querySelector<HTMLElement>(`:scope > [data-block-id="${last.id}"]`);
     if (!el || e.clientY <= el.getBoundingClientRect().bottom) return false;
     e.preventDefault();
@@ -2162,20 +2248,24 @@ export class Editor {
     if (!link) return;
     // Links open on click when read-only, and on Mod+click while editing.
     e.preventDefault();
-    if (this.readOnly || (isMac ? e.metaKey : e.ctrlKey)) {
-      // The rendered href is the resolved URL; a link the policy dropped has none.
-      const href = link.getAttribute('href');
-      if (!href || this.runtime.onLinkClick?.({ editor: this, href, event: e })) return;
-      this.root.ownerDocument.defaultView?.open(href, '_blank', 'noopener,noreferrer');
-    }
+    // The rendered href is the resolved URL; a link the policy dropped has none.
+    if (this.readOnly || (isMac ? e.metaKey : e.ctrlKey)) this.openHref(link.getAttribute('href'), e);
+  }
+
+  /** Opens a resolved link URL, as a click on a link does: through `onLinkClick`, else in a new tab. */
+  private openHref(href: string | null, event: MouseEvent): void {
+    if (!href || this.runtime.onLinkClick?.({ editor: this, href, event })) return;
+    this.root.ownerDocument.defaultView?.open(href, '_blank', 'noopener,noreferrer');
   }
 
   /** Copies the code of the code block holding `button`, and shows that it did for a moment. */
   private copyCode(button: HTMLElement): void {
     const blockEl = button.closest<HTMLElement>(`[${BLOCK_ATTR}]`);
     const block = blockEl && this.state.doc.blocks.find((b) => b.id === blockEl.getAttribute(BLOCK_ATTR));
-    if (!block || block.type !== 'code') return;
-    const text = inlineText(block.content);
+    // A code block inside a rendered HTML section is not a block of the document: copy what it shows.
+    const text =
+      block?.type === 'code' ? inlineText(block.content) : button.closest('.mbe-flow .mbe-code')?.querySelector('code')?.textContent;
+    if (text == null) return;
     const doc = this.root.ownerDocument;
     const show = (name: 'copyCode' | 'copied') => {
       const icon = iconNode(doc, this.icon(name));
@@ -2243,6 +2333,7 @@ export class Editor {
 
   private onScroll(): void {
     this.blockHandle.hide();
+    this.linkCard?.reposition();
     this.resizeHandles.reposition();
     if (this.suggestions.isActive || this.toolbar?.isOpen || this.blockMenu.isOpen) this.updateUi();
   }
@@ -2257,7 +2348,7 @@ export class Editor {
       // Whole blocks, even an empty one.
       if (!e.clipboardData) return;
       e.preventDefault();
-      const doc: Doc = { blocks: this.state.doc.blocks.slice(range.from, range.to + 1).map(cmd.cloneBlock) };
+      const doc: Doc = { blocks: cmd.closeSections(this.state.doc.blocks.slice(range.from, range.to + 1).map(cmd.cloneBlock)) };
       // serializeBlocks keeps a selected empty line, which serializeMarkdown drops at the end.
       writeClipboard(e.clipboardData, doc, serializeBlocks(doc.blocks, this.markdown));
       if (cut && !this.readOnly) this.deleteSelectedBlocks();
@@ -2266,7 +2357,7 @@ export class Editor {
     this.refreshSelection();
     if (isCollapsed(this.state.selection) || !e.clipboardData) return;
     e.preventDefault();
-    const doc: Doc = { blocks: cmd.selectedBlocks(this.state) };
+    const doc: Doc = { blocks: cmd.closeSections(cmd.selectedBlocks(this.state)) };
     writeClipboard(e.clipboardData, doc, serializeMarkdown(doc, this.markdown).replace(/\n$/, ''));
     if (cut && !this.readOnly) this.run(cmd.deleteSelection);
   }
@@ -2368,7 +2459,8 @@ export class Editor {
     const ids = this.options.slashMenu || SLASH_ITEM_IDS;
     const items: SlashItem[] = ids
       .map((id) => BLOCK_ITEMS.find((b) => b.id === id))
-      .filter((b): b is BlockItem => !!b)
+      // Without callouts or sections in the Markdown dialect, they would not read back as such.
+      .filter((b): b is BlockItem => !!b && (b.id !== 'callout' || this.markdown.callouts) && (b.id !== 'details' || this.markdown.details))
       .map((b) => ({ id: b.id, label: this.labels[b.id], icon: this.icon(b.id), aliases: b.aliases, spec: b.spec }));
     return {
       name: 'slash',
@@ -2409,7 +2501,39 @@ export class Editor {
     const doc = this.current.doc;
     const a = blockIndex(doc, this.blockSel.anchor);
     const h = blockIndex(doc, this.blockSel.head);
-    return a < 0 || h < 0 ? null : { from: Math.min(a, h), to: Math.max(a, h) };
+    if (a < 0 || h < 0) return null;
+    return this.wholeSections({ from: Math.min(a, h), to: Math.max(a, h) });
+  }
+
+  /** `range` grown so that a collapsible section with its title or its end in it is in it whole. */
+  private wholeSections(range: cmd.BlockRange): cmd.BlockRange {
+    const blocks = this.current.doc.blocks;
+    let { from, to } = range;
+    if (!blocks.some((b) => b.type === 'details')) return range;
+    for (let changed = true; changed; ) {
+      changed = false;
+      for (let i = from; i <= to; i++) {
+        const block = blocks[i]!;
+        if (block.type === 'details') {
+          const end = cmd.sectionEnd(blocks, i) ?? i;
+          if (end > to) (to = end), (changed = true);
+        } else if (block.type === 'detailsEnd') {
+          const title = cmd.sectionTitle(blocks, i);
+          if (title !== null && title < from) (from = title), (changed = true);
+        }
+      }
+    }
+    return { from, to };
+  }
+
+  /** The next block a block selection moves to from `index`: blocks shown on screen, not section ends. */
+  private nextSelectable(index: number, dir: 1 | -1): string {
+    const blocks = this.current.doc.blocks;
+    for (let i = index + dir; i >= 0 && i < blocks.length; i += dir) {
+      const block = blocks[i]!;
+      if (block.type !== 'detailsEnd' && !this.renderer.elementFor(block.id)?.hasAttribute('data-section-hidden')) return block.id;
+    }
+    return blocks[index]!.id;
   }
 
   /** Selects whole blocks, from the block `anchor` to the block `head`. */
@@ -2485,7 +2609,6 @@ export class Editor {
     const blocks = this.state.doc.blocks;
     const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
     const mod = isMac ? e.metaKey : e.ctrlKey;
-    const clamp = (i: number) => blocks[Math.max(0, Math.min(blocks.length - 1, i))]!.id;
     switch (e.key) {
       case 'Escape':
         if (!plain || e.shiftKey) return false;
@@ -2497,9 +2620,12 @@ export class Editor {
         if (!plain) return false;
         const up = e.key === 'ArrowUp';
         if (e.shiftKey) {
-          this.selectBlockRange(this.blockSel!.anchor, clamp(blockIndex(this.current.doc, this.blockSel!.head) + (up ? -1 : 1)));
+          // From a section title, moving down passes over the section.
+          let head = blockIndex(this.current.doc, this.blockSel!.head);
+          if (!up && blocks[head]?.type === 'details') head = cmd.sectionEnd(blocks, head) ?? head;
+          this.selectBlockRange(this.blockSel!.anchor, this.nextSelectable(head, up ? -1 : 1));
         } else {
-          const id = clamp(up ? range.from - 1 : range.to + 1);
+          const id = this.nextSelectable(up ? range.from : range.to, up ? -1 : 1);
           this.selectBlockRange(id, id);
         }
         return true;
@@ -2564,6 +2690,39 @@ export class Editor {
       })));
       sections.push({ title: this.labels.tableSection, items });
     }
+    const kind = quoteKind(block);
+    if (kind && kind !== 'quote') {
+      // The callout's types, with the current one checked, and Delete for the whole callout.
+      // No Duplicate: a copy right after it would join it.
+      const current = kind;
+      const items: MenuItem[] = CALLOUT_TYPES.map((type) => {
+        const name = calloutName(type);
+        return {
+          id: name,
+          label: this.labels[name],
+          icon: this.icon(name),
+          checked: type === current,
+          run: () => this.run((s) => cmd.setCallout(s, blockId, type)),
+        };
+      });
+      sections.push({ title: this.labels.callout, items });
+      sections.push({
+        items: [
+          {
+            id: 'delete',
+            label: this.labels.delete,
+            icon: this.icon('delete'),
+            danger: true,
+            run: () =>
+              this.run((s) => {
+                const run = cmd.quoteRun(s, blockId);
+                return run ? cmd.deleteBlocks(s, { from: run.start, to: run.end }) : null;
+              }),
+          },
+        ],
+      });
+      return sections;
+    }
     const imageOffset = imageBlockOffset(block);
     if (imageOffset !== null) {
       const pos: Position = { blockId, offset: imageOffset };
@@ -2615,16 +2774,28 @@ export class Editor {
 
   /**
    * @internal
-   * Only large blocks get the block handle and block menu: tables, code blocks and
-   * image blocks. Other blocks change type through the slash menu or Markdown
-   * shortcuts.
+   * Only large blocks get the block handle and block menu: tables, code blocks,
+   * image blocks and callouts. Other blocks change type through the slash menu
+   * or Markdown shortcuts.
    */
   hasBlockMenu(blockId: string): boolean {
     const block = this.state.doc.blocks.find((b) => b.id === blockId);
-    return block?.type === 'table' || block?.type === 'code' || (!!block && isImageBlock(block));
+    return block?.type === 'table' || block?.type === 'code' || isCallout(block) || (!!block && isImageBlock(block));
   }
 
-  /** @internal Opens the block menu of a table, code block or image block, as the block handle and Mod+/ do. */
+  /**
+   * @internal
+   * The block whose block menu `blockId` belongs to, or null when it has none:
+   * the first block of a callout, so the handle sits by its icon; otherwise
+   * the block itself.
+   */
+  blockMenuOwner(blockId: string): string | null {
+    if (!this.hasBlockMenu(blockId)) return null;
+    const run = cmd.quoteRun(this.state, blockId);
+    return run ? this.state.doc.blocks[run.start]!.id : blockId;
+  }
+
+  /** @internal Opens the block menu of a table, code block, image block or callout, as the block handle and Mod+/ do. */
   openBlockMenu(blockId: string, anchor?: DOMRect): void {
     if (this.readOnly || !this.hasBlockMenu(blockId)) return;
     this.dropBlockSelection();
@@ -2637,7 +2808,7 @@ export class Editor {
     if (imageOffset !== null) {
       this.current = cmd.selectImage(this.state, { blockId, offset: imageOffset });
       if (!this.hasFocus()) this.focus();
-    } else if (this.state.selection.focus.blockId !== blockId) {
+    } else if (this.state.selection.focus.blockId !== blockId && !this.inSameCallout(this.state.selection.focus.blockId, blockId)) {
       const block = getBlock(this.state.doc, blockId);
       const start = startOf(block);
       this.current = { ...this.state, selection: { anchor: start, focus: start } };
@@ -2649,6 +2820,15 @@ export class Editor {
     const rect = anchor ?? this.blockElement(blockId)?.getBoundingClientRect();
     if (rect) this.blockMenu.popup.show(rect, 'below');
     this.syncActiveDescendant();
+  }
+
+  /** True if the blocks `a` and `b` are in the same callout. */
+  private inSameCallout(a: string, b: string): boolean {
+    const block = getBlock(this.state.doc, b);
+    const run = isCallout(block) ? cmd.quoteRun(this.state, b) : null;
+    if (!run) return false;
+    const i = blockIndex(this.state.doc, a);
+    return i >= run.start && i <= run.end;
   }
 
   private closeBlockMenu(): void {
@@ -2700,15 +2880,17 @@ export class Editor {
 
   private updateUi(): void {
     if (this.destroyed) return;
+    this.expandAroundSelection();
     const focused = this.hasFocus();
 
-    // Hint in an empty focused paragraph.
+    // Slash hint in the empty paragraph that has the caret, when the app asks for it.
     const pos = this.state.selection.focus;
     const el = focused && !this.blockSel && isCollapsed(this.state.selection) ? this.renderer.elementFor(pos.blockId) : undefined;
     // The placeholder of an empty document takes precedence over the slash hint.
     const placeholderShown = !!this.options.placeholder && this.state.doc.blocks.length === 1;
+    const slashHint = !!this.options.slashHint && this.options.slashMenu !== false;
     const showHint =
-      el && el.classList.contains('mbe-paragraph') && el.classList.contains('mbe-empty') && !this.readOnly && !placeholderShown;
+      slashHint && el && el.classList.contains('mbe-paragraph') && el.classList.contains('mbe-empty') && !this.readOnly && !placeholderShown;
     const nextHint = showHint ? el : null;
     if (this.hintEl !== nextHint) {
       this.hintEl?.classList.remove('mbe-show-hint');
@@ -2746,11 +2928,142 @@ export class Editor {
     }
     // On touch devices there is no hover, so the block handle follows the caret.
     if (focused && !this.readOnly && isTouch()) {
-      if (this.hasBlockMenu(pos.blockId)) this.blockHandle.showFor(pos.blockId);
+      const owner = this.blockMenuOwner(pos.blockId);
+      if (owner) this.blockHandle.showFor(owner);
       else this.blockHandle.hide();
     }
     if (!focused && this.blockMenu.isOpen && !this.root.ownerDocument.activeElement?.closest?.('.mbe-ui')) this.blockMenu.hide();
+    if (this.linkCard) {
+      if (this.readOnly) this.linkCard.hide();
+      else this.linkCard.setCaret(focused && !this.composing && !this.blockSel && !this.suggestions.isActive && !this.blockMenu.isOpen && !this.inputPopover.isOpen ? this.caretLink() : null);
+    }
     this.syncActiveDescendant();
+  }
+
+  // -------------------------------------------------------------------------
+  // Collapsible sections
+
+  /**
+   * Collapses or expands the collapsible section titled by the block
+   * `blockId`. This changes the view only: the Markdown, history and events
+   * stay as they are. A caret inside a section that collapses moves to the
+   * end of its title. Returns false when the block is not a section title.
+   */
+  setSectionCollapsed(blockId: string, collapsed: boolean): boolean {
+    if (this.destroyed) return false;
+    const doc = this.state.doc;
+    const index = blockIndex(doc, blockId);
+    if (doc.blocks[index]?.type !== 'details') return false;
+    if (this.collapsed.has(blockId) === collapsed) return true;
+    if (collapsed) this.collapsed.add(blockId);
+    else this.collapsed.delete(blockId);
+    if (collapsed) {
+      const end = cmd.sectionEnd(doc.blocks, index) ?? index;
+      const inside = (p: Position) => {
+        const i = blockIndex(doc, p.blockId);
+        return i > index && i <= end;
+      };
+      const { anchor, focus } = this.state.selection;
+      if (inside(anchor) || inside(focus)) {
+        const title = endOf(doc.blocks[index]!);
+        this.dropBlockSelection();
+        this.current = { ...this.current, selection: { anchor: title, focus: title }, storedMarks: null };
+        this.syncDomSelection();
+      }
+    }
+    this.renderer.updateSections(doc);
+    this.updateUi();
+    return true;
+  }
+
+  /** True when the section titled by `blockId` is shown collapsed. */
+  isSectionCollapsed(blockId: string): boolean {
+    return this.collapsed.has(blockId);
+  }
+
+  /** Sections that are not saved open start collapsed, as a Markdown renderer shows them. */
+  private collapseClosedSections(doc: Doc): void {
+    for (const block of doc.blocks) if (block.type === 'details' && !block.open) this.collapsed.add(block.id);
+  }
+
+  /** Expands the collapsed sections around the selection's focus, so the caret is never hidden. */
+  private expandAroundSelection(): void {
+    if (this.collapsed.size === 0) return;
+    const focusId = this.state.selection.focus.blockId;
+    if (!this.renderer.elementFor(focusId)?.hasAttribute('data-section-hidden')) return;
+    const titles: string[] = [];
+    for (const block of this.state.doc.blocks) {
+      if (block.id === focusId) break;
+      if (block.type === 'details') titles.push(block.id);
+      else if (block.type === 'detailsEnd') titles.pop();
+    }
+    for (const id of titles) this.collapsed.delete(id);
+    this.renderer.updateSections(this.state.doc);
+  }
+
+  /** Blocks the caret passes over: dividers, section ends, and blocks inside a collapsed section. */
+  private skipsCaret(block: Block): boolean {
+    return isTextless(block) || !!this.renderer.elementFor(block.id)?.hasAttribute('data-section-hidden');
+  }
+
+  // -------------------------------------------------------------------------
+  // Links (see ui/linkCard.ts)
+
+  /** The link the caret is inside, not at its edge, with its element. */
+  private caretLink(): LinkTarget | null {
+    if (!isCollapsed(this.state.selection)) return null;
+    const link = cmd.activeLink(this.state);
+    if (!link || link.pos.offset <= link.from || link.pos.offset >= link.to) return null;
+    const blockEl = this.renderer.elementFor(link.pos.blockId);
+    if (!blockEl) return null;
+    const start = { ...link.pos, offset: link.from };
+    for (const el of blockEl.querySelectorAll<HTMLAnchorElement>('a.mbe-link')) {
+      const pos = this.linkStart(el);
+      if (pos && samePosition(pos, start)) return this.linkTargetOf(el);
+    }
+    return null;
+  }
+
+  /** The document position where a rendered link starts. */
+  private linkStart(el: HTMLAnchorElement): Position | null {
+    return domToPosition(this.root, el, 0);
+  }
+
+  /** The link a rendered link element shows, or null for one outside the document's blocks. */
+  private linkTargetOf(el: HTMLAnchorElement): LinkTarget | null {
+    if (el.closest('.mbe-flow')) return null;
+    const pos = this.linkStart(el);
+    if (!pos) return null;
+    const block = this.state.doc.blocks.find((b) => b.id === pos.blockId);
+    const content = block && containerContent(block, pos.cell);
+    const link = content && linkAt(content, pos.offset);
+    return link && link.from === pos.offset ? { el, href: link.href } : null;
+  }
+
+  /** The selection of a link's whole text, from a rendered link element. */
+  private linkSelection(target: LinkTarget): Selection | null {
+    const from = this.linkStart(target.el);
+    if (!from) return null;
+    const block = getBlock(this.state.doc, from.blockId);
+    const content = containerContent(block, from.cell);
+    const link = content && linkAt(content, from.offset);
+    return link ? { anchor: from, focus: { ...from, offset: link.to } } : null;
+  }
+
+  /** Opens the link popover for a link, as Mod+K does with the caret in it. */
+  private editLink(target: LinkTarget): void {
+    const range = this.linkSelection(target);
+    if (!range || this.readOnly) return;
+    this.focus();
+    this.setSelection(range);
+    this.openLinkPopover();
+  }
+
+  /** Removes a link and keeps its text, as one undo step. */
+  private removeLink(target: LinkTarget): void {
+    const range = this.linkSelection(target);
+    if (!range || this.readOnly) return;
+    this.run((s) => ({ ...cmd.setLink({ ...s, selection: range }, null), selection: s.selection }));
   }
 
   /** Marks the selected image's element, and hides the browser's selection highlight over it. */
@@ -2835,6 +3148,7 @@ export class Editor {
     this.blockMenu.hide();
     this.toolbar?.hide();
     this.blockHandle.hide();
+    this.linkCard?.setCaret(null);
     this.resizeHandles.hide();
     this.paintSelectedImage(null);
     this.hintEl?.classList.remove('mbe-show-hint');
@@ -2859,6 +3173,12 @@ export class Editor {
   }
 }
 
+/** True for a part of a callout: a paragraph or a list item. */
+function isCallout(block: Block | undefined): boolean {
+  const kind = quoteKind(block);
+  return kind !== null && kind !== 'quote';
+}
+
 /** The `isActive` name of a block's type. */
 function blockName(block: Block): ActiveName {
   switch (block.type) {
@@ -2868,6 +3188,8 @@ function blockName(block: Block): ActiveName {
       return 'blockquote';
     case 'code':
       return 'codeBlock';
+    case 'detailsEnd':
+      return 'details';
     default:
       return block.type;
   }

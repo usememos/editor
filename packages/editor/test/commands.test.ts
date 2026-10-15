@@ -42,6 +42,10 @@ function describeBlock(b: Block): string {
       return `${b.syntax}:${inlineText(b.content)}`;
     case 'divider':
       return 'hr';
+    case 'details':
+      return `details:${inlineText(b.content)}`;
+    case 'detailsEnd':
+      return '/details';
     case 'table':
       return `table:${b.rows.map((r) => r.map(fmt).join('|')).join('/')}`;
   }

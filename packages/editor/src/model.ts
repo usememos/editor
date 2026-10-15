@@ -89,12 +89,26 @@ export interface ListItemBlock {
   readonly checked: boolean;
   /** Ordered items only: the number of the first item of a list. Ignored on later items. */
   readonly start?: number;
+  /** The item is inside a blockquote, with the quote blocks and quoted items around it (see `quoteKind`). */
+  readonly quote?: true;
+  /** Quoted items only: the item is inside a callout of this type. */
+  readonly callout?: CalloutType;
   readonly content: Inline;
 }
 
+/** The kinds of callout, as in GitHub's alert syntax (`> [!NOTE]`). */
+export const CALLOUT_TYPES = ['note', 'tip', 'important', 'warning', 'caution'] as const;
+export type CalloutType = (typeof CALLOUT_TYPES)[number];
+
+/**
+ * One paragraph of a block quote. Adjacent quotes and quoted list items with
+ * the same `callout` form one blockquote (see `quoteKind`).
+ */
 export interface QuoteBlock {
   readonly id: string;
   readonly type: 'quote';
+  /** Set on every paragraph of a callout, written as a GitHub alert (`> [!NOTE]`). */
+  readonly callout?: CalloutType;
   readonly content: Inline;
 }
 
@@ -132,8 +146,27 @@ export interface DividerBlock {
   readonly type: 'divider';
 }
 
-export type TextBlock = ParagraphBlock | HeadingBlock | ListItemBlock | QuoteBlock | CodeBlock | RawBlock;
-export type Block = TextBlock | TableBlock | DividerBlock;
+/**
+ * The title of a collapsible section, written as `<details>` and
+ * `<summary>`. The blocks after it, up to its `detailsEnd`, are the
+ * section's body. The title is plain text.
+ */
+export interface DetailsBlock {
+  readonly id: string;
+  readonly type: 'details';
+  /** Written as `<details open>`: shown expanded where the Markdown is rendered. */
+  readonly open: boolean;
+  readonly content: Inline;
+}
+
+/** Ends the innermost collapsible section still open before it (`</details>`). Holds no text. */
+export interface DetailsEndBlock {
+  readonly id: string;
+  readonly type: 'detailsEnd';
+}
+
+export type TextBlock = ParagraphBlock | HeadingBlock | ListItemBlock | QuoteBlock | CodeBlock | RawBlock | DetailsBlock;
+export type Block = TextBlock | TableBlock | DividerBlock | DetailsEndBlock;
 export type BlockType = Block['type'];
 
 export interface Doc {
@@ -189,10 +222,11 @@ export function heading(level: HeadingLevel, content: Inline = [], id = createId
   return { id, type: 'heading', level, content: normalizeInline(content) };
 }
 
+/** `quote` puts the item inside a blockquote: `'quote'` for a plain quote, or a callout's type. */
 export function listItem(
   listType: ListType,
   content: Inline = [],
-  opts: { indent?: number; checked?: boolean; start?: number; id?: string } = {},
+  opts: { indent?: number; checked?: boolean; start?: number; id?: string; quote?: QuoteKind | null } = {},
 ): ListItemBlock {
   const block: ListItemBlock = {
     id: opts.id ?? createId(),
@@ -202,11 +236,13 @@ export function listItem(
     checked: listType === 'task' ? (opts.checked ?? false) : false,
     content: normalizeInline(content),
   };
-  return listType === 'ordered' && opts.start !== undefined && opts.start !== 1 ? { ...block, start: opts.start } : block;
+  const numbered = listType === 'ordered' && opts.start !== undefined && opts.start !== 1 ? { ...block, start: opts.start } : block;
+  return opts.quote ? withQuote(numbered, opts.quote) : numbered;
 }
 
-export function quote(content: Inline = [], id = createId()): QuoteBlock {
-  return { id, type: 'quote', content: normalizeInline(content) };
+export function quote(content: Inline = [], id = createId(), callout?: CalloutType): QuoteBlock {
+  const block: QuoteBlock = { id, type: 'quote', content: normalizeInline(content) };
+  return callout ? { ...block, callout } : block;
 }
 
 export function codeBlock(language = '', text = '', id = createId()): CodeBlock {
@@ -243,20 +279,72 @@ export function divider(id = createId()): DividerBlock {
   return { id, type: 'divider' };
 }
 
+/** The title of a collapsible section. A `detailsEnd` must follow its body. */
+export function details(content: Inline = [], opts: { open?: boolean; id?: string } = {}): DetailsBlock {
+  return { id: opts.id ?? createId(), type: 'details', open: opts.open ?? false, content: toPlain(content) };
+}
+
+export function detailsEnd(id = createId()): DetailsEndBlock {
+  return { id, type: 'detailsEnd' };
+}
+
 export function plain(text: string): Span[] {
   return text ? [{ text, marks: [] }] : [];
+}
+
+// ---------------------------------------------------------------------------
+// Quotes
+
+/**
+ * Which blockquote a block is part of: `'quote'` for a plain quote, or the
+ * type of a callout. Quote blocks and quoted list items are the only blocks
+ * in quotes; adjacent ones of the same kind form one blockquote.
+ */
+export type QuoteKind = 'quote' | CalloutType;
+
+/** The blockquote a block is part of, or null for a block outside quotes. */
+export function quoteKind(block: Block | undefined): QuoteKind | null {
+  if (block?.type === 'quote' || (block?.type === 'listItem' && block.quote)) return block.callout ?? 'quote';
+  return null;
+}
+
+/** True if `a` and `b` are parts of one blockquote when they are neighbours. */
+export function sameQuote(a: Block | undefined, b: Block | undefined): boolean {
+  const kind = quoteKind(a);
+  return kind !== null && kind === quoteKind(b);
+}
+
+/** A list item moved into a blockquote of `kind`, or out of any with null. Keeps its ID. */
+export function withQuote(item: ListItemBlock, kind: QuoteKind | null): ListItemBlock {
+  const { quote: _quote, callout: _callout, ...rest } = item;
+  if (!kind) return rest;
+  return kind === 'quote' ? { ...rest, quote: true } : { ...rest, quote: true, callout: kind };
+}
+
+/** A block as it is inside its blockquote: a quote block is a paragraph there, and a quoted list item a plain one. */
+export function unquote(block: Block): Block {
+  if (block.type === 'quote') return paragraph(block.content, block.id);
+  return block.type === 'listItem' && block.quote ? withQuote(block, null) : block;
 }
 
 // ---------------------------------------------------------------------------
 // Block kinds
 
 export function isTextBlock(block: Block): block is TextBlock {
-  return block.type !== 'table' && block.type !== 'divider';
+  return block.type !== 'table' && block.type !== 'divider' && block.type !== 'detailsEnd';
 }
 
-/** Blocks whose content is plain text: no marks, links or images, and Enter inserts a newline. */
-export function isPlainTextBlock(block: Block): block is CodeBlock | RawBlock {
-  return block.type === 'code' || block.type === 'raw';
+/** Blocks with no text and no cells: dividers and the ends of collapsible sections. */
+export function isTextless(block: Block): block is DividerBlock | DetailsEndBlock {
+  return block.type === 'divider' || block.type === 'detailsEnd';
+}
+
+/**
+ * Blocks whose content is plain text: no marks, links or images. In code and
+ * raw blocks Enter inserts a newline; a section title is one line.
+ */
+export function isPlainTextBlock(block: Block): block is CodeBlock | RawBlock | DetailsBlock {
+  return block.type === 'code' || block.type === 'raw' || block.type === 'details';
 }
 
 /** Inline content at a position's container: the block's content, or a table cell. Null for dividers. */
@@ -292,7 +380,7 @@ export function containerContent(block: Block, cell?: Cell): Inline | null {
     if (!cell) return null;
     return block.rows[cell.row]?.[cell.col] ?? null;
   }
-  if (block.type === 'divider') return null;
+  if (isTextless(block)) return null;
   return block.content;
 }
 
@@ -305,7 +393,7 @@ export function withContainerContent(block: Block, cell: Cell | undefined, conte
     );
     return { ...block, rows };
   }
-  if (block.type === 'divider') return block;
+  if (isTextless(block)) return block;
   return withContent(block, content);
 }
 
@@ -541,7 +629,7 @@ export function endOf(block: Block): Position {
     const col = block.align.length - 1;
     return { blockId: block.id, offset: inlineLength(block.rows[row]![col]!), cell: { row, col } };
   }
-  if (block.type === 'divider') return { blockId: block.id, offset: 0 };
+  if (isTextless(block)) return { blockId: block.id, offset: 0 };
   return { blockId: block.id, offset: inlineLength(block.content) };
 }
 

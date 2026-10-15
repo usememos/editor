@@ -3,7 +3,7 @@
 import type { Editor } from '../editor';
 import { type BlockTypeSpec, convertibleBlocks, setBlockType, toggleBlockType, toggleMark } from '../commands';
 import { type IconName, iconNode } from '../icons';
-import type { HeadingLevel, ListType, Mark } from '../model';
+import { type HeadingLevel, type ListType, type Mark, quoteKind } from '../model';
 import { Menu, type MenuItem, Popup, isMac, isTouch, visibleViewport } from './popup';
 
 /** A control of the formatting toolbar (the `toolbar` option's `items`). */
@@ -33,13 +33,14 @@ const MARKS: Partial<Record<ToolbarItem, { mark: Mark; className: string; keys: 
 };
 
 /** A text style: paragraph or a heading level. */
-type TextStyle = 'text' | 'heading1' | 'heading2' | 'heading3';
+type TextStyle = 'text' | 'heading1' | 'heading2' | 'heading3' | 'heading4';
 
 const TEXT_STYLES: readonly { id: TextStyle; spec: BlockTypeSpec; keys: string }[] = [
   { id: 'text', spec: { type: 'paragraph' }, keys: mod('Alt+0') },
   { id: 'heading1', spec: { type: 'heading', level: 1 }, keys: mod('Alt+1') },
   { id: 'heading2', spec: { type: 'heading', level: 2 }, keys: mod('Alt+2') },
   { id: 'heading3', spec: { type: 'heading', level: 3 }, keys: mod('Alt+3') },
+  { id: 'heading4', spec: { type: 'heading', level: 4 }, keys: mod('Alt+4') },
 ];
 
 const LIST_TYPES: readonly { id: 'bulletList' | 'numberedList' | 'todoList'; listType: ListType; keys: string }[] = [
@@ -55,7 +56,7 @@ const TOOLTIP_GRACE = 300;
 
 /** What the selected blocks have in common, for the toolbar's states. */
 interface BlockState {
-  /** The style every selected block has, or null when they differ or one is not a paragraph or heading 1–3. */
+  /** The style every selected block has, or null when they differ or one is not a paragraph or heading 1–4. */
   style: TextStyle | null;
   /** True when every selected block is a heading. */
   allHeadings: boolean;
@@ -69,7 +70,7 @@ interface BlockState {
 function blockState(editor: Editor): BlockState {
   const blocks = convertibleBlocks(editor.state);
   const styleOf = (b: (typeof blocks)[number]): TextStyle | null =>
-    b.type === 'paragraph' ? 'text' : b.type === 'heading' && b.level <= 3 ? (`heading${b.level}` as TextStyle) : null;
+    b.type === 'paragraph' ? 'text' : b.type === 'heading' && b.level <= 4 ? (`heading${b.level}` as TextStyle) : null;
   const every = <T>(f: (b: (typeof blocks)[number]) => T): T | null => {
     const first = blocks[0] ? f(blocks[0]) : null;
     return blocks.every((b) => f(b) === first) ? first : null;
@@ -80,7 +81,7 @@ function blockState(editor: Editor): BlockState {
     allHeadings: some && blocks.every((b) => b.type === 'heading'),
     listType: every((b) => (b.type === 'listItem' ? b.listType : null)),
     allListItems: some && blocks.every((b) => b.type === 'listItem'),
-    allQuotes: some && blocks.every((b) => b.type === 'quote'),
+    allQuotes: some && blocks.every((b) => quoteKind(b) !== null),
   };
 }
 

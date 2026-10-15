@@ -17,6 +17,18 @@ export interface MarkdownOptions {
    * `name@example.com` written without angle brackets are links. Default true.
    */
   readonly autolinks?: boolean;
+  /**
+   * GitHub alerts: a blockquote whose first line is `[!NOTE]`, `[!TIP]`,
+   * `[!IMPORTANT]`, `[!WARNING]` or `[!CAUTION]` is a callout. Default true.
+   * With false, the marker is quoted text.
+   */
+  readonly callouts?: boolean;
+  /**
+   * Collapsible sections: `<details>` with a `<summary>` title, a blank line,
+   * Markdown, a blank line and `</details>` are a section whose title and body
+   * are edited in place. Default true. With false, the section is HTML.
+   */
+  readonly details?: boolean;
   /** Syntax outside CommonMark and GFM, such as math or footnotes. */
   readonly syntax?: readonly MarkdownSyntax[];
 }
@@ -73,13 +85,15 @@ export interface ResolvedMarkdown {
   readonly breaks: boolean;
   readonly setext: boolean;
   readonly autolinks: boolean;
+  readonly callouts: boolean;
+  readonly details: boolean;
   readonly syntax: readonly MarkdownSyntax[];
   readonly inline: readonly InlineSyntax[];
   readonly block: readonly BlockSyntax[];
   readonly escape: string;
 }
 
-export const DEFAULT_MARKDOWN: ResolvedMarkdown = { breaks: false, setext: true, autolinks: true, syntax: [], inline: [], block: [], escape: '' };
+export const DEFAULT_MARKDOWN: ResolvedMarkdown = { breaks: false, setext: true, autolinks: true, callouts: true, details: true, syntax: [], inline: [], block: [], escape: '' };
 
 const resolved = new WeakMap<MarkdownOptions, ResolvedMarkdown>();
 
@@ -92,6 +106,8 @@ export function resolveMarkdown(options: MarkdownOptions | undefined): ResolvedM
       breaks: options.breaks ?? false,
       setext: options.setext ?? true,
       autolinks: options.autolinks ?? true,
+      callouts: options.callouts ?? true,
+      details: options.details ?? true,
       syntax,
       inline: syntax.flatMap((s) => s.inline ?? []),
       block: syntax.flatMap((s) => s.block ?? []),

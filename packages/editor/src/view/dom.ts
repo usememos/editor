@@ -9,12 +9,14 @@
 import {
   type Block,
   type Cell,
+  type CalloutType,
   type CodeBlock,
   type Doc,
   type ImageAtom,
   type Inline,
   type Mark,
   type ParagraphBlock,
+  type QuoteBlock,
   type Position,
   type Span,
   MARK_ORDER,
@@ -22,6 +24,8 @@ import {
   imageBlockOffset,
   inlineLength,
   inlineText,
+  quoteKind,
+  sameQuote,
   sliceInline,
 } from '../model';
 import type { SyntaxView } from '../extension';
@@ -29,7 +33,11 @@ import type { Labels } from '../labels';
 import type { IconName } from '../icons';
 import type { ThemeClasses } from '../theme';
 import { type Decoration, decorationContext, splitByDecorations } from '../decorations';
-import { serializeInline } from '../markdown/serialize';
+import { SLOT_MARKER, slotMarker, splitHtmlSection } from '../markdown/htmlSection';
+import type { BlockNode, BlockQuoteNode, ListItemNode, ListNode } from '../markdown/ast';
+import { parseAst } from '../markdown/blocks';
+import { calloutOf, lowerIfFits } from '../markdown/lower';
+import { DEFAULT_MARKDOWN, type MarkdownOptions } from '../markdown/options';
 
 export const BLOCK_ATTR = 'data-block-id';
 
@@ -42,6 +50,10 @@ const FILL_ATTR = 'data-mbe-fill';
 const ATOM_ATTR = 'data-atom';
 const LIST_START_ATTR = 'data-list-start';
 const QUOTE_JOINED_ATTR = 'data-quote-joined';
+const QUOTE_CONTINUED_ATTR = 'data-quote-continued';
+const SECTION_HIDDEN_ATTR = 'data-section-hidden';
+const SECTION_COLLAPSED_ATTR = 'data-collapsed';
+const SECTION_INSIDE_ATTR = 'data-in-section';
 
 const MARK_TAGS: Record<Mark, [string, string?]> = {
   bold: ['strong'],
@@ -68,7 +80,8 @@ function blockClasses(block: Block, theme: ThemeClasses): string | undefined {
     case 'quote':
       return theme.blockquote;
     case 'listItem':
-      return theme[`${block.listType}List`];
+      // An item in a quote is a blockquote too.
+      return block.quote ? classes(theme[`${block.listType}List`], theme.blockquote) || undefined : theme[`${block.listType}List`];
     case 'code':
       return theme.codeBlock;
     case 'table':
@@ -77,6 +90,10 @@ function blockClasses(block: Block, theme: ThemeClasses): string | undefined {
       return theme.raw;
     case 'divider':
       return undefined; // on the <hr>
+    case 'details':
+      return theme.details;
+    case 'detailsEnd':
+      return undefined;
   }
 }
 
@@ -114,6 +131,8 @@ export interface RenderContext {
   readonly views?: ReadonlyMap<string, SyntaxView>;
   /** A token or raw block of an extension syntax, rendered; null shows its source. */
   readonly view?: (syntax: string, source: string, kind: 'inline' | 'block') => HTMLElement | null;
+  /** The document's Markdown options, for the Markdown inside an HTML section. */
+  readonly markdown?: MarkdownOptions;
   /** Theme classes for rendered elements. */
   readonly classes: ThemeClasses;
   /** The icon of a UI control, or null for none. */
@@ -144,6 +163,11 @@ export function sameReveal(a: BlockReveal | undefined, b: BlockReveal | undefine
   return true;
 }
 
+/** The label and icon name of a callout type, such as `calloutNote`. */
+export function calloutName(type: CalloutType): `callout${Capitalize<CalloutType>}` {
+  return `callout${type[0]!.toUpperCase()}${type.slice(1)}` as `callout${Capitalize<CalloutType>}`;
+}
+
 /** Marks a paragraph that holds only an image (see `imageBlockOffset`), with the image's alignment. */
 function markImageBlock(el: HTMLElement, block: ParagraphBlock): void {
   const offset = imageBlockOffset(block);
@@ -151,6 +175,36 @@ function markImageBlock(el: HTMLElement, block: ParagraphBlock): void {
   el.classList.add('mbe-image-block');
   const align = sliceInline(block.content, offset, offset + 1)[0]?.image?.align;
   if (align) el.dataset.align = align;
+}
+
+/**
+ * A callout: the type's icon in the start column, then the text. The icon
+ * shows on the first block of a callout only (see updateNeighborMarks); the
+ * type's name is its accessible label.
+ */
+function renderCallout(block: QuoteBlock, type: CalloutType, ctx: RenderContext, reveal?: BlockReveal): HTMLElement {
+  const doc = ctx.doc;
+  const root = doc.createElement('blockquote');
+  root.dir = 'auto';
+  root.dataset.callout = type;
+  const content = doc.createElement('div');
+  content.className = 'mbe-content';
+  fillContent(content, block.content, ctx, block, reveal);
+  root.append(calloutIcon(type, ctx), content);
+  return root;
+}
+
+/** A callout's icon, labelled with the type's name. */
+function calloutIcon(type: CalloutType, ctx: RenderContext): HTMLElement {
+  const name = calloutName(type);
+  const icon = ctx.doc.createElement('div');
+  icon.className = 'mbe-callout-icon';
+  icon.contentEditable = 'false';
+  icon.setAttribute('role', 'img');
+  icon.setAttribute('aria-label', ctx.labels[name]);
+  const glyph = ctx.icon?.(name);
+  if (glyph) icon.appendChild(glyph);
+  return icon;
 }
 
 function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HTMLElement {
@@ -165,13 +219,22 @@ function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HT
     case 'paragraph':
     case 'heading':
     case 'quote':
+      if (block.type === 'quote' && block.callout) {
+        root = renderCallout(block, block.callout, ctx, reveal);
+        break;
+      }
       root = el(block.type === 'paragraph' ? 'p' : block.type === 'quote' ? 'blockquote' : `h${block.level}`);
       root.dir = 'auto';
       fillContent(root, block.content, ctx, block, reveal);
       if (block.type === 'paragraph') markImageBlock(root, block);
       break;
     case 'listItem': {
-      root = el('div');
+      // An item in a quote is a blockquote too, so it takes the quote's or callout's look.
+      root = el(block.quote ? 'blockquote' : 'div');
+      if (block.callout) {
+        root.dataset.callout = block.callout;
+        root.appendChild(calloutIcon(block.callout, ctx));
+      }
       // The marker has no letters, so the item's text decides the side it sits on.
       root.dir = 'auto';
       root.dataset.listType = block.listType;
@@ -221,11 +284,22 @@ function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HT
     }
     case 'raw': {
       // Rendered, for example math as a formula, unless the selection is in the block.
-      const view = reveal?.has(REVEAL_BLOCK) ? null : ctx.view?.(block.syntax, inlineText(block.content), 'block');
+      // An HTML section renders its HTML through the view and the Markdown between its tags as blocks.
+      const source = inlineText(block.content);
+      const section =
+        block.syntax === 'html' && !reveal?.has(REVEAL_BLOCK) && ctx.views?.has('html') ? splitHtmlSection(source, ctx.markdown) : null;
+      const nested = block.syntax === 'markdown' && !reveal?.has(REVEAL_BLOCK) && ctx.views?.get('markdown') === MARKDOWN_VIEW;
+      const view = reveal?.has(REVEAL_BLOCK)
+        ? null
+        : nested
+          ? renderMarkdown(source, ctx)
+          : ctx.view?.(block.syntax, section ? section.html : source, 'block');
       if (view) {
         root = view;
         root.classList.add('mbe-view-block');
+        if (block.syntax === 'html') root.classList.add('mbe-view-html');
         root.contentEditable = 'false';
+        if (section) fillSlots(root, section.slots.length, (i) => renderFlow(section.slots[i]!, ctx), ctx.doc);
       } else {
         root = el('pre');
         root.spellcheck = false;
@@ -238,6 +312,28 @@ function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HT
       root = el('div');
       root.contentEditable = 'false';
       root.appendChild(el('hr', ctx.classes.divider));
+      break;
+    case 'details': {
+      // The toggle, then the title. Whether the section is collapsed is set by updateNeighborMarks.
+      root = el('div');
+      root.dir = 'auto';
+      const marker = el('span', 'mbe-details-marker');
+      marker.contentEditable = 'false';
+      const toggle = el('button', 'mbe-details-toggle');
+      (toggle as HTMLButtonElement).type = 'button';
+      toggle.tabIndex = -1;
+      const icon = ctx.icon?.('chevronRight');
+      if (icon) toggle.appendChild(icon);
+      marker.appendChild(toggle);
+      const content = el('div', 'mbe-content');
+      fillContent(content, block.content, ctx, block, undefined, undefined, false);
+      root.append(marker, content);
+      break;
+    }
+    case 'detailsEnd':
+      // Holds no text: where the section ends.
+      root = el('div');
+      root.contentEditable = 'false';
       break;
     case 'table': {
       root = el('div');
@@ -266,7 +362,8 @@ function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HT
   }
   root.setAttribute(BLOCK_ATTR, block.id);
   // One className write instead of several classList calls: this runs for every block on load.
-  let className = `${root.className ? root.className + ' ' : ''}mbe-block mbe-${block.type === 'listItem' ? 'list-item' : block.type}`;
+  const name = block.type === 'listItem' ? 'list-item' : block.type === 'detailsEnd' ? 'details-end' : block.type;
+  let className = `${root.className ? root.className + ' ' : ''}mbe-block mbe-${name}`;
   if (block.type === 'listItem' && block.checked) className += ' mbe-checked';
   if ('content' in block && inlineLength(block.content) === 0) className += ' mbe-empty';
   const themed = blockClasses(block, ctx.classes);
@@ -318,6 +415,165 @@ function copyButton(ctx: RenderContext): HTMLElement {
   const icon = ctx.icon?.('copyCode');
   if (icon) button.appendChild(icon);
   return button;
+}
+
+/**
+ * Replaces the slot markers in a rendered HTML view with their content (see
+ * htmlSection.ts). A marker the view wrapped in a paragraph of its own, as a
+ * Markdown renderer does, replaces the paragraph. Slots whose marker the view
+ * dropped, such as inside an element its sanitizer removed, follow the rest.
+ */
+function fillSlots(root: HTMLElement, count: number, content: (index: number) => Node, doc: Document): void {
+  if (count === 0) return;
+  const texts: Text[] = [];
+  const walker = doc.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) if (node.nodeValue!.includes('\uE000')) texts.push(node as Text);
+  const placed = new Set<number>();
+  for (const text of texts) {
+    const value = text.nodeValue!;
+    const fragment = doc.createDocumentFragment();
+    let last = 0;
+    for (const m of value.matchAll(SLOT_MARKER)) {
+      if (m.index > last) fragment.append(value.slice(last, m.index));
+      const index = Number(m[1]);
+      if (index < count && !placed.has(index)) {
+        placed.add(index);
+        fragment.append(content(index));
+      }
+      last = m.index + m[0].length;
+    }
+    if (last < value.length) fragment.append(value.slice(last));
+    const parent = text.parentElement;
+    const alone = parent !== root && parent?.tagName === 'P' && parent.childNodes.length === 1 && !value.replace(SLOT_MARKER, '').trim();
+    (alone ? parent : text).replaceWith(fragment);
+  }
+  // Nothing rendered yet (a view still loading): the slots fill when it settles.
+  if (!root.hasChildNodes()) return;
+  for (let i = 0; i < count; i++) if (!placed.has(i)) root.appendChild(content(i));
+}
+
+/**
+ * The Markdown blocks between an HTML section's tags, rendered as the
+ * editor's blocks but as content of the section, not blocks of the document:
+ * nothing in them is editable or maps to a model position.
+ */
+function renderFlow(blocks: readonly Block[], ctx: RenderContext): HTMLElement {
+  const flow = ctx.doc.createElement('div');
+  flow.className = 'mbe-flow';
+  appendBlocks(flow, blocks, ctx);
+  makeInert(flow);
+  return flow;
+}
+
+function appendBlocks(flow: HTMLElement, blocks: readonly Block[], ctx: RenderContext): void {
+  const elements = new Map<string, HTMLElement>();
+  for (const block of blocks) {
+    const el = renderBlock(block, ctx);
+    elements.set(block.id, el);
+    flow.appendChild(el);
+  }
+  updateNeighborMarks({ blocks }, (id) => elements.get(id), new WeakMap(), new Set(), ctx.labels);
+}
+
+/**
+ * Marks the built-in view of raw Markdown blocks in `RenderContext.views`.
+ * It is never called: the renderer draws those blocks itself (see
+ * `renderMarkdown`), and an extension's own `markdown` view replaces it.
+ */
+export const MARKDOWN_VIEW: SyntaxView = () => false;
+
+/**
+ * A raw Markdown block, rendered: structure the flat model cannot hold, such
+ * as a code block in a list item, drawn with the editor's own blocks. Runs of
+ * nodes the model can hold render as blocks; a quote or list it cannot hold
+ * becomes a container whose content renders the same way. As with an HTML
+ * section, none of it is editable or maps to a model position: the caret or
+ * a click shows the source.
+ */
+function renderMarkdown(source: string, ctx: RenderContext): HTMLElement {
+  const root = ctx.doc.createElement('div');
+  root.classList.add('mbe-view-markdown');
+  root.appendChild(renderNodes(parseAst(source, ctx.markdown).children, ctx));
+  makeInert(root);
+  return root;
+}
+
+function renderNodes(nodes: readonly BlockNode[], ctx: RenderContext): HTMLElement {
+  const options = ctx.markdown ?? DEFAULT_MARKDOWN;
+  const flow = ctx.doc.createElement('div');
+  flow.className = 'mbe-flow';
+  let run: Block[] = [];
+  for (const node of nodes) {
+    const blocks = lowerIfFits(node, options);
+    if (blocks) {
+      run.push(...blocks);
+      continue;
+    }
+    appendBlocks(flow, run, ctx);
+    run = [];
+    if (node.type === 'blockQuote') flow.appendChild(renderQuoteNode(node, ctx));
+    else if (node.type === 'list') node.items.forEach((item, i) => flow.appendChild(renderItemNode(node, item, i, ctx)));
+  }
+  appendBlocks(flow, run, ctx);
+  return flow;
+}
+
+/** A quote the model cannot hold, such as one with a code block in it: a blockquote holding its blocks. */
+function renderQuoteNode(node: BlockQuoteNode, ctx: RenderContext): HTMLElement {
+  const alert = ctx.markdown?.callouts === false ? null : calloutOf(node.children);
+  const children = alert ? [...(alert.rest.length > 0 ? [{ type: 'paragraph' as const, children: [...alert.rest] }] : []), ...node.children.slice(1)] : node.children;
+  const el = ctx.doc.createElement('blockquote');
+  el.dir = 'auto';
+  el.className = classes('mbe-block mbe-quote', ctx.classes.blockquote);
+  if (alert) {
+    el.dataset.callout = alert.type;
+    el.appendChild(calloutIcon(alert.type, ctx));
+  }
+  el.appendChild(renderNodes(children, ctx));
+  return el;
+}
+
+/** An item of a list the model cannot hold, such as one with two paragraphs: its marker, then its blocks. */
+function renderItemNode(list: ListNode, node: ListItemNode, index: number, ctx: RenderContext): HTMLElement {
+  const listType = node.task ? 'task' : list.ordered ? 'ordered' : 'bullet';
+  const el = ctx.doc.createElement('div');
+  el.dir = 'auto';
+  el.className = classes('mbe-block mbe-list-item', ctx.classes[`${listType}List`]);
+  el.dataset.listType = listType;
+  el.dataset.indent = '0';
+  if (index === 0) el.setAttribute(LIST_START_ATTR, '');
+  const marker = ctx.doc.createElement('span');
+  marker.className = 'mbe-marker';
+  if (node.task) {
+    const box = ctx.doc.createElement('input');
+    box.className = 'mbe-checkbox';
+    box.type = 'checkbox';
+    box.checked = node.checked;
+    marker.appendChild(box);
+  } else if (list.ordered) {
+    marker.textContent = `${list.start + index}.`;
+  }
+  const content = ctx.doc.createElement('div');
+  content.className = 'mbe-content';
+  content.appendChild(renderNodes(node.children, ctx));
+  el.append(marker, content);
+  return el;
+}
+
+/** Rendered blocks that are content of another block: no block ids, nothing editable, inputs inert. */
+function makeInert(flow: HTMLElement): void {
+  for (const el of Array.from(flow.querySelectorAll<HTMLElement>(`[${BLOCK_ATTR}], [${CONTENT_ATTR}], [contenteditable], [data-row]`))) {
+    el.removeAttribute(BLOCK_ATTR);
+    el.removeAttribute(CONTENT_ATTR);
+    el.removeAttribute('contenteditable');
+    el.removeAttribute('data-row');
+    el.removeAttribute('data-col');
+  }
+  for (const input of Array.from(flow.querySelectorAll('input'))) {
+    if (input.type === 'checkbox') input.disabled = true;
+    else input.readOnly = true;
+    input.tabIndex = -1;
+  }
 }
 
 function fill(doc: Document): HTMLElement {
@@ -391,10 +647,12 @@ function renderInline(
     ? htmlRuns(inline).filter((run) => !reveal?.has(tokenKey(cell, run.from)))
     : [];
   const inRun = (from: number) => runs.some((run) => from >= run.from && from < run.to);
-  const atomic = viewed || runs.length > 0 ? (span: Span, from: number) => !!viewed?.(span, from) || inRun(from) : undefined;
+  // A run's tags are atomic; the text between them is decorated and rendered as usual.
+  const isHtml = (span: Span) => span.marks.includes('html');
+  const atomic =
+    viewed || runs.length > 0 ? (span: Span, from: number) => !!viewed?.(span, from) || (isHtml(span) && inRun(from)) : undefined;
   const pieces = splitByDecorations(inline, decorations, atomic);
-  const render = (piece: (typeof pieces)[number]) =>
-    decorate(renderSpan(piece.span, ctx, piece.atomic && !inRun(offsets.get(piece) ?? -1)), piece.decorations, doc);
+  const render = (piece: (typeof pieces)[number]) => decorate(renderSpan(piece.span, ctx, piece.atomic && !isHtml(piece.span)), piece.decorations, doc);
   const offsets = new Map<(typeof pieces)[number], number>();
   let offset = 0;
   for (const piece of pieces) {
@@ -406,13 +664,40 @@ function renderInline(
   while (i < pieces.length) {
     const span = pieces[i]!.span;
     const run = runs.find((r) => r.from === offsets.get(pieces[i]!));
-    const view = run && ctx.view?.('html', serializeInline(sliceInline(inline, run.from, run.to)), 'inline');
-    if (run && view) {
-      // One atom as long as the run's text, so DOM-to-model mapping still sees it.
-      const text = inlineText(sliceInline(inline, run.from, run.to));
-      parent.appendChild(atom(view, classes('mbe-view', 'mbe-view-html', ctx.classes.token?.html), text));
-      while (i < pieces.length && offsets.get(pieces[i]!)! < run.to) i++;
-      continue;
+    if (run) {
+      // The run's tags go to the view; the text between them, with its
+      // formatting, tags and tokens, renders here and fills its slots.
+      const html: string[] = [];
+      const slots: Node[][] = [];
+      let slot: Node[] | null = null;
+      let end = i;
+      for (; end < pieces.length && offsets.get(pieces[end]!)! < run.to; end++) {
+        const piece = pieces[end]!;
+        if (isHtml(piece.span)) {
+          html.push(piece.span.text);
+          slot = null;
+          continue;
+        }
+        if (!slot) {
+          slot = [];
+          slots.push(slot);
+          html.push(slotMarker(slots.length - 1));
+        }
+        slot.push(render(piece));
+      }
+      const view = ctx.view?.('html', html.join(''), 'inline');
+      if (view) {
+        fillSlots(view, slots.length, (n) => {
+          const fragment = doc.createDocumentFragment();
+          fragment.append(...slots[n]!);
+          return fragment;
+        }, doc);
+        // One atom as long as the run's text, so DOM-to-model mapping still sees it.
+        const text = inlineText(sliceInline(inline, run.from, run.to));
+        parent.appendChild(atom(view, classes('mbe-view', 'mbe-view-html', ctx.classes.token?.html), text));
+        i = end;
+        continue;
+      }
     }
     if (span.link) {
       const a = doc.createElement('a');
@@ -569,6 +854,8 @@ export class BlockRenderer {
   widgetsAfter?: (blockId: string) => readonly HTMLElement[] | undefined;
   /** Views of extension syntaxes, by syntax name. */
   views?: ReadonlyMap<string, SyntaxView>;
+  /** The document's Markdown options, for the Markdown inside an HTML section. */
+  markdown?: MarkdownOptions;
   /** Theme classes for rendered elements. Set before a full render. */
   classes: ThemeClasses = NO_CLASSES;
   /** The icon of a UI control. */
@@ -577,6 +864,8 @@ export class BlockRenderer {
   codeCopy = false;
   /** An image failed to load and now shows as unavailable. */
   onImageError?: () => void;
+  /** Collapsible sections shown collapsed, by the ID of their title block. */
+  collapsed: ReadonlySet<string> = new Set();
   /** Per block, the views that show their source. A block re-renders when its entry changes. */
   revealed: ReadonlyMap<string, BlockReveal> = new Map();
   /**
@@ -608,6 +897,7 @@ export class BlockRenderer {
       decorateCode: this.decorateCode,
       views: this.views,
       view: this.views && ((syntax, source, kind) => this.renderView(syntax, source, kind)),
+      markdown: this.markdown,
       classes: this.classes,
       icon: this.icon,
       codeCopy: this.codeCopy,
@@ -692,7 +982,12 @@ export class BlockRenderer {
       this.renderingBlock = block.id;
       const prev = this.rendered.get(block.id);
       const reveal = this.revealed.get(block.id);
-      next.set(block.id, { block, el: prev && kept.has(prev.el) ? prev.el : renderBlock(block, ctx, reveal), reveal });
+      let el = prev && kept.has(prev.el) ? prev.el : null;
+      if (!el) {
+        el = renderBlock(block, ctx, reveal);
+        if (prev && block.type === 'raw') keepDetailsOpen(prev.el, el);
+      }
+      next.set(block.id, { block, el, reveal });
     }
     this.loadedImages.clear();
 
@@ -736,7 +1031,12 @@ export class BlockRenderer {
       }
     }
     this.rendered = next;
-    updateNeighborMarks(doc, (id) => next.get(id)?.el, this.numbers);
+    updateNeighborMarks(doc, (id) => next.get(id)?.el, this.numbers, this.collapsed, this.labels);
+  }
+
+  /** Marks blocks again after `collapsed` changed, without rendering any. */
+  updateSections(doc: Doc): void {
+    updateNeighborMarks(doc, (id) => this.rendered.get(id)?.el, this.numbers, this.collapsed, this.labels);
   }
 
   elementFor(id: string): HTMLElement | undefined {
@@ -762,6 +1062,29 @@ export class BlockRenderer {
 }
 
 /**
+ * Indents a block inside collapsible sections by their number (`depth`), and
+ * hides it inside a collapsed one. On a section title, `collapsed` says
+ * whether its own section is collapsed.
+ */
+function markSection(el: HTMLElement, depth: number, hidden: boolean, collapsed: boolean | null, labels: Labels): void {
+  const value = depth > 0 ? String(depth) : '';
+  if (el.style.getPropertyValue('--mbe-section-depth') !== value) {
+    if (value) el.style.setProperty('--mbe-section-depth', value);
+    else el.style.removeProperty('--mbe-section-depth');
+  }
+  setFlag(el, SECTION_INSIDE_ATTR, depth > 0);
+  setFlag(el, SECTION_HIDDEN_ATTR, hidden);
+  if (collapsed === null) return;
+  setFlag(el, SECTION_COLLAPSED_ATTR, collapsed);
+  const toggle = el.querySelector('.mbe-details-toggle');
+  const expanded = String(!collapsed);
+  if (toggle && toggle.getAttribute('aria-expanded') !== expanded) {
+    toggle.setAttribute('aria-expanded', expanded);
+    toggle.setAttribute('aria-label', collapsed ? labels.expandSection : labels.collapseSection);
+  }
+}
+
+/**
  * Numbers ordered list items and marks where lists start and quotes continue.
  * Runs after every render, because all of these depend on the blocks above.
  * Attributes rather than sibling selectors: in Chrome, a `+` rule that can
@@ -771,21 +1094,35 @@ function updateNeighborMarks(
   doc: Doc,
   elementFor: (id: string) => HTMLElement | undefined,
   written: WeakMap<HTMLElement, number>,
+  collapsed: ReadonlySet<string>,
+  labels: Labels,
 ): void {
   const counters: (number | undefined)[] = [];
+  /** The open collapsible sections around the block: whether each is collapsed. */
+  const sections: boolean[] = [];
   doc.blocks.forEach((block, i) => {
     const before = doc.blocks[i - 1];
     const el = elementFor(block.id);
-    // Adjacent quote blocks are paragraphs of one quote; the stylesheet joins them.
-    if (block.type === 'quote') setFlag(el, QUOTE_JOINED_ATTR, before?.type === 'quote');
-    if (block.type !== 'listItem') {
-      counters.length = 0;
-      return;
+    if (block.type === 'detailsEnd') sections.pop();
+    if (el) markSection(el, sections.length, sections.includes(true), block.type === 'details' ? collapsed.has(block.id) : null, labels);
+    if (block.type === 'details') sections.push(collapsed.has(block.id));
+    // Adjacent quote blocks and quoted list items with the same callout are
+    // parts of one quote; the stylesheet joins them.
+    if (quoteKind(block) !== null) {
+      setFlag(el, QUOTE_JOINED_ATTR, sameQuote(before, block));
+      setFlag(el, QUOTE_CONTINUED_ATTR, sameQuote(block, doc.blocks[i + 1]));
     }
+    // A list ends where a quote starts or ends.
+    if (block.type !== 'listItem' || before?.type !== 'listItem' || quoteKind(before) !== quoteKind(block)) counters.length = 0;
+    if (block.type !== 'listItem') return;
     // A list starts after a non-list block, or where a top-level item switches
     // between numbered and not. The stylesheet puts the block gap above it.
     const ordered = block.listType === 'ordered';
-    setFlag(el, LIST_START_ATTR, before?.type !== 'listItem' || (block.indent === 0 && ordered !== (before.listType === 'ordered')));
+    setFlag(
+      el,
+      LIST_START_ATTR,
+      counters.length === 0 || (block.indent === 0 && before?.type === 'listItem' && ordered !== (before.listType === 'ordered')),
+    );
     counters.length = block.indent + 1;
     if (!ordered) {
       counters[block.indent] = undefined;
@@ -797,6 +1134,17 @@ function updateNeighborMarks(
     const marker = el.querySelector('.mbe-marker');
     if (marker) marker.textContent = `${n}.`;
     written.set(el, n);
+  });
+}
+
+/** A rendered HTML section keeps the `<details>` the reader opened or closed when it renders again. */
+function keepDetailsOpen(from: HTMLElement, to: HTMLElement): void {
+  const before = from.querySelectorAll('details');
+  if (before.length === 0) return;
+  const after = to.querySelectorAll('details');
+  if (after.length !== before.length) return;
+  before.forEach((details, i) => {
+    after[i]!.open = details.open;
   });
 }
 

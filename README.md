@@ -2,10 +2,9 @@
 
 A block editor for Markdown, for React or any web app.
 
-- Markdown in, Markdown out: CommonMark plus GFM tables, task lists, strikethrough and autolinks. Blocks you did not edit are saved byte for byte.
+- Markdown in, Markdown out: CommonMark plus GFM tables, task lists, strikethrough, autolinks and alerts (callouts), and `<details>` as collapsible sections. Blocks you did not edit are saved byte for byte.
 - Block editing: slash menu, a formatting toolbar, Markdown shortcuts, and a block handle on tables, code blocks and images that stand alone, which opens the block menu.
 - One package, `@usememos/editor`, with zero runtime dependencies. It works without a framework, and `@usememos/editor/react` is a thin React wrapper.
-- About 56 KB minified and gzipped, plus 3.5 KB of CSS: a third of what a comparable CodeMirror 6, Tiptap or Lexical setup adds (see [Performance](docs/architecture.md#performance)).
 
 Status: early releases, published to npm as [`@usememos/editor`](https://www.npmjs.com/package/@usememos/editor). Versions follow memos' CalVer (`26.10`, `26.10.1`) and do not signal breaking changes, so pin an exact version. [docs/syntax.md](docs/syntax.md) specifies the Markdown it reads and writes, and [docs/architecture.md](docs/architecture.md) explains how it works.
 
@@ -50,7 +49,7 @@ The same names work in `new Editor(options)` and as React props, except that Rea
 | `content` | `string` | Core only. Initial Markdown. |
 | `value` | `string` | React only. The editor updates only when `value` differs from the last Markdown it emitted. |
 | `defaultValue` | `string` | React only. Initial Markdown for uncontrolled use. |
-| `markdown` | `{ breaks?, setext?, autolinks? }` | Markdown dialect. `breaks: true` reads a single newline as a line break and saves line breaks as plain newlines (as GitHub comments do). `setext: false` turns off setext headings, so `Title`⏎`---` is a paragraph and a divider. `autolinks: false` turns off GFM autolink literals, so a bare `https://…`, `www.…` or e-mail address stays text. See [docs/syntax.md](docs/syntax.md). |
+| `markdown` | `{ breaks?, setext?, autolinks?, callouts?, details? }` | Markdown dialect. `breaks: true` reads a single newline as a line break and saves line breaks as plain newlines (as GitHub comments do). `setext: false` turns off setext headings, so `Title`⏎`---` is a paragraph and a divider. `autolinks: false` turns off GFM autolink literals, so a bare `https://…`, `www.…` or e-mail address stays text. `callouts: false` reads a GitHub alert such as `> [!NOTE]` as a plain quote and drops Callout from the slash menu. `details: false` reads `<details>` as raw HTML and drops Collapsible section from the slash menu. See [docs/syntax.md](docs/syntax.md). |
 | `extensions` | `Extension[]` | Adds syntax and behavior. Built in: `math()` (`$…$` and `$$` blocks), `footnotes()` (`[^1]` and `[^1]: …`, shown as a raised label and a small note; `footnotes({ render: false })` keeps the source), `tags()` (`#tag`) and `mentions()` (`@name`). Extension syntax is saved verbatim, and shown as source unless the extension renders it (see `views`). |
 | `placeholder` | `string` | Shown when the document is empty. |
 | `editable` | `boolean` | Default `true`. With `false`, no editing, and links open on click. |
@@ -61,13 +60,15 @@ The same names work in `new Editor(options)` and as React props, except that Rea
 | `headingIds` | `(headings) => (string \| undefined)[]` | Element ids for headings, for in-page links and an outline. Called with every heading's `{ text, level }` in order, again when the document changes. |
 | `codeCopy` | `boolean` | A copy button at the end of each code block's bar, shown on hover or focus, that copies the code. Default `true`. Its text is `labels.copyCode` and `labels.copied`, its icons `icons.copyCode` and `icons.copied`. |
 | `referrerPolicy` | `ReferrerPolicy` | `referrerpolicy` for images, such as `no-referrer`. Images always load lazily. |
-| `onLinkClick` | `({ editor, href, event }) => boolean` | Called when a link is clicked to be opened: a plain click while read-only, Mod+click while editing. Return `true` to handle it, for example to route an in-app link or scroll to an anchor; otherwise the editor opens `href` in a new tab. |
+| `onLinkClick` | `({ editor, href, event }) => boolean` | Called when a link is clicked to be opened: a plain click while read-only, Mod+click while editing, or Open on the link card. Return `true` to handle it, for example to route an in-app link or scroll to an anchor; otherwise the editor opens `href` in a new tab. |
 | `theme` | `{ classes?, tokens?, colorScheme? }` | Your own classes on rendered elements, colors and fonts, and light or dark. See [Theming](#theming). |
 | `toolbar` | `boolean \| { items? }` | Shows the formatting toolbar on selection. Default `true`. `items` lists its controls; they keep the built-in order: `textStyle`, `bold`, `italic`, `strike`, `inlineCode`, `link`, `quote`, `codeBlock`, `list` (exported as `TOOLBAR_ITEMS`). For example, `{ items: ['bold', 'italic', 'strike', 'inlineCode', 'link'] }` keeps it to inline formatting. |
+| `linkCard` | `boolean` | Default `true`. While editing, a link card shows under a link when the pointer rests on it or the caret is inside it: the URL as written, and buttons to open, copy, edit and remove the link. Open goes through `onLinkClick`. |
 | `popupContainer` | `HTMLElement` | Where menus, the toolbar and the autocomplete popup are appended. Default: the nearest open `<dialog>` or `aria-modal` ancestor of `element`, else `document.body`. |
-| `slashMenu` | `false \| string[]` | Built-in slash menu items to show, in order, or `false` for none: `text`, `heading1`, `heading2`, `heading3`, `bulletList`, `numberedList`, `todoList`, `quote`, `code`, `table`, `divider`. |
+| `slashMenu` | `false \| string[]` | Built-in slash menu items to show, in order, or `false` for none: `text`, `heading1`, `heading2`, `heading3`, `heading4`, `bulletList`, `numberedList`, `todoList`, `quote`, `callout`, `details`, `code`, `table`, `divider`. |
+| `slashHint` | `boolean` | Shows `labels.slashHint` ("Type '/' for commands") in the empty paragraph that has the caret. Default `false`. No effect when `slashMenu` is `false`. When the document is a single empty paragraph, `placeholder` shows instead. |
 | `labels` | `Partial<Labels>` | Overrides UI strings, for localization. See `src/labels.ts`. |
-| `icons` | `Partial<Record<IconName, string \| Element>>` | Replaces built-in icons, which are [Lucide](https://lucide.dev) icons. A string is shown as text; an element, such as an `<svg>`, is cloned for every place it appears. Names match the `labels` keys of the same controls: the slash menu items, the block actions (`duplicate`, `delete`, the table cell actions, `altText` and `resetImageSize`), `bold`, `italic`, `strike`, `inlineCode`, `link`, `chevronDown` and `selected` (the formatting toolbar's menu buttons and their check mark), `chevronRight` (a menu row that opens a submenu), `imageAlignLeft`, `imageAlignCenter` and `imageAlignRight` (an image block's Align choices), `blockHandle` and `imageUnavailable` (shown in place of an image that did not load). |
+| `icons` | `Partial<Record<IconName, string \| Element>>` | Replaces built-in icons, which are [Lucide](https://lucide.dev) icons. A string is shown as text; an element, such as an `<svg>`, is cloned for every place it appears. Names match the `labels` keys of the same controls: the slash menu items, the block actions (`duplicate`, `delete`, the table cell actions, `altText` and `resetImageSize`), `bold`, `italic`, `strike`, `inlineCode`, `link`, `chevronDown` and `selected` (the formatting toolbar's menu buttons and their check mark), `chevronRight` (a menu row that opens a submenu, and a collapsible section's toggle), `calloutNote`, `calloutTip`, `calloutImportant`, `calloutWarning` and `calloutCaution` (callout icons and the callout menu), `openLink`, `copyLink`, `editLink` and `removeLink` (the link card), `imageAlignLeft`, `imageAlignCenter` and `imageAlignRight` (an image block's Align choices), `blockHandle` and `imageUnavailable` (shown in place of an image that did not load). |
 | `onChange` | `(markdown: string, editor) => void` | Called after document changes, at most once per animation frame. |
 | `onSubmit` | `(markdown: string, editor) => void` | Called on Mod+Enter or Ctrl+Enter with the current Markdown, for comment boxes and chat inputs. |
 | `onFocus`, `onBlur` | `(editor) => void` | Focus events. |
@@ -98,10 +99,11 @@ function Composer() {
 | `setMarkdown(markdown, { history? })` | Replaces the document. `history: 'clear'` (default) clears undo history; `'keep'` makes the replacement one undo step. Does not emit `change`. |
 | `isEmpty` | True when the document holds only empty paragraphs. |
 | `state` | The document and selection, immutable. |
-| `commands.*` | Edits. Each applies one change, records one undo step, and returns `true` if it did something: `toggleBold`, `toggleItalic`, `toggleStrike`, `toggleCode`, `setParagraph`, `toggleHeading({ level })`, `toggleBulletList`, `toggleOrderedList`, `toggleTaskList`, `toggleBlockquote`, `toggleCodeBlock({ language? })`, `setLink({ href })`, `unsetLink`, `updateImage({ alt?, title?, align?, width? })`, `insertText(text, { range? })`, `insertMarkdown(markdown, options?)`, `insertTable({ rows?, cols? })`, `insertDivider`, `indent`, `outdent`, `undo`, `redo`, `selectAll`, `selectBlocks`, `focus(position?)`, `blur`, `scrollIntoView`. `selectBlocks` selects the blocks the selection touches as whole blocks, as Escape does; it returns `false` when read-only. `updateImage` changes the selected image; `null` removes its title, alignment or width, and a new width drops a height so the image keeps its aspect ratio. `scrollIntoView` changes nothing in the document: it scrolls the caret into view in the editor's scrolling containers and the window, for example after an `insertMarkdown` from code. |
+| `commands.*` | Edits. Each applies one change, records one undo step, and returns `true` if it did something: `toggleBold`, `toggleItalic`, `toggleStrike`, `toggleCode`, `setParagraph`, `toggleHeading({ level })`, `toggleBulletList`, `toggleOrderedList`, `toggleTaskList`, `toggleBlockquote`, `toggleCallout({ type? })`, `setCallout({ type })`, `toggleDetails`, `toggleCodeBlock({ language? })`, `setLink({ href })`, `unsetLink`, `updateImage({ alt?, title?, align?, width? })`, `insertText(text, { range? })`, `insertMarkdown(markdown, options?)`, `insertTable({ rows?, cols? })`, `insertDivider`, `indent`, `outdent`, `undo`, `redo`, `selectAll`, `selectBlocks`, `focus(position?)`, `blur`, `scrollIntoView`. `selectBlocks` selects the blocks the selection touches as whole blocks, as Escape does; it returns `false` when read-only. `updateImage` changes the selected image; `null` removes its title, alignment or width, and a new width drops a height so the image keeps its aspect ratio. `toggleCallout` turns the selected blocks into a callout (`note` unless `type` says otherwise: `note`, `tip`, `important`, `warning` or `caution`), or back into paragraphs. `setCallout` changes the type of the whole callout or quote with the caret; `type: null` makes it a plain quote. `toggleDetails` makes the block with the caret the title of a collapsible section, or, on a title, removes the section and keeps its blocks. `toggleCallout`, `setCallout` and `toggleDetails` return `false` when the `markdown` option turns that syntax off. `scrollIntoView` changes nothing in the document: it scrolls the caret into view in the editor's scrolling containers and the window, for example after an `insertMarkdown` from code. |
 | `run(fn)` | Applies a custom command: a function from state to a new state, or `null`. The pure commands are exported as `commands` from the package. |
-| `isActive(name, attrs?)` | `bold`, `italic`, `strike`, `code`, `link`, `image` (the selection is exactly one image), or the type of the block with the caret: `paragraph`, `heading`, `bulletList`, `orderedList`, `taskList`, `blockquote`, `codeBlock`, `table`, `divider`, `raw`. `attrs` narrows it, for example `isActive('heading', { level: 2 })`. |
-| `getAttributes(name)` | `src`, `alt`, `title`, `align`, `width`, `height` and `block` (true for an image block) of the selected image, `href` of a link, `level` of a heading, `language` of a code block, `checked` of a task, `syntax` of a raw block. |
+| `isActive(name, attrs?)` | `bold`, `italic`, `strike`, `code`, `link`, `image` (the selection is exactly one image), or the type of the block with the caret: `paragraph`, `heading`, `bulletList`, `orderedList`, `taskList`, `blockquote` (also true in a list inside a quote), `details` (a collapsible section's title or end), `codeBlock`, `table`, `divider`, `raw`. `attrs` narrows it, for example `isActive('heading', { level: 2 })`. |
+| `getAttributes(name)` | `src`, `alt`, `title`, `align`, `width`, `height` and `block` (true for an image block) of the selected image, `href` of a link, `level` of a heading, `language` of a code block, `checked` of a task, `syntax` of a raw block, `callout` of a callout (`getAttributes('blockquote')`, also in a list item inside a callout), `open` (saved open) and `collapsed` (shown collapsed) of a collapsible section title (`getAttributes('details')`). |
+| `setSectionCollapsed(blockId, collapsed)`, `isSectionCollapsed(blockId)` | Collapse or expand the collapsible section whose title is `blockId`, or read whether it is collapsed. This changes the view only, not the Markdown or the history. `setSectionCollapsed` returns `false` when the block is not a section title. |
 | `selectedBlocks` | The blocks of a block selection, in document order, or an empty array when the selection is text. |
 | `getSelection()`, `setSelection(selection)` | Read or move the selection. `setSelection` also takes a `SelectionJSON`, and clamps one that does not fit the document. |
 | `selectionToJSON()` | The selection as JSON-safe data (block index and offset). It still fits after reloading the same Markdown, so an app can store the caret and restore it. |
@@ -215,13 +217,25 @@ const rect = state?.anchorRect();
 
 The popup lines up with the trigger under the caret's line, follows scrolling, resizing and the on-screen keyboard, and hides while the trigger is scrolled out of view. Its z-index is `var(--mbe-popup-z, 1000)`. See [docs/architecture.md](docs/architecture.md#autocomplete) for how it works.
 
+#### Emoji
+
+`@usememos/editor/emoji` adds `:name` autocomplete, as in GitHub, Notion and Linear. Typing `:` and two letters at the start of a word lists emoji by GitHub's names and tags (`:tada`, `:party`); a pick replaces what was typed with the emoji itself, so the Markdown holds the character. The list of 1,870 emoji is a separate file that loads the first time the popup opens.
+
+```ts
+import { emoji } from '@usememos/editor/emoji';
+
+new Editor({ element, extensions: [emoji()] });
+```
+
+Options: `limit` (default 8), `minLength`, the letters typed before the popup opens (default 2; Ctrl+Space opens it sooner), `name` (default `emoji`) and `label`, the popup's accessible name (default `Emoji`). `searchEmoji(list, query, limit)` and `loadEmoji()` are exported for apps that draw their own picker.
+
 `fileHandler({ accept, onPaste, onDrop })` receives pasted and dropped files. `accept` takes MIME types or patterns such as `image/*`. `onPaste` runs only when the clipboard has no plain text, so text copied together with an image still pastes as text. `onDrop` gets the document position of the drop. Dropped text without files is inserted where it lands.
 
 `keymap` uses ProseMirror key names: `Mod-` (Cmd on macOS, Ctrl elsewhere), `Ctrl-`, `Alt-`, `Shift-`, `Meta-`, then a key such as `b`, `7`, `Enter` or `Escape`. A handler returns `true` to stop later bindings and the browser default. Bindings in earlier extensions run first. The default bindings are the `defaultKeymap()` extension, added last; pass your own extension named `defaultKeymap` to replace it.
 
 `markdown` adds syntax; see `math()`, `footnotes()`, [docs/syntax.md](docs/syntax.md) and [docs/architecture.md](docs/architecture.md).
 
-`views` shows a syntax rendered instead of as source, keyed by syntax name. A key of `code:` and a language (`code:mermaid`) renders code blocks of that language, such as diagrams. The key `html` renders raw HTML: HTML blocks (`kind` `'block'`), and inline HTML (`'inline'`) one run at a time, an opening tag through its closing tag with the Markdown between (`<kbd>**Ctrl**</kbd>`), or a single tag (`<br>`). The editor never renders HTML itself, so sanitize it in the view. While editing, a token shows its source when the caret touches it, and a block when the selection is in it; clicking either does the same. Read-only always shows the rendered view. A view that finishes later, such as a diagram library that loads on demand, fills in a placeholder and returns a promise: the editor shows the placeholder, then the finished element; a promise that rejects or resolves to `false` shows the source. `math()` uses this when given a render function; the core has no math renderer of its own, so pass one such as KaTeX. A render function may return a promise, for a renderer loaded on demand; the formula's source shows until it resolves:
+`views` shows a syntax rendered instead of as source, keyed by syntax name. A key of `code:` and a language (`code:mermaid`) renders code blocks of that language, such as diagrams. The key `html` renders raw HTML: HTML blocks (`kind` `'block'`), and inline HTML (`'inline'`) one run at a time, an opening tag through its closing tag (`<kbd>**Ctrl**</kbd>`), or a single tag (`<br>`). The view gets HTML only: the editor renders the Markdown between the tags itself, inline text and the blocks inside an HTML section such as `<details>` (see [HTML blocks](docs/syntax.md#html-blocks)), and puts it in place of a marker it leaves in the HTML, so parse the source as HTML and keep its text. The editor never renders HTML itself, so sanitize it in the view. While editing, a token shows its source when the caret touches it, and a block when the selection is in it; clicking either does the same. Read-only always shows the rendered view. A view that finishes later, such as a diagram library that loads on demand, fills in a placeholder and returns a promise: the editor shows the placeholder, then the finished element; a promise that rejects or resolves to `false` shows the source. `math()` uses this when given a render function; the core has no math renderer of its own, so pass one such as KaTeX. A render function may return a promise, for a renderer loaded on demand; the formula's source shows until it resolves:
 
 ```ts
 import katex from 'katex';
@@ -251,7 +265,7 @@ new Editor({
 });
 ```
 
-Colors are `text`, `muted`, `background`, `accent`, `link`, `codeBackground`, `border`, `popupBackground`, `popupBorder`, `hover` and `danger`; the other tokens are `font`, `mono`, `fontSize`, `lineHeight`, `radius` and `blockGap` (numbers are pixels). Values can be any CSS, such as `var(--primary)`, so the editor can follow your app's own variables. Menus, the toolbar and the link popover take the same tokens.
+Colors are `text`, `muted`, `background`, `accent`, `link`, `codeBackground`, `border`, `popupBackground`, `popupBorder`, `hover`, `danger`, and `calloutNote`, `calloutTip`, `calloutImportant`, `calloutWarning` and `calloutCaution` (each callout type's icon, and a light tint of it behind the text); the other tokens are `font`, `mono`, `fontSize`, `lineHeight`, `radius` and `blockGap` (numbers are pixels). Values can be any CSS, such as `var(--primary)`, so the editor can follow your app's own variables. Menus, the toolbar and the link popover take the same tokens.
 
 `colorScheme` picks light or dark: `auto` (the default) follows `prefers-color-scheme`, or `data-theme="light"` or `data-theme="dark"` on the editor or an ancestor; `light` and `dark` force one; `inherit` follows the page's `color-scheme`, for apps that switch it themselves. Switching tokens or the scheme with `setOptions({ theme })` re-renders nothing.
 
@@ -273,7 +287,7 @@ new Editor({
 });
 ```
 
-Keys use the names of `isActive`: `paragraph`, `heading` (by level), `blockquote`, `bulletList`, `orderedList` and `taskList` (each list item; blocks are flat, so there is no list element), `codeBlock`, `table`, `divider` (the `<hr>`), `raw`, `image`, `bold`, `italic`, `strike`, `code`, `link`, and `token` (inline tokens of an extension syntax, by name). Extensions can add classes too; the editor's own `theme` wins for the same key. `setOptions({ theme })` changes them while the editor runs.
+Keys use the names of `isActive`: `paragraph`, `heading` (by level), `blockquote`, `bulletList`, `orderedList` and `taskList` (each list item; blocks are flat, so there is no list element; an item in a quote also gets the `blockquote` classes), `codeBlock`, `table`, `divider` (the `<hr>`), `raw`, `image`, `bold`, `italic`, `strike`, `code`, `link`, and `token` (inline tokens of an extension syntax, by name). Extensions can add classes too; the editor's own `theme` wins for the same key. `setOptions({ theme })` changes them while the editor runs.
 
 To style the editor entirely with your own classes, import `@usememos/editor/base.css` instead of `style.css`. Spacing between blocks stays in `base.css`, and its rules are more specific than a single class, so margins in your classes do not change it.
 
@@ -287,9 +301,10 @@ To style the editor entirely with your own classes, import `@usememos/editor/bas
 | Mod+B, Mod+I, Mod+E | Bold, italic, inline code |
 | Mod+Shift+X, Mod+Shift+S | Strikethrough |
 | Mod+K | Link, for selected text or the link at the caret. Otherwise the key is left to the app, for example for a command menu |
-| Mod+Alt+0, Mod+Alt+1–3 | Paragraph, heading 1–3 |
+| Mod+Alt+0, Mod+Alt+1–4 | Paragraph, heading 1–4 |
 | Mod+Alt+C | Code block |
 | Mod+Shift+7, 8, 9 | Numbered, bullet, task list |
+| Mod+Shift+6 | Collapsible section; on a section title, remove the section |
 | Mod+/ | Block menu, in a table, code block or image block |
 | Mod+Z, Mod+Shift+Z (Ctrl+Y) | Undo, redo |
 | Shift+Enter | Line break inside a block |
@@ -302,7 +317,7 @@ To style the editor entirely with your own classes, import `@usememos/editor/bas
 
 With blocks selected: ArrowUp and ArrowDown select the block above or below, Shift extends the selection, Mod+A selects every block, Backspace and Delete delete them, Mod+C, Mod+X and paste copy, cut and replace them as whole blocks, Mod+D duplicates them, and the block type keys, Tab and the mark keys apply to all of them. Enter, ArrowLeft and ArrowRight go back to editing text. Typing does nothing. See [Block selection](docs/architecture.md#block-selection).
 
-Markdown shortcuts at the start of a line: `#`–`######`, `-`, `*`, `+`, `1.`, `[ ]`, `[x]`, `>`, ` ``` `, `---`. Inline: `**bold**`, `*italic*`, `_italic_`, `` `code` ``, `~~strike~~`.
+Markdown shortcuts at the start of a line: `#`–`######`, `-`, `*`, `+`, `1.`, `[ ]`, `[x]`, `>`, `[!note]` and the other callout types, `>>>` (collapsible section), ` ``` `, `---`. Inline: `**bold**`, `*italic*`, `_italic_`, `` `code` ``, `~~strike~~`.
 
 ## Images
 
@@ -312,11 +327,42 @@ An image alone in its paragraph is an image block. It has the block handle and t
 
 The size and the alignment are saved after the alt text, as in Obsidian and its image plugins: `![chart|320](chart.png)`, `![chart|320x200](chart.png)` with a height, `![chart|center](chart.png)` or `![chart|center|320](chart.png)`. The size is a whole number of CSS pixels, and the image never shows wider than the column. The alignment applies only to image blocks. Other Markdown renderers show the image at its own size, on the left, and read the alt text as `chart|center|320`. See [Image size and alignment](docs/syntax.md#image-size-and-alignment) in the syntax doc.
 
+## Callouts
+
+A callout is a quote with a type, saved as a [GitHub alert](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#alerts):
+
+```md
+> [!WARNING]
+> Back up your data first.
+```
+
+The types are Note, Tip, Important, Warning and Caution. A callout is a softly tinted box in its type's color, with the type's icon beside the first line; the type's name is the icon's accessible label. Make one with Callout in the slash menu (a Note), or type `[!tip] ` at the start of a paragraph or a quote. Enter adds a line to the callout; Enter on an empty line ends it. Callouts and quotes can hold lists: type `- `, `1. ` or `[ ] ` at the start of a line in one. Clicking the icon, or Mod+/ inside the callout, opens its menu: the five types, and Delete for the whole callout. Pasting an alert copied from a GitHub page keeps it a callout. Renderers without alert support, including CommonMark, show a plain quote whose first line is `[!WARNING]`.
+
+## Collapsible sections
+
+A collapsible section is a title with blocks under it that can be hidden, saved as an HTML `<details>` element, which GitHub, GitLab and most Markdown renderers show as a disclosure widget:
+
+```md
+<details>
+<summary>Steps to reproduce</summary>
+
+1. Open the app.
+2. Click Save.
+
+</details>
+```
+
+The title is plain text. The blocks inside are ordinary blocks, edited in place, and sections can be nested. A chevron before the title collapses and expands the section, while editing and in read-only mode. A section saved with `<details open>` loads expanded; any other loads collapsed, as a renderer shows it. Collapsing or expanding changes only the view: the Markdown keeps the `open` it was loaded with, and a new section is saved without it.
+
+Make one with Collapsible section in the slash menu, Mod+Shift+6, or `>>> ` at the start of a paragraph; a paragraph with text becomes the title. In the title, Enter moves to the first line of the section, or, in a collapsed section, adds a line after it. Enter on an empty last line of a section moves the line out of it. Arrow keys pass over a collapsed section, and a caret that lands inside one (from undo, for example) expands it. Backspace at the start of the line after a section moves into its last line. A block selection that includes a title or an end includes the whole section, so copying, cutting and deleting take it whole. Removing a title, with Backspace at its start or Mod+Shift+6, keeps the blocks inside as ordinary blocks.
+
+Only a `<details>` written the way the editor saves it loads as a section: the opening tag and a `<summary>` of plain text, a blank line, Markdown, and `</details>` at the start of a line. Other `<details>`, such as one on a single line, stay raw HTML.
+
 ## What saving changes
 
 Blocks you did not edit are saved exactly as they were loaded, byte for byte, including the blank lines between them. `getMarkdown()` right after loading returns the input unchanged.
 
-Blocks you edited, and new blocks, are written in a normalized style: `*` for italic, `**` for bold, `-` for bullets, ATX headings, fenced code, tight lists, renumbered ordered lists, and inline links instead of reference links. Soft line breaks become spaces, unless `markdown.breaks` is on. Structure the editor cannot edit as blocks (a list inside a quote, a code block or second paragraph inside a list item, lists nested more than five levels) is kept as a raw block: the original Markdown, shown and edited as source, saved verbatim. Math and footnote blocks from the extensions are raw blocks too.
+Blocks you edited, and new blocks, are written in a normalized style: `*` for italic, `**` for bold, `-` for bullets, ATX headings, fenced code, tight lists, renumbered ordered lists, and inline links instead of reference links. Soft line breaks become spaces, unless `markdown.breaks` is on. Structure the editor cannot edit as blocks (a code block or heading inside a quote, a code block or second paragraph inside a list item, lists nested more than five levels) is kept as a raw block: the original Markdown, saved verbatim. It shows rendered, and its source shows for editing when the caret is in it or it is clicked. Math and footnote blocks from the extensions are raw blocks too.
 
 ## Develop
 

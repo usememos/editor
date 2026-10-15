@@ -4,7 +4,7 @@ This is the specification of the Markdown the editor reads and writes: each bloc
 
 ## Conformance
 
-- The parser follows **CommonMark 0.31.2** and the **GFM** extensions for tables, task list items, strikethrough and autolink literals.
+- The parser follows **CommonMark 0.31.2** and the **GFM** extensions for tables, task list items, strikethrough and autolink literals, plus GitHub's alerts.
 - All 652 CommonMark 0.31.2 spec examples produce the reference HTML with `autolinks: false` (`test/spec.test.ts`).
 - All GFM table, task list item, strikethrough and autolink spec examples produce the reference HTML (`test/spec.test.ts`).
 - Loading and saving with no edits returns the input byte for byte, for every spec example (`test/source.test.ts`).
@@ -21,6 +21,8 @@ The `markdown` editor option sets the dialect.
 | `breaks` | `false` | `true`: a single newline inside a paragraph is a line break, saved as a plain newline. `false`: a single newline is a CommonMark soft break, which loads as a space. |
 | `setext` | `true` | `false`: `Title` followed by `---` is a paragraph and a divider, not a heading. |
 | `autolinks` | `true` | `false`: bare URLs and e-mail addresses are plain text. See [Autolink literals](#autolink-literals). |
+| `callouts` | `true` | `false`: a GitHub alert such as `> [!NOTE]` is a plain quote whose text starts with `[!NOTE]`. See [Callouts](#callouts). |
+| `details` | `true` | `false`: `<details>` is raw HTML, not a collapsible section. See [Collapsible sections](#collapsible-sections). |
 | `syntax` | `[]` | Syntax extensions, usually set through extensions such as `math()` and `footnotes()`. |
 
 Examples in this document use the defaults unless they say otherwise. The playground uses `breaks: true`, `setext: false`, `math()`, `footnotes()`, `tags()` and `mentions()`.
@@ -46,6 +48,9 @@ Examples in this document use the defaults unless they say otherwise. The playgr
 | Task list | `- [ ] a`, `- [x] a`, `- [X] a` | `listItem`, `task`, `checked` | `- [ ] a`, `- [x] a` |
 | Nested list | `- a` then `    - b` | `listItem` with `indent` 0 to 5 | Indented to the parent's content column |
 | Block quote | `> a` | one `quote` per paragraph | `> a` |
+| Empty quote | `> &nbsp;` | empty `quote` | `> &nbsp;` |
+| Callout (GitHub alert) | `> [!NOTE]` then `> a` | one `quote` per paragraph, each with `callout: "note"` | `> [!NOTE]` then `> a` |
+| Collapsible section | `<details>`, `<summary>T</summary>`, Markdown, `</details>` | `details` (the title), the blocks inside, `detailsEnd` | See [Collapsible sections](#collapsible-sections) |
 | Fenced code | ` ```js ` … ` ``` ` | `code`, `language: "js"` | Backtick fence, language only |
 | Indented code | four spaces, then code | `code`, no language | Backtick fence |
 | HTML block | `<div>hi</div>`, `<!-- c -->` | `raw`, `syntax: "html"` | Verbatim |
@@ -72,7 +77,7 @@ b
 
 ### Empty lines
 
-An empty paragraph is saved as a paragraph holding only `&nbsp;`. It renders as an empty line in any CommonMark renderer and loads back as an empty paragraph. Empty paragraphs at the end of the document are not saved.
+An empty paragraph is saved as a paragraph holding only `&nbsp;`. It renders as an empty line in any CommonMark renderer and loads back as an empty paragraph. Empty paragraphs at the end of the document are not saved. An empty quote is saved the same way, as `> &nbsp;`, wherever it is.
 
 ```md
 Above
@@ -118,7 +123,39 @@ Below
 > Second paragraph
 ```
 
-Each paragraph in a quote becomes one `quote` block. Adjacent quote blocks are saved as one quote, with a `>` line between paragraphs. A quote that holds anything other than paragraphs becomes a raw Markdown block.
+Each paragraph in a quote becomes one `quote` block. Adjacent quote blocks are saved as one quote, with a `>` line between paragraphs. A quote that holds anything other than paragraphs and lists becomes a raw Markdown block.
+
+A list in a quote becomes `listItem` blocks with `quote: true`, next to the quote's paragraphs:
+
+```md
+> ✏️ **Quick note**
+> - Item 1: check xyz
+> - Item 2: check abc
+```
+
+- Adjacent quote blocks and quoted list items are one quote. They are saved as one blockquote: the paragraphs and the list as they are saved outside a quote, with `> ` before every line. An edited quote has a `>` line between a paragraph and a list: `> ✏️ **Quick note**`, `>`, `> - Item 1: check xyz`.
+- A list in a quote follows the rules of other lists: one paragraph per item, nested lists up to six levels. A list that breaks them makes the whole quote a raw Markdown block.
+- A list in a quote and a list outside it are separate lists, saved with a blank line between.
+
+### Callouts
+
+```md
+> [!TIP]
+> First paragraph
+>
+> Second paragraph
+```
+
+A blockquote whose first line is `[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]` or `[!CAUTION]` is a callout, as on GitHub. The marker is case-insensitive and must be alone on its line; trailing spaces are allowed.
+
+- Each paragraph becomes a `quote` block with `callout` set to the type in lowercase (`"tip"`). The marker is not part of the text.
+- A list in a callout becomes list items with `quote: true` and the same `callout`, as in a quote.
+- Adjacent quote blocks and quoted list items with the same `callout` are one blockquote. A different type, or a plain quote, starts a new one, saved after a blank line.
+- A callout that starts with a list is saved with the list right after the marker line (`> [!NOTE]`, then `> - a`). A list that cannot follow a line of text directly (an empty item, or numbered from other than 1) gets a `>` line before it.
+- An edited callout is saved with the marker in capitals, on its own line: `> [!TIP]`. An unedited one keeps its original spelling.
+- A marker with nothing after it (`> [!TIP]` alone) is an empty callout, saved as `> [!TIP]` then `> &nbsp;`.
+- Not callouts: `> [!NOTE] text` (text on the marker's line), an unknown type such as `> [!FYI]`, and a marker after the first line. They stay plain quotes.
+- A plain quote whose first line is a marker reads back as a callout. There is no escape for it, because escaping the `[` gives the same text.
 
 ### Code blocks
 
@@ -143,15 +180,36 @@ const x = 1;
 - Row 0 is the header. Each column has an alignment: `left`, `center`, `right` or none.
 - Cells hold inline content. A line break in a cell is saved as `&#10;`, because a table row cannot span lines.
 - An edited table is saved with one space around each cell and a delimiter row of `---`, `:--`, `:-:` or `--:`.
+- A `|` in a cell is saved as `\|`, in code spans too, because GFM splits a row into cells before it reads code spans. A `|` right after an odd number of backslashes in a code span cannot be written that way (`` `a\|` `` would end the cell), so it is saved outside the code span: code `a\|b` is saved as `` `a\`\|`b` ``.
 
 ### HTML blocks
 
-An HTML block (`<div>`, `<!-- comment -->`, `<details>` and the other CommonMark HTML block starts) loads as a raw block with `syntax: "html"`. It is shown and edited as source and saved verbatim. HTML is never rendered.
+An HTML block (`<div>`, `<!-- comment -->` and the other CommonMark HTML block starts) loads as a raw block with `syntax: "html"`. It is edited as source and saved verbatim. The editor never renders HTML itself: with an `html` view (see [Extensions](../README.md)) it shows rendered, otherwise as source.
 
-A collapsible section loads as **one** raw HTML block, from the line that opens `<details>` to the line that closes it, including blank lines, Markdown and nested `<details>` inside:
+An **HTML section**, an element whose opening and closing tags are in different HTML blocks, loads as **one** raw HTML block, from the line that opens the element to the line that closes it, including blank lines, Markdown and nested sections inside. Centered content is a common case:
 
 ```markdown
-<details>
+<div align="center">
+
+**Release notes**
+
+</div>
+```
+
+CommonMark ends an HTML block at a blank line, so this example is three blocks to a renderer: the opening HTML, a paragraph, and the closing `</div>`. The editor joins them so the section stays together when blocks around it are edited, selected or deleted. The saved text is the same either way.
+
+- `<details>` written as the editor saves it is a [collapsible section](#collapsible-sections) instead, edited as blocks. Any other element counts: `<details>` in other shapes or with `details: false`, `<div align="center">`, `<p align="center">`, a `<td>` with a list in it, `<blockquote>`, `<section>`.
+- A section opens at an HTML block that leaves an element open and ends at the HTML block that closes it. A closing tag closes the elements opened inside it too, as in a browser (`<div><span>` … `</div>`). Void elements (`<img>`, `<br>`), self-closing tags and comments leave nothing open.
+- Only HTML blocks count. A closing tag inside a paragraph (`text</div>`) is inline HTML, so it does not close a section. An element that is never closed is not joined.
+- Rendered, a section reads as on GitHub: the `html` view gets the section's HTML, and the Markdown between the tags renders as the editor's own blocks inside the element, with footnotes, tags, math and code highlighting as anywhere else. Clicking a section while editing shows its source.
+- Markdown between tags on the same lines, without blank lines around it (`<td>**x**</td>`), is part of the HTML block and stays HTML, as in CommonMark.
+
+### Collapsible sections
+
+A `<details>` element is a collapsible section when its opening tag and its `<summary>` are an HTML block of their own, and its `</details>` starts a later HTML block:
+
+```markdown
+<details open>
 <summary>Release notes</summary>
 
 - Fixed sync
@@ -160,7 +218,11 @@ A collapsible section loads as **one** raw HTML block, from the line that opens 
 </details>
 ```
 
-CommonMark ends an HTML block at a blank line, so this example is three blocks to a renderer: the opening HTML, a list, and the closing `</details>`. The editor joins them so the section stays together when blocks around it are edited, selected or deleted. The saved text is the same either way. A `<details>` that is never closed is not joined.
+- It loads as a `details` block (the title, with `open: true` for `<details open>`), the blocks between the tags as ordinary blocks, and a `detailsEnd` block. Sections nest.
+- The title is plain text. Character references in it are decoded (`&amp;` loads as `&`), and `&`, `<` and `>` are escaped when it is saved.
+- The opening tag may have `open` in any HTML spelling (`open`, `open=""`, `open="open"`, any case) and nothing else. A `<summary>` with markup in it, a section on one line, an empty section with no blank line, and a `<details>` that is never closed are not sections: they stay raw HTML, as in [HTML blocks](#html-blocks).
+- An edited title is saved as `<details>` or `<details open>`, then `<summary>Title</summary>` on the next line. An unedited one keeps its original text. `</details>` is saved after a blank line.
+- Whether a section is shown collapsed is not saved: `open` keeps the value it was loaded with, and a new section has none. Renderers show a section without `open` collapsed.
 
 ### Structure kept as source
 
@@ -168,7 +230,7 @@ The whole top-level list or quote is kept as one raw block with `syntax: "markdo
 
 - a list item holds more than one paragraph, or any block other than a nested list;
 - lists nest more than six levels deep;
-- a quote holds anything other than paragraphs.
+- a quote holds anything other than paragraphs and lists, or a list that breaks these rules.
 
 Each of these examples loads as one raw Markdown block:
 
@@ -183,6 +245,8 @@ Each of these examples loads as one raw Markdown block:
 > Text
 ```
 
+A raw Markdown block is shown rendered, with the editor's own blocks: a quote or list item the model cannot hold is drawn as a container around its blocks, and a GitHub alert as a callout. While editing, the caret in the block, or a click on it, shows its source, which is edited as plain text. Read-only, it always shows rendered. An extension's own `markdown` view replaces this rendering.
+
 ### Block typing shortcuts
 
 Typed at the start of a paragraph. Undo, or Backspace right after the shortcut, restores the typed characters.
@@ -190,10 +254,12 @@ Typed at the start of a paragraph. Undo, or Backspace right after the shortcut, 
 | Type | Becomes |
 | --- | --- |
 | `# ` to `###### ` | Heading, level 1 to 6 |
-| `- `, `* `, `+ ` | Bullet list item |
-| `1. `, `1) ` | Ordered list item, starting at that number |
-| `[ ] `, `[x] ` | Task list item (also at the start of a bullet item) |
+| `- `, `* `, `+ ` | Bullet list item; in a quote or callout, a list item in it |
+| `1. `, `1) ` | Ordered list item, starting at that number; in a quote or callout, a list item in it |
+| `[ ] `, `[x] ` | Task list item (also at the start of a bullet item); in a quote or callout, a list item in it |
 | `> ` | Quote |
+| `[!note] `, `[!tip] `, `[!important] `, `[!warning] `, `[!caution] ` (any case) | Callout of that type; in a quote, the whole quote becomes the callout |
+| `>>> ` | Collapsible section: the rest of the paragraph is its title |
 | ` ``` ` or ` ```lang `, then a space | Code block |
 | `---` | Divider, on the third `-` |
 
@@ -302,6 +368,8 @@ The serializer escapes only characters that would otherwise change meaning:
 - a backslash before punctuation;
 - characters an extension lists in `escape` (`math()` lists `$`);
 - at the start of a line, what would start a block: `#` followed by a space or ending the text, `>`, `-` or `+` followed by a space, `1.`, and so on.
+
+Inline HTML cannot be escaped. When a line break puts HTML that would start an HTML block (a comment, or a tag such as `<div>`) at the start of a line, that line is indented by four spaces, which keeps it in the paragraph. The spaces are not part of the text.
 
 `#`, `@`, `:` and `=` in running text are not escaped. Where an extension reads a backslash escape as its own token (`tags()` reads `\#`), the serializer writes a character reference instead, such as `&#35;`.
 

@@ -29,7 +29,7 @@
    margins collapse, so blocks sit one gap apart and a block with larger
    margins (a heading, a divider) wins. No sibling selectors: in Chrome they
    make every edit restyle and re-lay out all blocks after the edited one. */
-.mbe-root > .mbe-block {
+:is(.mbe-root, .mbe-flow) > .mbe-block {
   margin: var(--mbe-block-gap) 0;
   position: relative;
   /* Margins inside a block never merge with the block's own, so a block lays
@@ -52,31 +52,107 @@
 }
 
 /* Headings: more room above than below. */
-.mbe-root > :is(h1, h2).mbe-block { margin-top: 20px; }
-.mbe-root > h3.mbe-block { margin-top: 20px; margin-bottom: 6px; }
-.mbe-root > :is(h4, h5, h6).mbe-block { margin-top: 16px; margin-bottom: 4px; }
+:is(.mbe-root, .mbe-flow) > :is(h1, h2).mbe-block { margin-top: 20px; }
+:is(.mbe-root, .mbe-flow) > h3.mbe-block { margin-top: 20px; margin-bottom: 6px; }
+:is(.mbe-root, .mbe-flow) > :is(h4, h5, h6).mbe-block { margin-top: 16px; margin-bottom: 4px; }
 
-/* Quote: the renderer marks a quote block that follows another (see
-   updateNeighborMarks). The negative margin cancels the gap, and padding
-   keeps a border unbroken, so consecutive quote blocks read as one quote. */
-.mbe-root > blockquote[data-quote-joined] { margin-top: calc(-1 * var(--mbe-block-gap)); padding-top: var(--mbe-block-gap); }
+/* Quote: the renderer marks a quote block that follows another of the same
+   quote, and one followed by another (see updateNeighborMarks). Margins are
+   0 between the parts of a quote and padding makes the space, so the border
+   stays unbroken and consecutive quote blocks read as one quote. A list in a
+   quote is a run of blockquote list items (see renderBlock): its items sit
+   2px apart, as outside quotes, with the gap around the list. */
+:is(.mbe-root, .mbe-flow) > blockquote[data-quote-continued] { margin-bottom: 0; }
+:is(.mbe-root, .mbe-flow) > blockquote[data-quote-joined] { margin-top: 0; padding-top: var(--mbe-block-gap); }
+:is(.mbe-root, .mbe-flow) > blockquote.mbe-list-item[data-quote-joined] { margin-top: 0; }
+:is(.mbe-root, .mbe-flow) > blockquote.mbe-list-item[data-quote-joined]:not([data-list-start]) { padding-top: 2px; }
+
+/* Callouts: a padded box with the type's icon in a start column, level with
+   the first line. Only the first block of a callout shows the icon; the
+   renderer marks a block followed by another of the callout with
+   data-quote-continued, so the box pads only its first and last lines.
+   Clicking the icon opens the type menu. */
+:is(.mbe-root, .mbe-flow) > blockquote[data-callout] {
+  --mbe-callout-pad: 12px;
+  position: relative;
+  padding-block: var(--mbe-callout-pad);
+  padding-inline: calc(var(--mbe-callout-pad) + 28px) 16px;
+}
+:is(.mbe-root, .mbe-flow) > blockquote[data-callout][data-quote-joined] { padding-top: var(--mbe-block-gap); }
+:is(.mbe-root, .mbe-flow) > blockquote[data-callout][data-quote-continued] { padding-bottom: 0; }
+.mbe-root .mbe-callout-icon {
+  position: absolute;
+  top: var(--mbe-callout-pad);
+  inset-inline-start: calc(var(--mbe-callout-pad) - 2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 1.5em;
+  height: 1lh;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.mbe-root .mbe-callout-icon > .mbe-icon { width: 18px; height: 18px; }
+:is(.mbe-root, .mbe-flow) > blockquote[data-quote-joined] > .mbe-callout-icon { display: none; }
+.mbe-root:not(.mbe-readonly) > blockquote > .mbe-callout-icon { cursor: pointer; }
+
+/* Collapsible sections: the title has a toggle in the indent column, and the
+   blocks inside are indented by one step per section around them (see
+   updateNeighborMarks). A collapsed section hides its blocks. The end of a
+   section holds no text and takes no room. */
+:is(.mbe-root, .mbe-flow) > .mbe-details { display: flex; align-items: flex-start; }
+.mbe-root .mbe-details > .mbe-content { flex: 1; min-width: 0; position: relative; }
+.mbe-root .mbe-details-marker {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--mbe-indent-size);
+  height: 1.5em;
+  height: 1lh;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.mbe-root .mbe-details-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: none;
+  padding: 2px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.mbe-root .mbe-details-toggle > .mbe-icon { transition: transform 0.12s ease; transform: rotate(90deg); }
+.mbe-root .mbe-details[data-collapsed] .mbe-details-toggle > .mbe-icon { transform: none; }
+.mbe-root .mbe-details[data-collapsed]:dir(rtl) .mbe-details-toggle > .mbe-icon { transform: scaleX(-1); }
+:is(.mbe-root, .mbe-flow) > .mbe-details-end.mbe-block { display: block; height: 0; margin: 0; }
+:is(.mbe-root, .mbe-flow) > [data-section-hidden] { display: none !important; }
 
 /* Lists: items sit close together; the list as a whole gets the block gap.
    The renderer marks the first item of each list with data-list-start
    (see updateNeighborMarks). Item margins of 2px collapse with a neighbor's
    gap, so only the gap shows at either end of a list. */
-.mbe-root > .mbe-list-item {
+:is(.mbe-root, .mbe-flow) > .mbe-list-item {
   display: flex;
   align-items: flex-start;
   margin: 2px 0;
 }
-.mbe-root > .mbe-list-item[data-list-start] { margin-top: var(--mbe-block-gap); }
+:is(.mbe-root, .mbe-flow) > .mbe-list-item[data-list-start] { margin-top: var(--mbe-block-gap); }
 /* Attribute rules instead of an inline custom property, so list items share computed styles. */
-.mbe-root > .mbe-list-item[data-indent='1'] { padding-inline-start: var(--mbe-indent-size); }
-.mbe-root > .mbe-list-item[data-indent='2'] { padding-inline-start: calc(2 * var(--mbe-indent-size)); }
-.mbe-root > .mbe-list-item[data-indent='3'] { padding-inline-start: calc(3 * var(--mbe-indent-size)); }
-.mbe-root > .mbe-list-item[data-indent='4'] { padding-inline-start: calc(4 * var(--mbe-indent-size)); }
-.mbe-root > .mbe-list-item[data-indent='5'] { padding-inline-start: calc(5 * var(--mbe-indent-size)); }
+:is(.mbe-root, .mbe-flow) > div.mbe-list-item[data-indent='1'] { padding-inline-start: var(--mbe-indent-size); }
+:is(.mbe-root, .mbe-flow) > div.mbe-list-item[data-indent='2'] { padding-inline-start: calc(2 * var(--mbe-indent-size)); }
+:is(.mbe-root, .mbe-flow) > div.mbe-list-item[data-indent='3'] { padding-inline-start: calc(3 * var(--mbe-indent-size)); }
+:is(.mbe-root, .mbe-flow) > div.mbe-list-item[data-indent='4'] { padding-inline-start: calc(4 * var(--mbe-indent-size)); }
+:is(.mbe-root, .mbe-flow) > div.mbe-list-item[data-indent='5'] { padding-inline-start: calc(5 * var(--mbe-indent-size)); }
+/* In a quote the item's padding is the quote's, so the marker takes the indent. */
+:is(.mbe-root, .mbe-flow) > blockquote.mbe-list-item[data-indent='1'] > .mbe-marker { margin-inline-start: var(--mbe-indent-size); }
+:is(.mbe-root, .mbe-flow) > blockquote.mbe-list-item[data-indent='2'] > .mbe-marker { margin-inline-start: calc(2 * var(--mbe-indent-size)); }
+:is(.mbe-root, .mbe-flow) > blockquote.mbe-list-item[data-indent='3'] > .mbe-marker { margin-inline-start: calc(3 * var(--mbe-indent-size)); }
+:is(.mbe-root, .mbe-flow) > blockquote.mbe-list-item[data-indent='4'] > .mbe-marker { margin-inline-start: calc(4 * var(--mbe-indent-size)); }
+:is(.mbe-root, .mbe-flow) > blockquote.mbe-list-item[data-indent='5'] > .mbe-marker { margin-inline-start: calc(5 * var(--mbe-indent-size)); }
 .mbe-root .mbe-marker {
   flex: none;
   box-sizing: border-box;
@@ -156,27 +232,44 @@
   padding: 0;
   width: 12em;
 }
-.mbe-root > .mbe-code pre,
-.mbe-root > pre.mbe-raw { white-space: pre-wrap; tab-size: 2; }
-.mbe-root > .mbe-code pre { margin: 0; }
-.mbe-root > .mbe-code pre code { display: block; }
+:is(.mbe-root, .mbe-flow) > .mbe-code pre,
+:is(.mbe-root, .mbe-flow) > pre.mbe-raw { white-space: pre-wrap; tab-size: 2; }
+:is(.mbe-root, .mbe-flow) > .mbe-code pre { margin: 0; }
+:is(.mbe-root, .mbe-flow) > .mbe-code pre code { display: block; }
 
 /* Rendered views (see Extension.views): a token or raw block shown rendered,
    such as math. Clicking one, or moving the caret onto it, shows its source. */
-.mbe-root > .mbe-view-block { overflow-x: auto; overflow-y: hidden; }
+:is(.mbe-root, .mbe-flow) > .mbe-view-block { overflow-x: auto; overflow-y: hidden; }
 /* A renderer's own block margins (KaTeX's display math has 1em) would add to the block gap. */
-.mbe-root > .mbe-view-block > * { margin-block: 0; }
+:is(.mbe-root, .mbe-flow) > .mbe-view-block > * { margin-block: 0; }
+/* Rendered HTML: line breaks between its tags are not text. The Markdown
+   between the tags of an HTML section (.mbe-flow) is blocks again, one
+   block gap from the HTML around it. */
+.mbe-root .mbe-view-block.mbe-view-html { white-space: normal; }
+.mbe-root .mbe-view-html .mbe-flow { white-space: pre-wrap; margin-block: var(--mbe-block-gap); }
+.mbe-root .mbe-view-html :is(p, blockquote, pre, ul, ol, dl, table, details, figure, hr, h1, h2, h3, h4, h5, h6):not(.mbe-flow *) { margin-block: var(--mbe-block-gap); }
+.mbe-root .mbe-view-html :is(ul, ol):not(.mbe-flow *) { padding-inline-start: var(--mbe-indent-size); }
+.mbe-root .mbe-view-html ul:not(.mbe-flow *) { list-style: disc; }
+.mbe-root .mbe-view-html ol:not(.mbe-flow *) { list-style: decimal; }
+.mbe-root .mbe-view-html pre:not(.mbe-flow *) { white-space: pre; overflow-x: auto; }
+.mbe-root .mbe-view-html summary:not(.mbe-flow *) { cursor: pointer; }
+.mbe-root .mbe-view-html img:not(.mbe-flow *) { max-width: 100%; }
+/* Nothing above the first element or below the last, as for blocks. */
+.mbe-root .mbe-view-html :is(details, blockquote, li, td, th, div, section):not(.mbe-flow *) > :first-child,
+.mbe-root .mbe-view-block.mbe-view-html > :first-child { margin-top: 0; }
+.mbe-root .mbe-view-html :is(details, blockquote, li, td, th, div, section):not(.mbe-flow *) > :last-child,
+.mbe-root .mbe-view-block.mbe-view-html > :last-child { margin-bottom: 0; }
 
 /* Divider: the padding gives the line a larger click target. */
-.mbe-root > .mbe-divider.mbe-block { margin: 16px 0; padding: 4px 0; cursor: default; }
-.mbe-root > .mbe-divider hr { margin: 0; }
+:is(.mbe-root, .mbe-flow) > .mbe-divider.mbe-block { margin: 16px 0; padding: 4px 0; cursor: default; }
+:is(.mbe-root, .mbe-flow) > .mbe-divider hr { margin: 0; }
 
 /* Table */
-.mbe-root > .mbe-table { overflow-x: auto; }
+:is(.mbe-root, .mbe-flow) > .mbe-table { overflow-x: auto; }
 /* Columns fit their content and wrap at the editor's width; wider tables scroll. */
-.mbe-root > .mbe-table table { border-collapse: separate; border-spacing: 0; }
-.mbe-root > .mbe-table th,
-.mbe-root > .mbe-table td {
+:is(.mbe-root, .mbe-flow) > .mbe-table table { border-collapse: separate; border-spacing: 0; }
+:is(.mbe-root, .mbe-flow) > .mbe-table th,
+:is(.mbe-root, .mbe-flow) > .mbe-table td {
   padding: 4px 8px;
   min-width: 4em;
   vertical-align: top;
@@ -184,24 +277,30 @@
   outline: none;
 }
 
-/* Nothing above the first block or below the last, whatever their type. */
-.mbe-root > .mbe-block:first-child { margin-top: 0; }
-.mbe-root > .mbe-block:last-child { margin-bottom: 0; }
+/* Blocks inside collapsible sections, after the block rules so it wins over their margins. */
+:is(.mbe-root, .mbe-flow) > [data-in-section] { margin-inline-start: calc(var(--mbe-section-depth, 0) * var(--mbe-indent-size)); }
 
-/* Placeholders and hints. When both apply, the slash hint wins over the placeholder. */
+/* Nothing above the first block or below the last, whatever their type. */
+:is(.mbe-root, .mbe-flow) > .mbe-block:first-child { margin-top: 0; }
+:is(.mbe-root, .mbe-flow) > .mbe-block:last-child { margin-bottom: 0; }
+
+/* Placeholders and hints. When both apply, the slash hint wins over the placeholder.
+   Hints for empty headings, list items and quotes are for writing, so read-only hides them. */
 .mbe-root .mbe-empty-content { position: relative; }
 .mbe-root > .mbe-paragraph.mbe-empty:only-child::before,
 .mbe-root > .mbe-paragraph.mbe-empty.mbe-show-hint::before,
-.mbe-root > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote)::before,
-.mbe-root > .mbe-list-item.mbe-empty[data-hint] > .mbe-content::before {
+.mbe-root:not(.mbe-readonly) > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote:not(.mbe-list-item))::before,
+.mbe-root:not(.mbe-readonly) > .mbe-list-item.mbe-empty[data-hint] > .mbe-content::before,
+.mbe-root:not(.mbe-readonly) > .mbe-details.mbe-empty[data-hint] > .mbe-content::before {
   opacity: 0.5;
   pointer-events: none;
   position: absolute;
 }
 .mbe-root > .mbe-paragraph.mbe-empty:only-child::before { content: var(--mbe-placeholder, ''); }
 .mbe-root > .mbe-paragraph.mbe-empty.mbe-show-hint::before { content: var(--mbe-slash-hint, ''); }
-.mbe-root > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote)::before,
-.mbe-root > .mbe-list-item.mbe-empty[data-hint] > .mbe-content::before { content: attr(data-hint); }
+.mbe-root:not(.mbe-readonly) > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote:not(.mbe-list-item))::before,
+.mbe-root:not(.mbe-readonly) > .mbe-list-item.mbe-empty[data-hint] > .mbe-content::before,
+.mbe-root:not(.mbe-readonly) > .mbe-details.mbe-empty[data-hint] > .mbe-content::before { content: attr(data-hint); }
 
 /* Widgets: app UI between blocks, such as an upload placeholder. Not editable text. */
 .mbe-root > .mbe-widget { cursor: default; user-select: none; -webkit-user-select: none; white-space: normal; }
@@ -214,6 +313,7 @@
 .mbe-ui[hidden] { display: none !important; }
 .mbe-menu,
 .mbe-toolbar,
+.mbe-link-card,
 .mbe-input-popover {
   position: fixed;
   background: Canvas;
@@ -235,6 +335,8 @@
 .mbe-menu-icon:empty { display: none; }
 .mbe-menu-label { flex: 1; }
 .mbe-suggestion-menu { max-width: 360px; }
+/* Emoji from @usememos/editor/emoji are their items' icons. */
+.mbe-emoji-menu .mbe-menu-icon { font-size: 18px; line-height: 1; }
 .mbe-suggestion-menu .mbe-menu-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mbe-menu-detail { flex: none; white-space: nowrap; }
 .mbe-menu-match { background: none; color: inherit; font-weight: 600; }
@@ -277,6 +379,10 @@
 .mbe-tooltip { position: fixed; pointer-events: none; white-space: nowrap; padding: 4px 8px; background: CanvasText; color: Canvas; }
 
 .mbe-input-popover { display: flex; gap: 4px; padding: 4px; }
+
+.mbe-link-card { box-sizing: border-box; display: flex; align-items: center; gap: 2px; padding: 4px; max-width: min(420px, calc(100vw - 16px)); }
+.mbe-link-card-url { flex: 0 1 auto; min-width: 0; padding: 0 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: LinkText; }
+.mbe-tool:disabled { opacity: 0.4; cursor: default; }
 
 /* The resize handles of an image: a frame over it that only its resize handles respond to. */
 .mbe-image-frame { position: fixed; pointer-events: none; }

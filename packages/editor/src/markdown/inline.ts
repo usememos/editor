@@ -169,6 +169,13 @@ function decodeEntity(entity: string): string | null {
   return lookupEntity(entity.slice(1, -1)) ?? null;
 }
 
+const reEntity = new RegExp(ENTITY, 'g');
+
+/** Decodes the entity references in HTML text, such as a section title. */
+export function decodeEntities(s: string): string {
+  return s.includes('&') ? s.replace(reEntity, (m) => decodeEntity(m) ?? m) : s;
+}
+
 /** Applies backslash escapes and entities, for link destinations, titles and info strings. */
 export function unescapeString(s: string): string {
   if (!s.includes('\\') && !s.includes('&')) return s;

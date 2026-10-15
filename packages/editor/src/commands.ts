@@ -4,7 +4,10 @@
 
 import {
   type Block,
+  CALLOUT_TYPES,
+  type CalloutType,
   type Cell,
+  type DetailsBlock,
   type EditorState,
   type HeadingLevel,
   type ImageAlign,
@@ -28,6 +31,8 @@ import {
   concatInline,
   containerContent,
   deleteInline,
+  details,
+  detailsEnd,
   divider,
   emptyTable,
   endOf,
@@ -41,13 +46,16 @@ import {
   isCollapsed,
   isPlainTextBlock,
   isTextBlock,
+  isTextless,
   linkAt,
   listItem,
   orderedRange,
   paragraph,
   plain,
   quote,
+  quoteKind,
   rangeHasMark,
+  sameQuote,
   sameCell,
   sameMarks,
   setLinkInRange,
@@ -59,6 +67,7 @@ import {
   toPlain,
   withContainerContent,
   withContent,
+  withQuote,
   createId,
 } from './model';
 import { emailLiterals, isLiteralBoundary, urlLiteralAt } from './markdown/autolink';
@@ -95,9 +104,9 @@ function contentOf(block: Block, cell?: Cell): Inline {
 function emptyLike(block: TextBlock): TextBlock {
   switch (block.type) {
     case 'listItem':
-      return listItem(block.listType, [], { indent: block.indent });
+      return listItem(block.listType, [], { indent: block.indent, quote: quoteKind(block) });
     case 'quote':
-      return quote();
+      return quote([], undefined, block.callout);
     default:
       return paragraph();
   }
@@ -114,7 +123,7 @@ export function deleteRange(state: EditorState, from: Position, to: Position): E
   const toBlock = state.doc.blocks[toIndex]!;
 
   if (fromIndex === toIndex) {
-    if (fromBlock.type === 'divider') return state;
+    if (isTextless(fromBlock)) return state;
     if (fromBlock.type === 'table') return deleteInTable(state, fromBlock, from, to);
     const content = deleteInline(fromBlock.content, from.offset, to.offset);
     return replaceBlock(state, withContent(fromBlock, content), caret(from.blockId, from.offset));
@@ -196,7 +205,7 @@ export function deleteBackward(state: EditorState): EditorState {
   const index = blockIndex(state.doc, pos.blockId);
   const block = state.doc.blocks[index]!;
 
-  if (block.type === 'divider') return removeBlockAt(state, index, -1);
+  if (isTextless(block)) return removeBlockAt(state, index, -1);
 
   if (pos.offset > 0) {
     const text = inlineText(contentOf(block, pos.cell));
@@ -213,11 +222,20 @@ export function deleteBackward(state: EditorState): EditorState {
   }
 
   // At the start of a styled block, the first Backspace removes the style.
+  // A list item in a quote becomes a paragraph of the quote first.
   if (block.type === 'listItem' && block.indent > 0) return replaceBlock(state, { ...block, indent: block.indent - 1 });
+  if (block.type === 'listItem' && block.quote) return replaceBlock(state, quote(block.content, block.id, block.callout));
   if (block.type !== 'paragraph') return replaceBlock(state, paragraph(block.content, block.id));
 
   const prev = state.doc.blocks[index - 1];
   if (!prev) return state;
+  if (prev.type === 'detailsEnd') {
+    // Backspace after a collapsible section moves into its last line; an empty block is removed on the way.
+    const end = lastTextBefore(state.doc.blocks, index);
+    if (!end) return state;
+    const selection = { anchor: end, focus: end };
+    return inlineLength(block.content) === 0 ? withBlocks(state, splice(state, index, 1), selection) : { ...state, selection, storedMarks: null };
+  }
   if (prev.type === 'divider') return withBlocks(state, splice(state, index - 1, 1));
   const prevImage = imageBlockOffset(prev);
   if (prevImage !== null) {
@@ -244,7 +262,7 @@ export function deleteForward(state: EditorState): EditorState {
   const index = blockIndex(state.doc, pos.blockId);
   const block = state.doc.blocks[index]!;
 
-  if (block.type === 'divider') return removeBlockAt(state, index, 1);
+  if (isTextless(block)) return removeBlockAt(state, index, 1);
   const text = inlineText(contentOf(block, pos.cell));
   if (pos.offset < text.length) {
     return deleteRange(state, pos, { ...pos, offset: nextGrapheme(text, pos.offset) });
@@ -252,7 +270,11 @@ export function deleteForward(state: EditorState): EditorState {
   if (block.type === 'table') return state;
 
   const next = state.doc.blocks[index + 1];
-  if (!next || next.type === 'table') return state;
+  if (!next || next.type === 'table' || next.type === 'detailsEnd') return state;
+  if (next.type === 'details') {
+    // Delete before a collapsible section removes an empty line, and never pulls the section's title in.
+    return inlineLength(contentOf(block)) === 0 ? removeBlockAt(state, index, 1) : state;
+  }
   if (next.type === 'divider') return withBlocks(state, splice(state, index + 1, 1));
   const nextImage = imageBlockOffset(next);
   if (nextImage !== null) {
@@ -266,6 +288,12 @@ export function deleteForward(state: EditorState): EditorState {
 }
 
 /** Removes the block at `index` and puts the caret at the end of the previous block (or the start of the next). */
+/** The end of the nearest block before `index` that holds text or cells: the last line of a collapsible section above. */
+function lastTextBefore(blocks: readonly Block[], index: number): Position | null {
+  for (let i = index - 1; i >= 0; i--) if (!isTextless(blocks[i]!)) return endOf(blocks[i]!);
+  return null;
+}
+
 function removeBlockAt(state: EditorState, index: number, prefer: -1 | 1): EditorState {
   const blocks = splice(state, index, 1);
   if (blocks.length === 0) {
@@ -292,7 +320,8 @@ export function insertText(state: EditorState, text: string): EditorState {
   if (content === null) return state;
 
   let value = text;
-  if (block.type === 'table') value = value.replace(/\r?\n/g, ' ');
+  // A table cell and a section title are one line.
+  if (block.type === 'table' || block.type === 'details') value = value.replace(/\r?\n/g, ' ');
   const format = isPlainTextBlock(block) ? { marks: [] } : stored ? { marks: stored } : formatAt(content, pos.offset);
   const next = insertInline(content, pos.offset, value, format);
   return replaceBlock(s, withContainerContent(block, pos.cell, next), caret(block.id, pos.offset + value.length, pos.cell));
@@ -327,10 +356,16 @@ export function exitBlock(state: EditorState, dir: 1 | -1): EditorState {
   return withBlocks(state, splice(state, dir === 1 ? index + 1 : 0, 0, p), caret(p.id, 0));
 }
 
+/** Adds an empty paragraph at the end of the document, with the caret in it. */
+export function appendParagraph(state: EditorState): EditorState {
+  const p = paragraph();
+  return withBlocks(state, [...state.doc.blocks, p], caret(p.id, 0));
+}
+
 /** Shift+Enter: a hard line break. A newline in code; nothing in a table cell. */
 export function insertLineBreak(state: EditorState): EditorState {
   const block = getBlock(state.doc, state.selection.focus.blockId);
-  if (block.type === 'table' || block.type === 'divider') return state;
+  if (block.type === 'table' || isTextless(block) || block.type === 'details') return state;
   return insertText(state, '\n');
 }
 
@@ -341,11 +376,12 @@ export function splitBlock(state: EditorState): EditorState {
   const index = blockIndex(s.doc, pos.blockId);
   const block = s.doc.blocks[index]!;
 
-  if (block.type === 'divider') {
+  if (isTextless(block)) {
     const p = paragraph();
     return withBlocks(s, splice(s, index + 1, 0, p), caret(p.id, 0));
   }
   if (block.type === 'table') return tableEnter(s, block, pos);
+  if (block.type === 'details') return detailsEnter(s, block, index, pos.offset);
 
   const text = inlineText(block.content);
   const length = text.length;
@@ -367,12 +403,21 @@ export function splitBlock(state: EditorState): EditorState {
     return replaceBlock(s, code, caret(code.id, 0));
   }
 
-  // Enter in an empty list item or quote ends the list or quote.
+  // Enter in an empty list item or quote ends the list or quote. A list in a
+  // quote ends with an empty paragraph of the quote.
   if (length === 0 && block.type === 'listItem') {
-    const next = block.indent > 0 ? { ...block, indent: block.indent - 1 } : paragraph([], block.id);
+    const next =
+      block.indent > 0 ? { ...block, indent: block.indent - 1 } : block.quote ? quote([], block.id, block.callout) : paragraph([], block.id);
     return replaceBlock(s, next);
   }
   if (length === 0 && block.type === 'quote') return replaceBlock(s, paragraph([], block.id));
+  // Enter on an empty last line of a collapsible section moves the line out, after the section.
+  if (length === 0 && block.type === 'paragraph' && s.doc.blocks[index + 1]?.type === 'detailsEnd') {
+    const blocks = s.doc.blocks.slice();
+    blocks.splice(index, 1);
+    blocks.splice(index + 1, 0, block);
+    return withBlocks(s, blocks, s.selection);
+  }
 
   // Enter at the start of a non-empty block inserts an empty block above
   // and keeps the caret where it is.
@@ -390,6 +435,102 @@ export function splitBlock(state: EditorState): EditorState {
     right = withContent(emptyLike(block), rightContent);
   }
   return withBlocks(s, splice(s, index, 1, left, right), caret(right.id, 0));
+}
+
+/**
+ * Enter in a section title. At the start of a title with text, an empty line
+ * goes above the section. At its end, an empty first line of the body takes
+ * the caret. Otherwise the text after the caret starts the body, or goes
+ * after the section when it is collapsed (`collapsed`).
+ */
+function detailsEnter(state: EditorState, block: DetailsBlock, index: number, offset: number, collapsed = false): EditorState {
+  const length = inlineLength(block.content);
+  if (offset === 0 && length > 0) return withBlocks(state, splice(state, index, 0, paragraph()), state.selection);
+  // At the end of the title, an empty first line of the body takes the caret.
+  const first = state.doc.blocks[index + 1];
+  if (!collapsed && offset === length && first?.type === 'paragraph' && inlineLength(first.content) === 0) {
+    return { ...state, selection: caret(first.id, 0), storedMarks: null };
+  }
+  const left = withContent(block, sliceInline(block.content, 0, offset));
+  const right = paragraph(sliceInline(block.content, offset));
+  const blocks = state.doc.blocks.slice();
+  blocks[index] = left;
+  blocks.splice(collapsed ? (sectionEnd(blocks, index) ?? index) + 1 : index + 1, 0, right);
+  return withBlocks(state, blocks, caret(right.id, 0));
+}
+
+/** Enter in the title of a collapsed section: the new line goes after the section. */
+export function splitCollapsedTitle(state: EditorState): EditorState {
+  const s = deleteSelection(state);
+  const pos = s.selection.focus;
+  const index = blockIndex(s.doc, pos.blockId);
+  const block = s.doc.blocks[index]!;
+  return block.type === 'details' ? detailsEnter(s, block, index, pos.offset, true) : splitBlock(state);
+}
+
+/** The index of the `detailsEnd` that closes the section titled at `index`, or null. */
+export function sectionEnd(blocks: readonly Block[], index: number): number | null {
+  let depth = 0;
+  for (let i = index; i < blocks.length; i++) {
+    const type = blocks[i]!.type;
+    if (type === 'details') depth++;
+    else if (type === 'detailsEnd' && --depth === 0) return i;
+  }
+  return null;
+}
+
+/** The index of the title of the section that the `detailsEnd` at `index` closes, or null. */
+export function sectionTitle(blocks: readonly Block[], index: number): number | null {
+  let depth = 0;
+  for (let i = index; i >= 0; i--) {
+    const type = blocks[i]!.type;
+    if (type === 'detailsEnd') depth++;
+    else if (type === 'details' && --depth === 0) return i;
+  }
+  return null;
+}
+
+/**
+ * Blocks with every collapsible section whole: an end with no open section
+ * is dropped, and a title whose end is missing becomes a paragraph. Returns
+ * `blocks` itself when they already are.
+ */
+export function closeSections(blocks: readonly Block[]): readonly Block[] {
+  if (!blocks.some((b) => b.type === 'details' || b.type === 'detailsEnd')) return blocks;
+  const open: number[] = [];
+  const drop = new Set<number>();
+  blocks.forEach((b, i) => {
+    if (b.type === 'details') open.push(i);
+    else if (b.type === 'detailsEnd' && open.pop() === undefined) drop.add(i);
+  });
+  if (drop.size === 0 && open.length === 0) return blocks;
+  const unclosed = new Set(open);
+  const out: Block[] = [];
+  blocks.forEach((b, i) => {
+    if (drop.has(i)) return;
+    out.push(unclosed.has(i) && b.type === 'details' ? paragraph(b.content, b.id) : b);
+  });
+  return out.length > 0 ? out : [paragraph()];
+}
+
+/**
+ * Keeps collapsible sections whole after an edit (see `closeSections`), so
+ * removing a title or an end unwraps its section. A caret on an end moves to
+ * the end of the text before it.
+ */
+export function balanceSections(state: EditorState): EditorState {
+  if (!state.doc.blocks.some((b) => b.type === 'details' || b.type === 'detailsEnd')) return state;
+  const blocks = closeSections(state.doc.blocks);
+  let next = state;
+  if (blocks !== state.doc.blocks) {
+    const doc = { blocks };
+    next = { ...state, doc, selection: clampSelection(doc, state.selection) };
+  }
+  const onEnd = (p: Position) => next.doc.blocks.find((b) => b.id === p.blockId)?.type === 'detailsEnd';
+  const { anchor, focus } = next.selection;
+  if (!onEnd(anchor) && !onEnd(focus)) return next;
+  const move = (p: Position) => (onEnd(p) ? (lastTextBefore(next.doc.blocks, blockIndex(next.doc, p.blockId)) ?? p) : p);
+  return { ...next, selection: { anchor: move(anchor), focus: move(focus) } };
 }
 
 /** Enter in a table moves to the cell below, adding a row at the bottom. */
@@ -418,7 +559,7 @@ function mapTextInRange(
   const start = blockIndex(state.doc, from.blockId);
   const end = blockIndex(state.doc, to.blockId);
   const updated = state.doc.blocks.slice(start, end + 1).map((block) => {
-    if (block.type === 'divider' || isPlainTextBlock(block)) return block;
+    if (isTextless(block) || isPlainTextBlock(block)) return block;
     if (block.type === 'table') {
       const cols = block.align.length;
       const fromIdx = block.id === from.blockId && from.cell ? from.cell.row * cols + from.cell.col : 0;
@@ -603,12 +744,19 @@ export type BlockTypeSpec =
   | { type: 'paragraph' }
   | { type: 'heading'; level: HeadingLevel }
   | { type: 'listItem'; listType: ListType }
-  | { type: 'quote' }
+  /** A quote, or with `callout` a callout of that type. */
+  | { type: 'quote'; callout?: CalloutType }
   | { type: 'code'; language?: string }
   | { type: 'table'; rows?: number; cols?: number }
-  | { type: 'divider' };
+  | { type: 'divider' }
+  /** A collapsible section: the block becomes its title, and an empty line its body. */
+  | { type: 'details' };
 
-/** Converts one text block to another type, keeping its ID and text. */
+/**
+ * Converts one text block to another type, keeping its ID and text. A list
+ * item made from a quote, or from a list item in a quote, stays in the quote.
+ * A list item made a quote or callout keeps its list and goes into the quote.
+ */
 function convert(block: TextBlock, spec: BlockTypeSpec): TextBlock {
   const content = block.content;
   switch (spec.type) {
@@ -621,9 +769,12 @@ function convert(block: TextBlock, spec: BlockTypeSpec): TextBlock {
         id: block.id,
         indent: block.type === 'listItem' ? block.indent : 0,
         checked: block.type === 'listItem' ? block.checked : false,
+        start: block.type === 'listItem' && block.listType === spec.listType ? block.start : undefined,
+        quote: quoteKind(block),
       });
     case 'quote':
-      return quote(content, block.id);
+      if (block.type === 'listItem') return withQuote(block, spec.callout ?? (block.quote ? (block.callout ?? 'quote') : 'quote'));
+      return quote(content, block.id, spec.callout);
     case 'code':
       return codeBlock(spec.language ?? (block.type === 'code' ? block.language : ''), inlineText(toPlain(content)), block.id);
     default:
@@ -642,13 +793,21 @@ function isConvertible(block: Block): block is Exclude<TextBlock, RawBlock> {
  * is the exception: adjacent blocks become one code block, a line per block.
  */
 export function setBlockType(state: EditorState, spec: BlockTypeSpec): EditorState {
-  if (spec.type === 'table' || spec.type === 'divider') return insertBlock(state, spec);
+  if (spec.type === 'table' || spec.type === 'divider' || spec.type === 'details') return insertBlock(state, spec);
+  return convertSelected(state, spec, (b) => convert(b, spec));
+}
+
+function convertSelected(
+  state: EditorState,
+  spec: BlockTypeSpec,
+  convertBlock: (block: Exclude<TextBlock, RawBlock>) => TextBlock,
+): EditorState {
   const { from, to } = orderedRange(state.doc, state.selection);
   const start = blockIndex(state.doc, from.blockId);
   const end = blockIndex(state.doc, to.blockId);
   const range = state.doc.blocks.slice(start, end + 1);
   if (spec.type === 'code' && range.filter(isConvertible).length > 1) return mergeIntoCode(state, start, range, spec.language);
-  const updated = range.map((b) => (isConvertible(b) ? convert(b, spec) : b));
+  const updated = range.map((b) => (isConvertible(b) ? convertBlock(b) : b));
   const doc = { blocks: splice(state, start, updated.length, ...updated) };
   return { doc, selection: clampSelection(doc, state.selection), storedMarks: null };
 }
@@ -682,6 +841,35 @@ function mergeIntoCode(state: EditorState, start: number, range: readonly Block[
   return { doc: { blocks: splice(state, start, range.length, ...out) }, selection, storedMarks: null };
 }
 
+/**
+ * The blocks that form one blockquote with the block `blockId`: its
+ * neighbours in the same quote or callout. Null when the block is not in a quote.
+ */
+export function quoteRun(state: EditorState, blockId: string): { start: number; end: number } | null {
+  const blocks = state.doc.blocks;
+  const index = blockIndex(state.doc, blockId);
+  const block = blocks[index];
+  if (quoteKind(block) === null) return null;
+  let start = index;
+  let end = index;
+  while (sameQuote(block, blocks[start - 1])) start--;
+  while (sameQuote(block, blocks[end + 1])) end++;
+  return { start, end };
+}
+
+/** Sets the callout of the whole blockquote with the block `blockId`; null makes it a plain quote. */
+export function setCallout(state: EditorState, blockId: string, callout: CalloutType | null): EditorState {
+  const run = quoteRun(state, blockId);
+  if (!run) return state;
+  const blocks = state.doc.blocks.slice(run.start, run.end + 1);
+  if (blocks.every((b) => quoteKind(b) === (callout ?? 'quote'))) return state;
+  const updated = blocks.map((b) =>
+    b.type === 'listItem' ? withQuote(b, callout ?? 'quote') : b.type === 'quote' ? quote(b.content, b.id, callout ?? undefined) : b,
+  );
+  const doc = { blocks: splice(state, run.start, updated.length, ...updated) };
+  return { doc, selection: state.selection, storedMarks: state.storedMarks };
+}
+
 /** The blocks the selection touches whose type the block type commands change. */
 export function convertibleBlocks(state: EditorState): Exclude<TextBlock, RawBlock>[] {
   const { from, to } = orderedRange(state.doc, state.selection);
@@ -697,6 +885,11 @@ function hasType(block: Block, spec: BlockTypeSpec): boolean {
       return block.type === 'listItem' && block.listType === spec.listType;
     case 'code':
       return block.type === 'code';
+    case 'quote': {
+      // Any quote is a quote, a list item in one too; a callout must be of the same type.
+      const kind = quoteKind(block);
+      return kind !== null && (!spec.callout || kind === spec.callout);
+    }
     default:
       return block.type === spec.type;
   }
@@ -710,7 +903,15 @@ export function toggleBlockType(state: EditorState, spec: BlockTypeSpec): Editor
   const text = convertibleBlocks(state);
   if (text.length === 0) return state;
   const on = text.every((b) => hasType(b, spec));
-  return setBlockType(state, on ? { type: 'paragraph' } : spec);
+  if (!on) return setBlockType(state, spec);
+  // Off: a quoted list item leaves the quote and stays a list item, and a
+  // list item in a quote becomes a paragraph of the quote.
+  const off: BlockTypeSpec = { type: 'paragraph' };
+  return convertSelected(state, off, (b) => {
+    if (b.type === 'listItem' && spec.type === 'quote') return withQuote(b, null);
+    if (b.type === 'listItem' && b.quote && spec.type === 'listItem') return quote(b.content, b.id, b.callout);
+    return convert(b, off);
+  });
 }
 
 /**
@@ -722,6 +923,7 @@ export function insertBlock(state: EditorState, spec: BlockTypeSpec): EditorStat
   const pos = state.selection.focus;
   const index = blockIndex(state.doc, pos.blockId);
   const current = state.doc.blocks[index]!;
+  if (spec.type === 'details') return insertSection(state, index);
   if (spec.type !== 'table' && spec.type !== 'divider') return setBlockType(state, spec);
   const isEmpty = isTextBlock(current) && inlineLength(current.content) === 0;
   const created = spec.type === 'table' ? emptyTable(spec.rows ?? 3, spec.cols ?? 3) : divider();
@@ -740,6 +942,23 @@ export function insertBlock(state: EditorState, spec: BlockTypeSpec): EditorStat
   return withBlocks(state, splice(state, at, isEmpty ? 1 : 0, ...blocks), { anchor: start, focus: start });
 }
 
+/**
+ * A collapsible section from the block at `index`: a text block becomes its
+ * title, keeping its text as plain text, with an empty line as its body.
+ * Another block gets a new section after it. The caret goes to the title
+ * when it is empty, else to the body.
+ */
+function insertSection(state: EditorState, index: number): EditorState {
+  const current = state.doc.blocks[index]!;
+  const convert = isConvertible(current) && current.type !== 'details';
+  const title = details(convert ? current.content : [], convert ? { id: current.id } : {});
+  const body = paragraph();
+  const at = convert ? index : index + 1;
+  const blocks = splice(state, at, convert ? 1 : 0, title, body, detailsEnd());
+  const target = inlineLength(title.content) === 0 ? caret(title.id, 0) : caret(body.id, 0);
+  return withBlocks(state, blocks, target);
+}
+
 // ---------------------------------------------------------------------------
 // Lists
 
@@ -753,9 +972,8 @@ export function indentListItems(state: EditorState, delta: 1 | -1): EditorState 
   for (let i = start; i <= end; i++) {
     const b = blocks[i]!;
     if (b.type !== 'listItem') continue;
-    const prev = blocks[i - 1];
     // An item can be at most one level deeper than the item above it.
-    const max = prev?.type === 'listItem' ? Math.min(MAX_INDENT, prev.indent + 1) : 0;
+    const max = maxIndent(blocks[i - 1], b);
     const indent = Math.max(0, Math.min(max, b.indent + delta));
     if (indent !== b.indent) {
       blocks[i] = { ...b, indent };
@@ -857,6 +1075,14 @@ export function spanBlocks(blocks: readonly Block[], range: BlockRange): Selecti
 }
 
 /**
+ * The deepest `item` can be nested after `prev`: one level below a list item
+ * in the same list (inside the same quote, or outside quotes), else top level.
+ */
+function maxIndent(prev: Block | undefined, item: ListItemBlock): number {
+  return prev?.type === 'listItem' && quoteKind(prev) === quoteKind(item) ? Math.min(MAX_INDENT, prev.indent + 1) : 0;
+}
+
+/**
  * Lowers list items, starting at `index`, that are nested deeper than the
  * item above allows (one level below it, or top level after a non-list
  * block). Stops at the first item that fits, since everything after it
@@ -866,8 +1092,7 @@ function fitIndents(blocks: Block[], index: number): void {
   for (let i = Math.max(0, index); i < blocks.length; i++) {
     const block = blocks[i]!;
     if (block.type !== 'listItem') return;
-    const prev = blocks[i - 1];
-    const max = prev?.type === 'listItem' ? Math.min(MAX_INDENT, prev.indent + 1) : 0;
+    const max = maxIndent(blocks[i - 1], block);
     if (block.indent <= max) return;
     blocks[i] = { ...block, indent: max };
   }
@@ -1014,10 +1239,17 @@ const BLOCK_RULES: [RegExp, (m: RegExpExecArray) => BlockTypeSpec][] = [
   [/^\d{1,9}[.)] $/, () => ({ type: 'listItem', listType: 'ordered' })],
   [/^\[[ xX]?\] $/, () => ({ type: 'listItem', listType: 'task' })],
   [/^> $/, () => ({ type: 'quote' })],
+  [new RegExp(`^\\[!(${CALLOUT_TYPES.join('|')})\\] $`, 'i'), (m) => ({ type: 'quote', callout: m[1]!.toLowerCase() as CalloutType })],
   [/^```([^`\s]*) $/, (m) => ({ type: 'code', language: m[1] })],
+  [/^>>> $/, () => ({ type: 'details' })],
 ];
 
-export function applyBlockInputRules(state: EditorState): EditorState | null {
+/**
+ * Turns a paragraph into another block type when the text before the caret
+ * is a Markdown marker such as "# " or "- ". `dialect` turns off the markers
+ * for callouts and collapsible sections, as the Markdown options do.
+ */
+export function applyBlockInputRules(state: EditorState, dialect: { callouts?: boolean; details?: boolean } = {}): EditorState | null {
   if (!isCollapsed(state.selection)) return null;
   const pos = state.selection.focus;
   const block = getBlock(state.doc, pos.blockId);
@@ -1030,14 +1262,22 @@ export function applyBlockInputRules(state: EditorState): EditorState | null {
     return withBlocks(state, splice(state, index, 1, divider(), rest), caret(rest.id, 0));
   }
 
-  // Only "[ ] " applies inside a bullet item (turning "- [ ] " into a task).
-  const allowed = block.type === 'paragraph' || (block.type === 'listItem' && block.listType === 'bullet');
+  // Only "[ ] " applies inside a bullet item (turning "- [ ] " into a task),
+  // and only list markers (a list in the quote) and a callout marker such as
+  // "[!note] " inside a quote.
+  const allowed = block.type === 'paragraph' || block.type === 'quote' || (block.type === 'listItem' && block.listType === 'bullet');
   if (!allowed) return null;
   for (const [re, toSpec] of BLOCK_RULES) {
     const m = re.exec(before);
     if (!m) continue;
     const spec = toSpec(m);
+    if ((spec.type === 'quote' && spec.callout && dialect.callouts === false) || (spec.type === 'details' && dialect.details === false)) continue;
     if (block.type === 'listItem' && !(spec.type === 'listItem' && spec.listType === 'task')) continue;
+    if (block.type === 'quote' && spec.type !== 'listItem') {
+      if (spec.type !== 'quote' || !spec.callout) continue;
+      // The whole quote becomes the callout.
+      return setCallout(deleteRange(state, { blockId: block.id, offset: 0 }, pos), block.id, spec.callout);
+    }
     const stripped = deleteRange(state, { blockId: block.id, offset: 0 }, pos);
     let next = setBlockType(stripped, spec);
     const converted = getBlock(next.doc, block.id);
@@ -1049,6 +1289,7 @@ export function applyBlockInputRules(state: EditorState): EditorState | null {
         indent: converted.indent,
         checked,
         start: converted.listType === 'ordered' && start ? Number(start[1]) : undefined,
+        quote: quoteKind(converted),
       });
       next = replaceBlock(next, updated, next.selection);
     }
@@ -1183,10 +1424,8 @@ export function clampListIndents(state: EditorState, before: EditorState): Edito
   let blocks: Block[] | null = null;
   let max = 0;
   state.doc.blocks.forEach((block, i) => {
-    if (block.type !== 'listItem') {
-      max = 0;
-      return;
-    }
+    if (block.type !== 'listItem' || quoteKind(block) !== quoteKind(state.doc.blocks[i - 1])) max = 0;
+    if (block.type !== 'listItem') return;
     if (block.indent > max) (blocks ??= [...state.doc.blocks])[i] = { ...block, indent: max };
     max = Math.min(block.indent, max) + 1;
   });

@@ -5,13 +5,29 @@ export const DEFAULT_LABELS = {
   heading1: 'Heading 1',
   heading2: 'Heading 2',
   heading3: 'Heading 3',
+  heading4: 'Heading 4',
   bulletList: 'Bulleted list',
   numberedList: 'Numbered list',
   todoList: 'To-do list',
   /** Accessible name of a task checkbox whose item has no text. */
   task: 'Task',
   quote: 'Quote',
+  /** The slash menu item, and the title of a callout's block menu section. */
+  callout: 'Callout',
+  /** Callout types: each callout's title, and its block menu items. */
+  calloutNote: 'Note',
+  calloutTip: 'Tip',
+  calloutImportant: 'Important',
+  calloutWarning: 'Warning',
+  calloutCaution: 'Caution',
   code: 'Code block',
+  /** The slash menu item that makes a collapsible section. */
+  details: 'Collapsible section',
+  /** Shown in an empty section title. */
+  detailsHint: 'Title',
+  /** The toggle of a collapsible section. */
+  expandSection: 'Expand',
+  collapseSection: 'Collapse',
   table: 'Table',
   divider: 'Divider',
   noResults: 'No results',
@@ -34,6 +50,11 @@ export const DEFAULT_LABELS = {
   list: 'List',
   linkPlaceholder: 'Paste or type a link…',
   removeLink: 'Remove link',
+  /** The link card's buttons. */
+  openLink: 'Open link',
+  copyLink: 'Copy link',
+  editLink: 'Edit link',
+  /** Shown in the empty paragraph that has the caret, with the `slashHint` option. */
   slashHint: "Type '/' for commands",
   blockHandle: 'Open block menu',
   listHint: 'List',

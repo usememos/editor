@@ -4,7 +4,7 @@ const open = (page: import('@playwright/test').Page, markdown: string) =>
   page.goto(`/?md=${encodeURIComponent(markdown)}`);
 
 test('line-break dialect: an untouched note saves byte for byte', async ({ page }) => {
-  const note = '* one\n* two\nline one\nline two\n\n$$\n\\int x\\,dx\n$$\n\n> - quoted list\n\nText[^1]\n\n[^1]: note';
+  const note = '* one\n* two\nline one\nline two\n\n$$\n\\int x\\,dx\n$$\n\n> - quoted list\n\n> # quoted heading\n\nText[^1]\n\n[^1]: note';
   await open(page, note);
   expect(await md(page)).toBe(note);
   await expect(page.locator('#editor > .mbe-raw[data-syntax="math"]')).toHaveCount(1);

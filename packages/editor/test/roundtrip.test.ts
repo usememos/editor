@@ -27,7 +27,7 @@ import {
   table,
 } from '../src/model';
 import { parseMarkdown } from '../src/markdown/parse';
-import { representableInline, serializeInline, serializeMarkdown } from '../src/markdown/serialize';
+import { representableCell, representableInline, serializeInline, serializeMarkdown } from '../src/markdown/serialize';
 import { commonmark, gfm } from './fixtures/examples';
 import type { MarkdownOptions } from '../src/markdown/options';
 import { footnotes } from '../src/extensions/footnotes';
@@ -79,7 +79,7 @@ describe('lowering: Markdown → model', () => {
       '- p1\n\n  p2\n- next',
       '- item\n  ```js\n  code\n  ```',
       '- item\n\n  > q',
-      '> p1\n> - a\n> - [ ] b',
+      '> - a\n>\n>   p2',
       '> # H',
       '>     code',
       '> > nested',
@@ -91,6 +91,14 @@ describe('lowering: Markdown → model', () => {
         { type: 'paragraph', content: [t('after')] },
       ]);
     }
+  });
+
+  it('lowers a list in a quote to list items in the quote', () => {
+    expect(shape(parseMarkdown('> p1\n> - a\n> - [ ] b'))).toEqual([
+      { type: 'quote', content: [t('p1')] },
+      { type: 'listItem', listType: 'bullet', indent: 0, checked: false, quote: true, content: [t('a')] },
+      { type: 'listItem', listType: 'task', indent: 0, checked: false, quote: true, content: [t('b')] },
+    ]);
   });
 
   it('lowers each paragraph of a quote to a quote block', () => {
@@ -238,12 +246,23 @@ describe('serializer conventions', () => {
   });
 
   it('writes empty paragraphs as &nbsp; and drops them at the end', () => {
-    expect(md(paragraph([]), paragraph([t('x')]), quote([]))).toBe('&nbsp;\n\nx\n');
+    expect(md(paragraph([]), paragraph([t('x')]))).toBe('&nbsp;\n\nx\n');
     expect(md(paragraph([t('a')]), paragraph([]), paragraph([]), paragraph([t('b')]), paragraph([]))).toBe(
       'a\n\n&nbsp;\n\n&nbsp;\n\nb\n',
     );
     expect(md(paragraph([]), paragraph([]))).toBe('');
     expect(serializeMarkdown({ blocks: [] })).toBe('');
+  });
+
+  it('writes empty quotes as &nbsp; and reads them back', () => {
+    const docs = [
+      [quote([])],
+      [paragraph([t('x')]), quote([]), paragraph([t('y')])],
+      [quote([t('a')]), quote([]), quote([]), quote([t('b')])],
+      [paragraph([t('x')]), quote([])],
+    ];
+    for (const blocks of docs) expect(shape(parseMarkdown(serializeMarkdown({ blocks })))).toEqual(shape({ blocks }));
+    expect(md(quote([t('a')]), quote([]))).toBe('> a\n>\n> &nbsp;\n');
   });
 
   it('reads a paragraph holding only a no-break space as an empty line', () => {
@@ -312,6 +331,14 @@ describe('serializer conventions', () => {
     expect(serializeInline([t('a'), t(' bold ', 'bold'), t('x')])).toBe('a **bold** x');
   });
 
+  it('keeps whitespace in a code span inside its marks', () => {
+    for (const inline of [[t(' /num', 'bold', 'code')], [t('a '), t('b ', 'italic', 'code'), t('c')], [t(' x', 'strike', 'code')]]) {
+      const out = serializeInline(inline);
+      expect(shape(parseMarkdown(out))).toEqual([{ type: 'paragraph', content: inline }]);
+    }
+    expect(serializeInline([t(' /num', 'bold', 'code')])).toBe('**` /num`**');
+  });
+
   it('uses "_" where "*" would merge with a neighbouring delimiter', () => {
     expect(serializeInline([t('x', 'italic'), t('y', 'bold')])).toBe('*x*__y__');
     expect(serializeInline([t('a', 'bold'), t('b', 'bold', 'italic'), t('c', 'italic')])).toBe('**a*b***_c_');
@@ -327,6 +354,30 @@ describe('serializer conventions', () => {
 
   it('escapes pipes in table cells, including code spans', () => {
     expect(md(table([null], [[[t('a|b', 'code')]], [[t(' x ')]]]))).toBe('| `a\\|b` |\n| --- |\n| x |\n');
+  });
+
+  it('indents inline HTML that would start an HTML block after a line break, so it stays inline', () => {
+    const content = [t('a\n'), t('<!-- c -->', 'html'), t(' b\n'), t('<div>', 'html'), t('\n'), t('<b>', 'html')];
+    for (const options of [{}, { breaks: true }]) {
+      const text = serializeMarkdown({ blocks: [paragraph(content)] }, options);
+      expect(text).toContain('\n    <!-- c --> b');
+      expect(text).toContain('\n    <div>');
+      // A tag that cannot interrupt a paragraph is left at the start of its line.
+      expect(text).toContain('\n<b>');
+      expect(shape(parseMarkdown(text, options))).toEqual([{ type: 'paragraph', content }]);
+    }
+    const item = serializeMarkdown({ blocks: [listItem('bullet', content)] });
+    expect(shape(parseMarkdown(item))).toMatchObject([{ type: 'listItem', listType: 'bullet', indent: 0, content }]);
+  });
+
+  it('writes a pipe after an odd number of backslashes in a code span outside it, in a table cell', () => {
+    // GFM splits cells first: `\\|` would end the cell and `\\\|` would read back as two backslashes.
+    const cell = (text: string) => parseMarkdown(md(table([null], [[[t(text, 'code')]]])), {}).blocks[0];
+    expect(md(table([null], [[[t('a\\|b', 'code')]]]))).toBe('| `a\\`\\|`b` |\n| --- |\n');
+    expect(cell('a\\|b')).toMatchObject({ type: 'table', rows: [[[t('a\\', 'code'), t('|'), t('b', 'code')]]] });
+    // An even number of backslashes can stay in the code span.
+    expect(cell('a\\\\|b')).toMatchObject({ type: 'table', rows: [[[t('a\\\\|b', 'code')]]] });
+    expect(cell('\\\\\\|')).toMatchObject({ type: 'table', rows: [[[t('\\\\\\', 'code'), t('|')]]] });
   });
 });
 
@@ -392,7 +443,11 @@ function randomBlock(r: ReturnType<typeof random>, prevIndent: number): Block {
     const indent = Math.min(prevIndent + 1, Math.floor(r.next() * 3));
     return listItem(type, inline(), { indent, checked: r.next() < 0.5, start: r.next() < 0.3 ? r.pick([0, 2, 10]) : undefined });
   }
-  if (x < 0.7) return quote(inline());
+  if (x < 0.7) {
+    // The callout comes from the text, not from `r`, so the other random documents stay the same.
+    const content = inline();
+    return quote(content, undefined, ([undefined, 'note', 'warning'] as const)[inlineText(content).length % 3]);
+  }
   if (x < 0.78) return codeBlock(r.pick(['', 'js', 'a`b']), inlineText(randomInline(r, false)).replace(/\t/g, ' '));
   if (x < 0.82) return htmlBlock(r.pick(['<div>\nhi\n</div>', '<!-- x -->']));
   if (x < 0.92) {
@@ -409,7 +464,7 @@ function describe_(block: Block): unknown {
     representableInline(inline).map((s) => [s.text, s.marks, s.link, s.image?.src, s.image?.alt, s.image?.title, s.image?.align, s.image?.width, s.image?.height]);
   switch (block.type) {
     case 'table':
-      return ['table', block.align, block.rows.map((row) => row.map(content))];
+      return ['table', block.align, block.rows.map((row) => row.map((cell) => content(representableCell(cell))))];
     case 'divider':
       return ['divider'];
     case 'code':
@@ -420,6 +475,12 @@ function describe_(block: Block): unknown {
       return ['listItem', block.listType, block.indent, block.checked, content(block.content)];
     case 'heading':
       return ['heading', block.level, content(block.content)];
+    case 'quote':
+      return ['quote', block.callout, content(block.content)];
+    case 'details':
+      return ['details', block.open, inlineText(block.content)];
+    case 'detailsEnd':
+      return ['detailsEnd'];
     default:
       return [block.type, content(block.content)];
   }
@@ -460,8 +521,8 @@ for (const { name, options } of DIALECTS) {
         }
         const md = serializeMarkdown({ blocks }, options);
         const back = parseMarkdown(md, options);
-        // Empty quotes and empty paragraphs at the end are not saved.
-        const kept = blocks.filter((b) => !(b.type === 'quote' && b.content.length === 0));
+        // Empty paragraphs at the end are not saved.
+        const kept = [...blocks];
         const emptyParagraph = (b: Block | undefined) => b?.type === 'paragraph' && b.content.length === 0;
         while (emptyParagraph(kept.at(-1))) kept.pop();
         expect(back.blocks.map(describe_), md).toEqual(kept.map(describe_));

@@ -34,6 +34,10 @@
       "types": "./dist/types/react/index.d.ts",
       "default": "./dist/react.js"
     },
+    "./emoji": {
+      "types": "./dist/types/emoji/index.d.ts",
+      "default": "./dist/emoji.js"
+    },
     "./style.css": "./dist/style.css",
     "./base.css": "./dist/base.css",
     "./theme.css": "./dist/theme.css",

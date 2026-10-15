@@ -29,10 +29,11 @@ export function blockForm(b: Block): string {
     case 'listItem': {
       const head = b.listType === 'task' ? `task${b.checked ? '[x]' : '[ ]'}` : b.listType;
       const start = b.start !== undefined ? `@${b.start}` : '';
-      return `${head}${start}:${b.indent} ${inlineForm(b.content)}`;
+      const quoted = b.quote ? `${b.callout ? `callout(${b.callout})` : 'quote'}/` : '';
+      return `${quoted}${head}${start}:${b.indent} ${inlineForm(b.content)}`;
     }
     case 'quote':
-      return `quote ${inlineForm(b.content)}`;
+      return `${b.callout ? `callout(${b.callout})` : 'quote'} ${inlineForm(b.content)}`;
     case 'code':
       return `code(${b.language}) ${inlineForm(b.content)}`;
     case 'raw':
@@ -41,6 +42,10 @@ export function blockForm(b: Block): string {
       return `table(${b.align.map((a) => a ?? '-').join(',')}) ${b.rows.map((r) => `[${r.map(inlineForm).join(' | ')}]`).join(' ')}`;
     case 'divider':
       return 'hr';
+    case 'details':
+      return `details${b.open ? '(open)' : ''} ${inlineForm(b.content)}`;
+    case 'detailsEnd':
+      return '/details';
   }
 }
 
