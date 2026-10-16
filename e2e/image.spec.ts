@@ -103,6 +103,51 @@ test('dragging a resize handle resizes the image as one undo step', async ({ pag
   expect(await md(page)).toBe('![chart|300](/img/400x200.svg)\n');
 });
 
+test('the resize handles stay inside a scrolling container shorter than the image', async ({ page }) => {
+  await open(page, '![tall](/img/500x1400.svg)\n');
+  // The memos composer: a scrolling wrapper around the editor, shorter than the image.
+  const card = page.locator('.card');
+  await page.evaluate(() => {
+    Object.assign(document.querySelector<HTMLElement>('#editor')!.style, { maxHeight: 'none', overflow: 'visible' });
+    Object.assign(document.querySelector<HTMLElement>('.card')!.style, { maxHeight: '320px', overflowY: 'auto' });
+  });
+  const clientRect = () =>
+    card.evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      return { left: box.left + el.clientLeft, top: box.top + el.clientTop, right: box.left + el.clientLeft + el.clientWidth, bottom: box.top + el.clientTop + el.clientHeight };
+    });
+  const inside = async () => {
+    const view = await clientRect();
+    for (const side of ['left', 'right'] as const) {
+      const box = (await resizeHandle(page, side).boundingBox())!;
+      expect(box.y).toBeGreaterThanOrEqual(view.top);
+      expect(box.y + box.height).toBeLessThanOrEqual(view.bottom);
+      expect(box.x).toBeGreaterThanOrEqual(view.left);
+      expect(box.x + box.width).toBeLessThanOrEqual(view.right);
+    }
+  };
+  let view = await clientRect();
+  await page.mouse.move((view.left + view.right) / 2, (view.top + view.bottom) / 2);
+  await expect(resizeHandle(page, 'right')).toBeVisible();
+  await inside();
+  // The image is taller than the container, so without clipping the handles would sit below it.
+  expect((await image(page).boundingBox())!.height).toBeGreaterThan(view.bottom - view.top);
+  // Scrolling the container keeps them inside.
+  await card.evaluate((el) => (el.scrollTop = 500));
+  await inside();
+  // Scrolled out of view, the handles are hidden.
+  await card.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(resizeHandle(page, 'right')).toBeHidden();
+  await card.evaluate((el) => (el.scrollTop = 0));
+  view = await clientRect();
+  await page.mouse.move((view.left + view.right) / 2, (view.top + view.bottom) / 2);
+  await expect(resizeHandle(page, 'right')).toBeVisible();
+  // Resizing from the clipped frame still works on the image.
+  await dragHandle(page, 'right', -100);
+  expect(await md(page)).toBe('![tall|400](/img/500x1400.svg)\n');
+  expect((await image(page).boundingBox())!.width).toBeCloseTo(400, 0);
+});
+
 test('typing next to an image keeps its element, so it does not load again', async ({ page }) => {
   await open(page, 'a ![chart](/img/400x200.svg)\n');
   await image(page).evaluate((el) => ((el as any).marked = true));

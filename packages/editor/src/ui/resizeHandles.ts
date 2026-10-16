@@ -10,6 +10,8 @@ import { attach } from './popup';
 const MIN_WIDTH = 24;
 /** How close a width must come to another image's width or the column's to snap to it. */
 const SNAP = 8;
+/** The shortest a handle is (`min-height` in base.css): a frame with less room than that shows none. */
+const MIN_HANDLE = 16;
 
 type Side = 'left' | 'right';
 
@@ -161,13 +163,21 @@ export class ResizeHandles {
       // Its size is known once it loads.
       if (!img.complete) img.addEventListener('load', () => this.framed === img && this.placeFrame(), { once: true });
     }
+    // The frame covers only the visible part of the image, so the handles at
+    // its middle stay inside the scrolling container that clips the image
+    // instead of floating over whatever is below it.
+    const shown = visibleRect(img, rect);
+    if (!shown || shown.width < MIN_HANDLE || shown.height < MIN_HANDLE) {
+      this.frame.hidden = true;
+      return;
+    }
     this.frame.hidden = false;
     const offset = attach(this.frame, this.editor.root);
-    this.frame.style.left = `${Math.round(rect.left - offset.x)}px`;
-    this.frame.style.top = `${Math.round(rect.top - offset.y)}px`;
-    this.frame.style.width = `${Math.round(rect.width)}px`;
-    this.frame.style.height = `${Math.round(rect.height)}px`;
-    this.frame.classList.toggle('mbe-image-frame-small', rect.width < 64 || rect.height < 40);
+    this.frame.style.left = `${Math.round(shown.left - offset.x)}px`;
+    this.frame.style.top = `${Math.round(shown.top - offset.y)}px`;
+    this.frame.style.width = `${Math.round(shown.width)}px`;
+    this.frame.style.height = `${Math.round(shown.height)}px`;
+    this.frame.classList.toggle('mbe-image-frame-small', shown.width < 64 || shown.height < 40);
   }
 
   // -- Resizing -------------------------------------------------------------
@@ -223,6 +233,41 @@ export class ResizeHandles {
       this.editor.refreshImageUi();
     }
   }
+}
+
+/**
+ * The part of `rect`, the image's rectangle, that its scrolling ancestors and
+ * the viewport show, or null when none of it is visible. Ancestors that scroll
+ * are detected as in `scrollRectIntoView`; a host with `overflow: hidden` and
+ * nothing to scroll is left alone, as it is for the other floating UI.
+ */
+function visibleRect(img: HTMLElement, rect: DOMRect): { left: number; top: number; width: number; height: number } | null {
+  const doc = img.ownerDocument;
+  const view = doc.defaultView;
+  let left = rect.left;
+  let top = rect.top;
+  let right = rect.right;
+  let bottom = rect.bottom;
+  const clip = (l: number, t: number, r: number, b: number) => {
+    left = Math.max(left, l);
+    top = Math.max(top, t);
+    right = Math.min(right, r);
+    bottom = Math.min(bottom, b);
+  };
+  for (let el = img.parentElement; el && el !== doc.body && el !== doc.documentElement; el = el.parentElement) {
+    const style = view?.getComputedStyle(el);
+    const scrollsY = el.scrollHeight > el.clientHeight && /auto|scroll|overlay/.test(style?.overflowY ?? '');
+    const scrollsX = el.scrollWidth > el.clientWidth && /auto|scroll|overlay/.test(style?.overflowX ?? '');
+    if (!scrollsY && !scrollsX) continue;
+    // The client area, inside the borders and without the scrollbars.
+    const box = el.getBoundingClientRect();
+    const viewLeft = box.left + el.clientLeft;
+    const viewTop = box.top + el.clientTop;
+    clip(viewLeft, viewTop, viewLeft + el.clientWidth, viewTop + el.clientHeight);
+  }
+  clip(0, 0, doc.documentElement.clientWidth, doc.documentElement.clientHeight);
+  if (right <= left || bottom <= top) return null;
+  return { left, top, width: right - left, height: bottom - top };
 }
 
 /** The width an image can grow to: its line's width inside the block or table cell. */
