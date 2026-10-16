@@ -1,12 +1,12 @@
 # Publishes @usememos/editor to npm. Run it by hand from the Actions tab
 # ("Release", "Run workflow") on main. The version comes from today's date
-# (UTC) and the versions already released (git tags and npm), following
+# (UTC) and the versions already on npm, following
 # memos' CalVer (usememos discussion 6351): the first release in October
 # 2026 is 26.10, the next ones that month 26.10.1, 26.10.2, and so on. Ticking "Release candidate" publishes the next
 # version with -rc.N (26.10-rc.1) to the npm "next" tag; the rest go to
 # "latest". npm needs three numbers without leading zeros, so 26.10 is
-# published as 26.10.0 and 27.04 as 27.4.0. After publishing, the commit
-# is tagged with the version.
+# published as 26.10.0 and 27.04 as 27.4.0. Releases are not tagged in
+# git.
 # Authenticates with npm trusted publishing (OIDC), like usememos/mui: no
 # token or secret. The package's npm settings must list this repository and
 # release.yml as a trusted publisher.
@@ -27,7 +27,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -49,19 +49,18 @@ jobs:
             exit 1
           fi
           month=$(date -u +%y.%m)
-          # Versions already released: git tags, plus versions on npm written
-          # back as tags (26.10.0 -> 26.10, 27.4.2 -> 27.04.2), in case one
-          # was published without a tag.
+          # Versions already on npm, written back in CalVer form
+          # (26.10.0 -> 26.10, 27.4.2 -> 27.04.2).
           published=$(npm view @usememos/editor versions --json 2>/dev/null || echo '[]')
-          tags=$( (git ls-remote --tags --refs origin | sed 's|.*refs/tags/||'; echo "$published" | node -e '
+          released=$(echo "$published" | node -e '
             const list = [].concat(JSON.parse(require("fs").readFileSync(0, "utf8") || "[]"));
             for (const v of list) {
               const m = /^(\d+)\.(\d+)\.(\d+)(-rc\.\d+)?$/.exec(v);
               if (m) console.log(`${m[1]}.${m[2].padStart(2, "0")}${m[3] === "0" ? "" : "." + m[3]}${m[4] ?? ""}`);
-            }') | sort -u)
+            }' | sort -u)
           esc=$(echo "$month" | sed 's/\./\\./')
           # Releases this month: 26.10, 26.10.1, ... The next one counts on.
-          finals=$(echo "$tags" | grep -E "^$esc(\.[0-9]+)?$" || true)
+          finals=$(echo "$released" | grep -E "^$esc(\.[0-9]+)?$" || true)
           if [ -z "$finals" ]; then
             version=$month
           else
@@ -71,7 +70,7 @@ jobs:
           pre=""
           if [ "$RC" = "true" ]; then
             vesc=$(echo "$version" | sed 's/\./\\./g')
-            n=$(echo "$tags" | grep -E "^$vesc-rc\.[0-9]+$" | sed -E 's/.*-rc\.//' | sort -n | tail -1 || true)
+            n=$(echo "$released" | grep -E "^$vesc-rc\.[0-9]+$" | sed -E 's/.*-rc\.//' | sort -n | tail -1 || true)
             pre="-rc.$(( ${n:-0} + 1 ))"
           fi
           core=${version#*.}
@@ -81,15 +80,8 @@ jobs:
           npm_version="${version%%.*}.$((10#$mm)).$point$pre"
           echo "Publishing $version$pre as $npm_version"
           npm pkg set version="$npm_version" -w @usememos/editor
-          echo "tag=$version$pre" >> "$GITHUB_OUTPUT"
           if [ -n "$pre" ]; then echo "dist_tag=next" >> "$GITHUB_OUTPUT"; else echo "dist_tag=latest" >> "$GITHUB_OUTPUT"; fi
       - run: npm run typecheck
       - run: npm test
       # prepack runs the build.
       - run: npm publish -w @usememos/editor --access public --tag ${{ steps.version.outputs.dist_tag }}
-      - name: Tag the published commit
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          git tag "$TAG"
-          git push origin "$TAG"

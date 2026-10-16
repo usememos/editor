@@ -18,9 +18,9 @@ npm run size       # what each published entry adds to an app, minified and gzip
 
 ## Releasing
 
-Versions follow the same CalVer as memos ([discussion](https://github.com/orgs/usememos/discussions/6351)): a release is named after the year and month it ships. The release workflow picks the version from today's date (UTC) and the tags already pushed:
+Versions follow the same CalVer as memos ([discussion](https://github.com/orgs/usememos/discussions/6351)): a release is named after the year and month it ships. The release workflow picks the version from today's date (UTC) and the versions already on npm:
 
-| Release | Version and git tag | npm version | npm tag |
+| Release | Version | npm version | npm tag |
 | --- | --- | --- | --- |
 | First in October 2026 | `26.10` | `26.10.0` | `latest` |
 | Second in October 2026 | `26.10.1` | `26.10.1` | `latest` |
@@ -29,7 +29,7 @@ Versions follow the same CalVer as memos ([discussion](https://github.com/orgs/u
 
 npm needs three numbers without leading zeros, so the workflow converts the version for npm. `version` in `packages/editor/package.json` stays `0.0.0` in the repo.
 
-To release, open Actions, pick "Release" and choose "Run workflow" on main. Tick "Release candidate" for an `-rc` version. The workflow (`.github/workflows/release.yml`) works out the version, runs the tests, publishes to npm and tags the commit with the version. There is no GitHub release or release notes. The version does not signal breaking changes, so apps should pin an exact version, and commits marked with `!` show what breaks.
+To release, open Actions, pick "Release" and choose "Run workflow" on main. Tick "Release candidate" for an `-rc` version. The workflow (`.github/workflows/release.yml`) works out the version, runs the tests and publishes to npm. Releases are not tagged in git, and there is no GitHub release or release notes. The version does not signal breaking changes, so apps should pin an exact version, and commits marked with `!` show what breaks.
 
 Publishing uses npm trusted publishing, as `usememos/mui` does, so there is no npm token. On npmjs.com, the `@usememos/editor` package settings list `usememos/editor` and `release.yml` under "Trusted Publisher".
 
