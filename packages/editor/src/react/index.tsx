@@ -10,6 +10,7 @@ type EditorProps = Pick<
   | 'markdown'
   | 'extensions'
   | 'placeholder'
+  | 'mode'
   | 'editable'
   | 'taskToggle'
   | 'autofocus'
@@ -43,7 +44,7 @@ export interface MarkdownEditorProps extends EditorProps {
 }
 
 /** Options that `setOptions` applies without recreating the editor. `extensions` updates suggestion callbacks only. */
-const LIVE = ['placeholder', 'editable', 'taskToggle', 'attributes', 'resolveUrl', 'onLinkClick', 'theme', 'extensions'] as const;
+const LIVE = ['placeholder', 'mode', 'editable', 'taskToggle', 'attributes', 'resolveUrl', 'onLinkClick', 'theme', 'extensions'] as const;
 
 /** The extension list's identity for recreating the editor: names, so an inline array does not recreate it on every render. */
 const extensionKey = (extensions: EditorOptions['extensions']) => (extensions ?? []).map((e) => e.name).join('\n');
@@ -51,7 +52,7 @@ const extensionKey = (extensions: EditorOptions['extensions']) => (extensions ??
 /**
  * The editor as a controlled React component. A `ref` gives the core `Editor`.
  *
- * `placeholder`, `editable`, `taskToggle`, `attributes`, `resolveUrl`, `onLinkClick` and `theme` update live.
+ * `placeholder`, `mode`, `editable`, `taskToggle`, `attributes`, `resolveUrl`, `onLinkClick` and `theme` update live.
  * A change to the names in `extensions` recreates the editor, keeping its
  * Markdown; with the same names, the callbacks of `suggestion()` extensions
  * (`items`, `command`, `match`, `allow`) update live. Other props are read
@@ -156,7 +157,7 @@ function useLiveOptions(editorRef: { current: Editor | null }, props: EditorProp
     let any = false;
     for (const key of LIVE) {
       if (props[key] === applied.current.props[key]) continue;
-      (changed as Record<string, unknown>)[key] = key === 'editable' ? (props.editable ?? true) : key === 'taskToggle' ? (props.taskToggle ?? false) : props[key];
+      (changed as Record<string, unknown>)[key] = key === 'editable' ? (props.editable ?? true) : key === 'mode' ? (props.mode ?? 'rich') : key === 'taskToggle' ? (props.taskToggle ?? false) : props[key];
       any = true;
     }
     applied.current = { editor, props: { ...props } };

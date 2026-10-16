@@ -94,7 +94,7 @@ describe('autolink literals', () => {
     expect(type('go to https://x.com/a. ')).toEqual(['go to ', '[https://x.com/a](https://x.com/a)', '. ']);
     expect(type('(www.x.com) ')).toEqual(['(', '[www.x.com](http://www.x.com)', ') ']);
     expect(type('mail me@x.io ')).toEqual(['mail ', '[me@x.io](mailto:me@x.io)', ' ']);
-    expect(type('no https://x ')).toEqual(['no https://x ']);
+    expect(type('no https://-x ')).toEqual(['no https://-x ']);
   });
 });
 
@@ -114,14 +114,14 @@ describe('tag grammar', () => {
     ]);
   });
 
-  it('skips # after a word character, digit-only tags, keycaps and trailing slashes', () => {
-    expect(t('a#b C# ##x #123 #️⃣ # x #-a')).toEqual([]);
+  it('finds # after any character and digit-only tags, and skips keycaps and trailing slashes', () => {
+    expect(t('a#b C# ##x #123 #️⃣ # x #-a')).toEqual(['#b', '#x', '#123', '#-a']);
     expect(t('#a/ #a//b #tag.')).toEqual(['#a', '#a', '#tag']);
   });
 
-  it('finds mentions, not the middle of e-mail addresses', () => {
+  it('finds mentions after a character that cannot be in a username, not the middle of e-mail addresses', () => {
     const m = (text: string) => found(scanMentions(text), text);
-    expect(m('@alice, @bob.smith. (@carol) bob@example.com a+@x @-x')).toEqual(['@alice', '@bob.smith', '@carol']);
+    expect(m('@alice, @bob.smith. (@carol) bob@example.com a+@x @-x')).toEqual(['@alice', '@bob', '@carol', '@x']);
   });
 });
 

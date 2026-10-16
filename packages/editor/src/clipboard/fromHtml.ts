@@ -37,6 +37,7 @@ import {
   sortMarks,
   table,
   withQuote,
+  quoteKind,
 } from '../model';
 
 export function htmlToDoc(html: string, parser?: DOMParser): Doc {
@@ -46,6 +47,24 @@ export function htmlToDoc(html: string, parser?: DOMParser): Doc {
   const converter = new Converter();
   converter.blocks(dom.body, ROOT_FORMAT);
   return { blocks: converter.finish() };
+}
+
+/** Elements that lay out or color text without giving it structure or formatting. */
+const STYLED_TEXT_TAGS = new Set(['html', 'body', 'meta', 'div', 'span', 'br', 'font']);
+const reFormattingStyle = /font-weight\s*:\s*(?:bold|[6-9]00)|font-style\s*:\s*italic|text-decoration[^;"']*line-through/i;
+
+/**
+ * Whether clipboard HTML only lays out and colors plain text, as code
+ * editors and terminals write it: lines as `<div>`s of colored `<span>`s,
+ * with no headings, lists, links or bold. Markdown copied from such an app
+ * arrives this way, so its plain text is read as Markdown instead.
+ */
+export function isStyledText(html: string): boolean {
+  const body = html.replace(/<!--[\s\S]*?-->/g, '').replace(/<(style|script|head|title)\b[\s\S]*?<\/\1\s*>/gi, '');
+  for (const m of body.matchAll(/<([A-Za-z][A-Za-z0-9-]*)\b([^>]*)>/g)) {
+    if (!STYLED_TEXT_TAGS.has(m[1]!.toLowerCase()) || reFormattingStyle.test(m[2]!)) return false;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -423,6 +442,7 @@ class Converter {
     const inner = new Converter();
     inner.blocks(el, format, callout ? (child) => hasClass(child, 'markdown-alert-title') : undefined);
     const blocks = inner.finish();
+    const start = this.out.length;
     for (const block of blocks) {
       switch (block.type) {
         case 'paragraph':
@@ -438,6 +458,11 @@ class Converter {
         default:
           this.out.push(block);
       }
+    }
+    // Right after a blockquote of the same kind, this one starts a new blockquote.
+    const first = this.out[start];
+    if ((first?.type === 'quote' || first?.type === 'listItem') && quoteKind(first) !== null && quoteKind(this.out[start - 1]) === quoteKind(first)) {
+      this.out[start] = { ...first, quoteStart: true };
     }
   }
 

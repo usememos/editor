@@ -29,11 +29,12 @@ export function blockForm(b: Block): string {
     case 'listItem': {
       const head = b.listType === 'task' ? `task${b.checked ? '[x]' : '[ ]'}` : b.listType;
       const start = b.start !== undefined ? `@${b.start}` : '';
-      const quoted = b.quote ? `${b.callout ? `callout(${b.callout})` : 'quote'}/` : '';
+      const quoted = b.quote ? `${b.quoteStart ? 'new ' : ''}${b.callout ? `callout(${b.callout})` : 'quote'}/` : '';
       return `${quoted}${head}${start}:${b.indent} ${inlineForm(b.content)}`;
     }
     case 'quote':
-      return `${b.callout ? `callout(${b.callout})` : 'quote'} ${inlineForm(b.content)}`;
+      // "new": the block starts a new blockquote after one of the same kind.
+      return `${b.quoteStart ? 'new ' : ''}${b.callout ? `callout(${b.callout})` : 'quote'} ${inlineForm(b.content)}`;
     case 'code':
       return `code(${b.language}) ${inlineForm(b.content)}`;
     case 'raw':

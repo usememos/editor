@@ -20,6 +20,7 @@ import {
   sameQuote,
   sliceInline,
   unquote,
+  sameLink,
 } from '../model';
 
 export function docToHtml(doc: Doc): string {
@@ -147,11 +148,12 @@ function inlineHtml(inline: Inline): string {
   let out = '';
   let i = 0;
   while (i < inline.length) {
-    const link = inline[i]!.link;
+    const { link, linkTitle } = inline[i]!;
     let j = i;
     let inner = '';
-    while (j < inline.length && inline[j]!.link === link) inner += spanHtml(inline[j++]!);
-    out += link === undefined ? inner : `<a href="${escapeHtml(link)}">${inner}</a>`;
+    while (j < inline.length && sameLink(inline[j]!, inline[i]!)) inner += spanHtml(inline[j++]!);
+    const title = linkTitle ? ` title="${escapeHtml(linkTitle)}"` : '';
+    out += link === undefined ? inner : `<a href="${escapeHtml(link)}"${title}>${inner}</a>`;
     i = j;
   }
   return out;

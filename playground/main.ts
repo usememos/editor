@@ -231,6 +231,7 @@ const editor = new Editor({
   theme: testTheme,
   content: params.has('empty') ? '' : (params.get('md') ?? read(DRAFT_KEY) ?? SAMPLE),
   placeholder: 'Write something, or type / for commands…',
+  mode: params.has('source') ? 'source' : 'rich',
   autofocus: params.has('focus'),
   onChange: (markdown) => {
     output.textContent = markdown;
@@ -314,6 +315,13 @@ const readOnly = button('Read-only', 'Switch between editing and read-only. Both
   readOnly.classList.toggle('on', !editor.isEditable);
 });
 readOnly.id = 'toggle-readonly';
+// Source mode: the document as Markdown text. An app would remember the choice.
+const source = button('Source', 'Switch between blocks and Markdown text', () => {
+  editor.setOptions({ mode: editor.mode === 'source' ? 'rich' : 'source' });
+  source.classList.toggle('on', editor.mode === 'source');
+});
+source.id = 'toggle-source';
+source.classList.toggle('on', editor.mode === 'source');
 
 // Example themes: tokens only, so switching restyles without re-rendering.
 const themes: [string, Theme | undefined][] = [

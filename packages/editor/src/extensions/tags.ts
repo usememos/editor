@@ -30,17 +30,102 @@ export interface TagsOptions {
   readonly scan?: TagScanner;
 }
 
-/** A letter, combining mark, number or `_`: characters a tag or mention cannot follow. */
-const reWordChar = /[\p{L}\p{M}\p{N}_]/u;
-/** Characters of a tag segment: letters, marks, numbers, `_`, `-` and emoji (with joiners, variation selectors and skin tones). */
-const reTagChar = /[\p{L}\p{M}\p{N}_\-\p{Extended_Pictographic}\p{Emoji_Modifier}‍️]/u;
-/** First character of a segment: a letter, number, `_` or emoji. */
-const reTagStart = /[\p{L}\p{N}_\p{Extended_Pictographic}]/u;
-/** A tag needs one character that is not a digit, `_`, `-` or `/`. */
-const reTagNeeds = /[^\p{Nd}_\-/]/u;
+// The grammar is memos' (usememos/memos markdown/parser/tag.go and
+// mention.go), applied to the text a reader sees.
+
+const reXidContinue = /\p{XID_Continue}/u;
+const reIgnorable = /\p{Default_Ignorable_Code_Point}/u;
+const reCombining = /[\p{Mn}\p{Mc}]/u;
+/** Not XID_Continue, but kept inside a tag as twitter-text does: 〃, ～, 〜, Hebrew ־ ׳ ״ and the Tibetan tsheg. */
+const TWITTER_CONTINUE = '\u3003\uff5e\u301c\u05be\u05f3\u05f4\u0f0b';
+
+/**
+ * One fully qualified emoji at the start of the text (sticky): a keycap, a
+ * flag, a subdivision flag, or emoji joined by zero-width joiners, each with
+ * its skin tone or emoji presentation selector. A character that shows as
+ * text by default (`♥`) is an emoji only with the selector (U+FE0F). A code
+ * point reserved for emoji that the engine's Unicode data does not know yet
+ * counts as one.
+ */
+const EMOJI_ELEMENT = String.raw`(?:\p{Emoji_Modifier_Base}\p{Emoji_Modifier}|(?![\p{Regional_Indicator}\p{Emoji_Modifier}])\p{Emoji_Presentation}\uFE0F?|(?![#*0-9])\p{Emoji}\uFE0F|(?!\p{Emoji})(?=\P{Assigned})\p{Extended_Pictographic})`;
+const reEmoji = new RegExp(
+  String.raw`[#*0-9]\uFE0F\u20E3|\p{Regional_Indicator}{2}|\u{1F3F4}[\u{E0020}-\u{E007E}]+\u{E007F}|${EMOJI_ELEMENT}(?:\u200D${EMOJI_ELEMENT})*`,
+  'uy',
+);
 
 function charAt(text: string, i: number): string {
   return String.fromCodePoint(text.codePointAt(i)!);
+}
+
+/** Length of the emoji at `i` that ends by `to`, or 0. */
+function emojiAt(text: string, i: number, to: number): number {
+  reEmoji.lastIndex = i;
+  const m = reEmoji.exec(text);
+  return m && i + m[0].length <= to ? m[0].length : 0;
+}
+
+const isXid = (ch: string) => reXidContinue.test(ch) && !reIgnorable.test(ch);
+const isStarter = (ch: string) => ch === '-' || ch === '+' || ch === '&' || (isXid(ch) && !reCombining.test(ch));
+const isContinuation = (ch: string) => ch === '-' || ch === '+' || ch === '&' || TWITTER_CONTINUE.includes(ch) || isXid(ch);
+
+/**
+ * End of one tag segment starting at `i`, or -1 if there is none. Default
+ * ignorable characters (joiners, variation selectors) and combining marks
+ * before the first character are skipped, as are ignorable characters
+ * inside; they stay part of the tag as written.
+ */
+function segmentEnd(text: string, i: number, to: number): number {
+  let j = i;
+  // The first character: a letter, digit, connector, `-`, `+`, `&` or emoji.
+  for (;;) {
+    if (j >= to) return -1;
+    const emoji = emojiAt(text, j, to);
+    if (emoji > 0) {
+      j += emoji;
+      break;
+    }
+    const ch = charAt(text, j);
+    if (j + ch.length > to) return -1;
+    if (reIgnorable.test(ch) || (reXidContinue.test(ch) && reCombining.test(ch))) {
+      j += ch.length;
+      continue;
+    }
+    if (!isStarter(ch)) return -1;
+    j += ch.length;
+    break;
+  }
+  // Then the same, combining marks, and an apostrophe between two letters (`#tag's`).
+  let afterXid = j > i && isXid(charBefore(text, j)!);
+  while (j < to) {
+    const emoji = emojiAt(text, j, to);
+    if (emoji > 0) {
+      j += emoji;
+      afterXid = false;
+      continue;
+    }
+    const ch = charAt(text, j);
+    if (j + ch.length > to) break;
+    if (reIgnorable.test(ch)) {
+      j += ch.length;
+      afterXid = false;
+    } else if ((ch === "'" || ch === '\u2019') && afterXid && startsWord(text, j + 1, to)) {
+      j += 1;
+      afterXid = false;
+    } else if (isContinuation(ch)) {
+      j += ch.length;
+      afterXid = isXid(ch);
+    } else {
+      break;
+    }
+  }
+  return j;
+}
+
+/** True if a letter or digit that is not a combining mark or an emoji starts at `i`. */
+function startsWord(text: string, i: number, to: number): boolean {
+  if (i >= to || emojiAt(text, i, to) > 0) return false;
+  const ch = charAt(text, i);
+  return isXid(ch) && !reCombining.test(ch);
 }
 
 /** The character that ends just before `i`. */
@@ -50,67 +135,64 @@ function charBefore(text: string, i: number): string | undefined {
   return c >= 0xdc00 && c <= 0xdfff && i > 1 ? text.slice(i - 2, i) : text[i - 1];
 }
 
-/** End of one tag segment starting at `i`, or `i` if there is none. */
-function segmentEnd(text: string, i: number, to: number): number {
-  if (i >= to || !reTagStart.test(charAt(text, i))) return i;
-  let j = i;
-  while (j < to) {
-    const ch = charAt(text, j);
-    if (!reTagChar.test(ch) || j + ch.length > to) break;
-    j += ch.length;
-  }
-  return j;
-}
-
 /**
- * The default tag grammar. A tag is `#` and one or more segments separated
- * by `/`. A segment starts with a letter, number, `_` or emoji and goes on
- * with letters, combining marks, numbers, `_`, `-` and emoji. The `#` is not
- * preceded by a letter, mark, number, `_` or `#` (`C#`, `a#b` and `##x` are
- * not tags). A trailing `/` is not part of a tag, and a tag of only digits
- * (`#123`) is not a tag.
+ * The default tag grammar, memos': `#` and one or more segments separated
+ * by `/`. A segment is letters, digits and other Unicode identifier
+ * characters (XID_Continue), `-`, `+`, `&`, emoji, and an apostrophe between
+ * two letters (`#tag's`); it does not start with a combining mark. Anything
+ * may come before the `#` (`3pm#work`), and a `#` inside an emoji (the keycap `#`)
+ * starts no tag. `#2024` is a tag. A trailing `/` is not part of a tag.
  */
 export function* scanTags(text: string, from = 0, to = text.length): Generator<TextRange> {
-  for (let i = text.indexOf('#', from); i >= 0 && i < to; i = text.indexOf('#', i + 1)) {
-    const prev = charBefore(text, i);
-    if (prev !== undefined && (prev === '#' || reWordChar.test(prev))) continue;
+  let i = from;
+  while (i < to) {
+    const emoji = emojiAt(text, i, to);
+    if (emoji > 0) {
+      i += emoji;
+      continue;
+    }
+    if (text[i] !== '#') {
+      i += charAt(text, i).length;
+      continue;
+    }
     let end = segmentEnd(text, i + 1, to);
-    if (end === i + 1) continue;
+    if (end < 0) {
+      i++;
+      continue;
+    }
     while (text[end] === '/') {
       const next = segmentEnd(text, end + 1, to);
-      if (next === end + 1) break;
+      if (next < 0) break;
       end = next;
     }
-    if (!reTagNeeds.test(text.slice(i + 1, end))) continue;
     yield { from: i, to: end };
-    i = end - 1;
+    i = end;
   }
 }
 
-/** Characters of a mention after its first one. */
-const reMentionChar = /[\p{L}\p{M}\p{N}_.\-]/u;
-const reMentionStart = /[\p{L}\p{N}_]/u;
+/** A character of a username: an ASCII letter or digit, or `-`. */
+const reUsernameChar = /[A-Za-z0-9-]/;
+/** Latin letters with accents: a name that runs into one is no mention (twitter-text). */
+const reLatinAccent = /[\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u024f\u0253\u0254\u0256\u0257\u0259\u025b\u0263\u0268\u026f\u0272\u0289\u028b\u02bb\u0300-\u036f\u1e00-\u1eff]/;
 
 /**
- * The default mention grammar: `@` and a name of letters, combining marks,
- * numbers, `_`, `.` and `-` that starts with a letter, number or `_` and does
- * not end with `.` or `-`. The `@` is not preceded by a letter, mark, number,
- * `_`, `.`, `+`, `-` or `@`, so the middle of an e-mail address is no mention.
+ * The default mention grammar, memos' usernames: `@` and up to 36 ASCII
+ * letters, digits and `-`, starting and ending with a letter or digit. The
+ * character before the `@` is not a username character (`中文@dave` is a
+ * mention, `foo@bar` is not); formatting that starts right at the `@`
+ * counts as a boundary, as its delimiter does in the Markdown. A name that
+ * runs on into a character it cannot hold, such as `-` at the end or an
+ * accented letter (`@alicé`), is no mention.
  */
 export function* scanMentions(text: string, from = 0, to = text.length): Generator<TextRange> {
   for (let i = text.indexOf('@', from); i >= 0 && i < to; i = text.indexOf('@', i + 1)) {
-    const prev = charBefore(text, i);
-    if (prev !== undefined && (reWordChar.test(prev) || /[.+\-@]/.test(prev))) continue;
+    if (i > from && reUsernameChar.test(text[i - 1]!)) continue;
     let end = i + 1;
-    if (end >= to || !reMentionStart.test(charAt(text, end))) continue;
-    while (end < to) {
-      const ch = charAt(text, end);
-      if (!reMentionChar.test(ch) || end + ch.length > to) break;
-      end += ch.length;
-    }
-    while (end > i + 1 && (text[end - 1] === '.' || text[end - 1] === '-')) end--;
-    yield { from: i, to: end };
-    i = end - 1;
+    while (end < to && reUsernameChar.test(text[end]!)) end++;
+    const name = text.slice(i + 1, end);
+    const valid = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,34}[A-Za-z0-9])?$/.test(name) && !reLatinAccent.test(text[end] ?? '');
+    if (valid) yield { from: i, to: end };
+    if (end > i + 1) i = end - 1;
   }
 }
 

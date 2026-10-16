@@ -7,6 +7,7 @@ This is the specification of the Markdown the editor reads and writes: each bloc
 - The parser follows **CommonMark 0.31.2** and the **GFM** extensions for tables, task list items, strikethrough and autolink literals, plus GitHub's alerts.
 - All 652 CommonMark 0.31.2 spec examples produce the reference HTML with `autolinks: false` (`test/spec.test.ts`).
 - All GFM table, task list item, strikethrough and autolink spec examples produce the reference HTML (`test/spec.test.ts`).
+- Beyond the spec examples, `test/conformance` checks 1,032 inputs, including GitHub's own rendering of GFM edge cases, against other renderers. `test/conformance/known-failures.json` lists where the editor differs today and why.
 - Loading and saving with no edits returns the input byte for byte, for every spec example (`test/source.test.ts`).
 - Saving is stable: `serialize(parse(md))` is a fixed point for every spec example (`test/roundtrip.test.ts`).
 - Extension syntax is saved exactly as written, whether or not its block was edited (`test/dialect.test.ts`, `test/tags.test.ts`).
@@ -114,6 +115,7 @@ Below
 - A list item holds one paragraph and, optionally, nested lists. Anything else makes the whole top-level list a raw Markdown block.
 - Loose lists (blank lines between items) load as the same blocks and are saved tight.
 - An ordered list keeps its start number: `3. a` then `4. b` is saved as `3. a` then `4. b`.
+- A task item starts with `[ ]`, `[x]` or `[X]`; a tab or a line break in the brackets is `[ ]` too, as in GFM. `- [ ]` with nothing after it is an empty task item, as in the memos server. GitHub shows it as the text `[ ]`.
 
 ### Block quotes
 
@@ -123,7 +125,7 @@ Below
 > Second paragraph
 ```
 
-Each paragraph in a quote becomes one `quote` block. Adjacent quote blocks are saved as one quote, with a `>` line between paragraphs. A quote that holds anything other than paragraphs and lists becomes a raw Markdown block.
+Each paragraph in a quote becomes one `quote` block. Adjacent quote blocks are saved as one quote, with a `>` line between paragraphs. Two quotes with a blank line between them stay two quotes: the first block of the second has `quoteStart`, and they are saved with the blank line. A quote that holds anything other than paragraphs and lists becomes a raw Markdown block.
 
 A list in a quote becomes `listItem` blocks with `quote: true`, next to the quote's paragraphs:
 
@@ -150,7 +152,7 @@ A blockquote whose first line is `[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING
 
 - Each paragraph becomes a `quote` block with `callout` set to the type in lowercase (`"tip"`). The marker is not part of the text.
 - A list in a callout becomes list items with `quote: true` and the same `callout`, as in a quote.
-- Adjacent quote blocks and quoted list items with the same `callout` are one blockquote. A different type, or a plain quote, starts a new one, saved after a blank line.
+- Adjacent quote blocks and quoted list items with the same `callout` are one blockquote. A different type, a plain quote, or a block with `quoteStart` starts a new one, saved after a blank line.
 - A callout that starts with a list is saved with the list right after the marker line (`> [!NOTE]`, then `> - a`). A list that cannot follow a line of text directly (an empty item, or numbered from other than 1) gets a `>` line before it.
 - An edited callout is saved with the marker in capitals, on its own line: `> [!TIP]`. An unedited one keeps its original spelling.
 - A marker with nothing after it (`> [!TIP]` alone) is an empty callout, saved as `> [!TIP]` then `> &nbsp;`.
@@ -178,6 +180,7 @@ const x = 1;
 ```
 
 - Row 0 is the header. Each column has an alignment: `left`, `center`, `right` or none.
+- A row with fewer cells than the header gets empty cells. As in cmark-gfm, a table ends at a row that would bring the empty cells added in the document past a limit (the document's length in characters, and at least 65,536), so a wide header over many short rows cannot make loading slow.
 - Cells hold inline content. A line break in a cell is saved as `&#10;`, because a table row cannot span lines.
 - An edited table is saved with one space around each cell and a delimiter row of `---`, `:--`, `:-:` or `--:`.
 - A `|` in a cell is saved as `\|`, in code spans too, because GFM splits a row into cells before it reads code spans. A `|` right after an odd number of backslashes in a code span cannot be written that way (`` `a\|` `` would end the cell), so it is saved outside the code span: code `a\|b` is saved as `` `a\`\|`b` ``.
@@ -271,7 +274,7 @@ Typed at the start of a paragraph. Undo, or Backspace right after the shortcut, 
 | Strong | `**a**`, `__a__` | `bold` mark | `**a**` |
 | Strikethrough (GFM) | `~a~`, `~~a~~` | `strike` mark | `~~a~~` |
 | Code span | `` `a` `` | `code` mark | Fence one longer than the longest backtick run inside |
-| Link | `[text](https://x "title")` | `link` on the spans | `[text](https://x)` |
+| Link | `[text](https://x "title")` | `link` and `linkTitle` on the spans | Same |
 | Reference link | `[text][ref]`, `[ref]` | `link` on the spans | `[text](https://x)` |
 | Autolink | `<https://x.com>`, `<a@b.co>` | `link` whose text is the URL | `https://x.com`, `a@b.co` (bare, see below) |
 | Autolink literal (GFM) | `https://x.com`, `www.x.com`, `a@b.co` | `link` whose text is the URL | Same |
@@ -298,7 +301,7 @@ Marks combine freely, except that text in a code span takes no other mark. The s
 ```
 
 - A link is an attribute on text spans. Links do not nest.
-- Link titles and reference labels are not kept: an edited block saves `[text](url "title")` and `[text][ref]` as `[text](url)`. Image titles are kept.
+- Reference labels are not kept: an edited block saves `[text][ref]` as `[text](url "title")`, with the definition's title. Link and image titles are kept, in double quotes, and show as a tooltip. Changing a link's URL keeps its title.
 - An image is one inline atom. Its alt text is plain text. `resolveUrl` can change or drop the displayed `src` without changing the saved Markdown.
 - Typing `[text](url)` or `![alt](src)` does not make a link or an image. The characters stay plain text and are saved escaped, so they read back as text: `\[text\](url)`.
 - To add a link, select text and press Mod+K, or paste a URL over it. Pasting Markdown, such as `[text](url)` or `![alt](src)`, makes links and images.
@@ -328,7 +331,7 @@ The editor reads a size at the end of an image's description, as Obsidian does, 
 
 ### Autolink literals
 
-With `autolinks: true` (the default), these are links without angle brackets, following the GFM spec:
+With `autolinks: true` (the default), these are links without angle brackets. The rules follow GitHub (cmark-gfm, and github.com where they differ), including its quirks:
 
 | Literal | Example | Link destination |
 | --- | --- | --- |
@@ -336,10 +339,12 @@ With `autolinks: true` (the default), these are links without angle brackets, fo
 | `http://`, `https://` or `ftp://` and a domain | `https://x.com/a_b` | The text |
 | E-mail address | `name+tag@example.com` | `mailto:` and the text |
 
-- A `www.` or scheme literal starts at the start of a line, after whitespace, or after `*`, `_`, `~` or `(`. It runs to the next whitespace or `<`.
-- The domain has at least one period, and its last two segments contain no `_`. A `_` right after the domain is punctuation, so `_www.example.com_` is emphasis around a link.
-- Trailing `?`, `!`, `.`, `,`, `:`, `*`, `_` and `~` are not part of a literal. Nor is a trailing `)` without a matching `(`, nor a trailing `;` or entity-like `&name;`.
-- An e-mail address is letters, digits, `.`, `-`, `_` and `+`, then `@`, then a domain of letters, digits, `-` and `_` with at least one period. It may not end with `-` or `_`.
+- A `www.` literal starts at the start of a line, after a space, tab or line break, or after `*`, `_`, `~` or `(`. A scheme literal starts after anything but an ASCII letter, so `中文https://x.com`, `"https://x.com"` and `0https://x.com` hold links and `xhttps://x.com` does not. `www.` and the scheme may be in any case.
+- A literal runs to the next space, tab, line break or `<`. Other characters, including other Unicode spaces and character references, are part of it as written.
+- After a scheme, the domain starts with a letter or digit; it needs no period, so `http://localhost:3000` is a link. A `www.` domain needs a period after `www`, which may be the last character before the trailing punctuation: `www. ` links `www`.
+- The domain is read up to the first character other than an ASCII letter, digit, `-`, `_` or `.`. A `_` in either of the last two segments read makes it no link, unless the domain has more than ten periods.
+- Trailing `?`, `!`, `.`, `,`, `:`, `*`, `_`, `~`, `'` and `"` are not part of a literal. Nor is a trailing `)` without a matching `(`, nor a trailing `;` or entity-like `&name;`.
+- An e-mail address is letters, digits, `.`, `-`, `_` and `+`, then `@`, then letters, digits, `-`, `_` and periods followed by a letter or digit, with at least one period. It ends with a letter, so `react@0.11.1` is not an address.
 - Literals are not recognized in link text, code spans, raw HTML or extension tokens.
 - A link whose text is its own literal is saved bare, as typed, when the result reads back as the same link. Otherwise it is saved in angle brackets (`<https://x.com>`) or as `[text](url)`.
 - Typing a space after a literal in plain text makes it a link. Undo, or Backspace right after it, restores the plain text.
@@ -350,7 +355,10 @@ With `autolinks: true` (the default), these are links without angle brackets, fo
 | `Visit www.commonmark.org.` | `www.commonmark.org` |
 | `(https://x.com/a_(b))` | `https://x.com/a_(b)` |
 | `_www.example.com_` | `www.example.com`, in italics |
-| `https://localhost:3000` | None: the domain has no period |
+| `https://localhost:3000` | `https://localhost:3000` |
+| `see "https://x.com"` | `https://x.com` |
+| `react@16.7.0` | None: an address ends with a letter |
+| `https://-x.com` | None: the domain starts with `-` |
 | `www.google.com/search?q=commonmark&hl;` | `www.google.com/search?q=commonmark` |
 | `Mail a.b-c_d@a.b.` | `a.b-c_d@a.b` |
 | `xhttps://x.com` | None: no boundary before the literal |
@@ -411,6 +419,7 @@ A claim that needs a source[^1].
 
 - `[^label]` is an inline token.
 - `[^label]: text` starts a raw block that ends at a blank line, at another definition, or at a line that starts another block.
+- A definition shows its text as plain text: Markdown, tags and mentions in it are not rendered or highlighted.
 - Without `footnotes()`, `[^1]` is plain text and an edited block saves it as `\[^1\]`.
 
 ## Tags and mentions
@@ -447,40 +456,46 @@ const extensions = [
 
 ### Tag grammar
 
-The default grammar is `scanTags`:
+The default grammar is `scanTags`. It is the memos server's (usememos/memos `markdown/parser/tag.go`), applied to the text a reader sees:
 
-- A tag is `#` followed by one or more segments separated by `/`.
-- A segment starts with a letter, number, `_` or emoji, and continues with letters, combining marks, numbers, `_`, `-` and emoji (including joiners, variation selectors and skin tones).
-- The `#` is not preceded by a letter, combining mark, number, `_` or `#`.
-- A trailing `/` is not part of the tag.
-- A tag needs at least one character that is not a digit, `_`, `-` or `/`. `#123` is not a tag.
+- A tag is `#` followed by one or more segments separated by `/`. Anything can come before the `#`.
+- A segment starts with a Unicode `XID_Continue` character that is not a combining mark (a letter, digit or `_`), `-`, `+`, `&` or an emoji.
+- It continues with `XID_Continue` characters (combining marks included), `-`, `+`, `&` and emoji. Like twitter-text, it also keeps `〃`, `～`, `〜`, the Hebrew `־`, `׳` and `״`, and the Tibetan tsheg `་`.
+- An apostrophe (`'` or `’`) between two letters is part of the tag: `#tag's`.
+- An emoji is fully qualified: `#*️⃣` and `#♥️` are tags, `#♥` is not. A keycap `#️⃣` is an emoji, not a `#`.
+- Joiners and variation selectors are part of the tag as written. Before the first character, they and combining marks are skipped.
+- A trailing `/` is not part of the tag. A tag of only digits is a tag: `#2024`.
+- Only `#` starts a tag, not the full-width `＃`.
 
 | Text | Tags |
 | --- | --- |
 | `#work and #work/meeting` | `#work`, `#work/meeting` |
 | `(#ideas)` | `#ideas` |
 | `#日记 #हिन्दी #🚀` | `#日记`, `#हिन्दी`, `#🚀` |
-| `#2024/q1` | `#2024/q1` |
+| `#2024/q1`, `#2024` | `#2024/q1`, `#2024` |
+| `#C++ #R&D #tag's` | `#C++`, `#R&D`, `#tag's` |
 | `#tag.` | `#tag` |
 | `#a/` | `#a` |
-| `a#b`, `C#`, `##x` | None |
-| `#123`, `#-a`, `# x` | None |
+| `3pm#work`, `#a#b`, `##x` | `#work`; `#a`, `#b`; `#x` |
+| `# x`, `#♥`, `#v²` | None |
 | `#️⃣` (keycap emoji) | None |
+
+`test/conformance/tags.json` lists the tags and mentions a reader should see for 696 inputs: the memos server's grammar applied where GitHub's Markdown leaves text, with Unicode cases from twitter-text. Its `about` says where each expected result comes from. `test/conformance/known-failures.json` (under `tags`) lists each difference from the editor and why.
 
 ### Mention grammar
 
-The default grammar is `scanMentions`:
+The default grammar is `scanMentions`, the memos server's (`markdown/parser/mention.go`):
 
-- A mention is `@` followed by a name of letters, combining marks, numbers, `_`, `.` and `-`.
-- The name starts with a letter, number or `_`, and does not end with `.` or `-`.
-- The `@` is not preceded by a letter, combining mark, number, `_`, `.`, `+`, `-` or `@`. The middle of an e-mail address is not a mention.
+- A mention is `@` followed by a username: 1 to 36 ASCII letters, digits and `-`, starting and ending with a letter or digit. The username is the longest such run: `@bob.smith` is `@bob`, `@alice_smith` is `@alice`.
+- The `@` is not preceded by an ASCII letter, digit or `-`, so the middle of an e-mail address is not a mention. Any other character can come before it: `中文@dave`, `(@carol)`.
+- Like twitter-text, a username followed by an accented Latin letter is not a mention: `@alicé`.
 
 | Text | Mentions |
 | --- | --- |
-| `@alice, @bob.smith.` | `@alice`, `@bob.smith` |
-| `(@carol)` | `@carol` |
+| `@alice, @bob.smith.` | `@alice`, `@bob` |
+| `(@carol)`, `中文@dave` | `@carol`, `@dave` |
 | `bob@example.com` | None: an e-mail address, and a link |
-| `@-x` | None |
+| `@-x`, `@张三` | None |
 
 ### Where tags and mentions are highlighted
 
@@ -497,6 +512,7 @@ Highlighting runs in paragraphs, headings, list items, quotes and table cells. T
 | `[#link](https://x)` | Nothing: a link |
 | `https://x.com/#anchor` | Nothing: an autolink literal |
 | `\#not-a-tag` (with `tags()`) | Nothing: `\#` is an escape token |
+| `&#35;tag`, `#R&amp;D` | `#tag`, `#R&D`: what a reader sees. memos reads the source, so it finds no tag in the first and `#R` in the second |
 | `$#x$` (with `math()`) | Nothing: a token |
 | `#x` in a code block, HTML block or raw Markdown block | Nothing: these blocks take no decorations |
 | `# heading` | Nothing: a level 1 heading |
@@ -512,7 +528,7 @@ Highlighting runs in paragraphs, headings, list items, quotes and table cells. T
 
 The rules of `suggestion()` (see the README's Autocomplete section), as they apply to tags and mentions:
 
-- With `match: matchToken(scanTags)`, the popup opens where typing leaves the caret in a tag, or right after a `#` that the grammar would accept as a tag start. So it does not open after `a#` or `C#`. The query is the text between `#` and the caret: `#work/` gives `work/`.
+- With `match: matchToken(scanTags)`, the popup opens where typing leaves the caret in a tag, or right after a `#` that the grammar would accept as a tag start. So it also opens after `a#` or `C#`, where a tag would be highlighted. The query is the text between `#` and the caret: `#work/` gives `work/`.
 - Without `match`, the default matcher opens after a trigger at the start of a line or after whitespace, and a space closes the popup unless the suggestion sets `allowSpaces`.
 - It opens in paragraphs, headings, list items, quotes and table cells. It does not open in code blocks, raw blocks, inline code, links, images, inline HTML or tokens, unless `allow` says otherwise.
 - At the start of a paragraph, `#` followed by a space closes the popup and makes a heading. An `allow` rule can keep a bare `#` there from opening the popup at all; Ctrl+Space still opens it:

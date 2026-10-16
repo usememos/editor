@@ -36,6 +36,7 @@ import {
   normalizeInline,
   paragraph,
   quote,
+  quoteKind,
   rawBlock,
   sortMarks,
   table,
@@ -45,17 +46,23 @@ import { DEFAULT_MARKDOWN, type MarkdownOptions } from './options';
 
 /**
  * Lowers one top-level block node. Structure the model cannot hold becomes
- * one raw Markdown block holding `source`, the node's Markdown.
+ * one raw Markdown block holding `source`, the node's Markdown. `before` is
+ * the last block lowered before it.
  */
-export function lowerTopLevel(node: BlockNode, options: MarkdownOptions, source: string): Block[] {
-  return lowerIfFits(node, options) ?? [rawBlock('markdown', source)];
+export function lowerTopLevel(node: BlockNode, options: MarkdownOptions, source: string, before?: Block): Block[] {
+  return lowerIfFits(node, options, before) ?? [rawBlock('markdown', source)];
 }
 
 /** Lowers one block node, or returns null when the model cannot hold its structure (see `fitsModel`). */
-export function lowerIfFits(node: BlockNode, options: MarkdownOptions): Block[] | null {
+export function lowerIfFits(node: BlockNode, options: MarkdownOptions, before?: Block): Block[] | null {
   if (!fitsModel(node, 0)) return null;
   const blocks: Block[] = [];
   lowerBlock(node, blocks, options);
+  // A blockquote right after one of the same kind starts a new blockquote: a blank line was between them.
+  const first = blocks[0];
+  if (node.type === 'blockQuote' && (first?.type === 'quote' || first?.type === 'listItem') && quoteKind(before) === quoteKind(first)) {
+    blocks[0] = { ...first, quoteStart: true };
+  }
   return blocks;
 }
 
@@ -87,7 +94,7 @@ function fitsModel(node: BlockNode, depth: number): boolean {
 
 export function lowerInlines(nodes: readonly InlineNode[], options: MarkdownOptions = DEFAULT_MARKDOWN): Span[] {
   const out: Span[] = [];
-  lowerInto(nodes, [], undefined, out, options.breaks ? '\n' : ' ');
+  lowerInto(nodes, [], {}, out, options.breaks ? '\n' : ' ');
   return normalizeInline(out);
 }
 
@@ -102,11 +109,11 @@ const NESTED_MARK = { emphasis: 'italic', strong: 'bold', strike: 'strike' } as 
 function lowerInto(
   nodes: readonly InlineNode[],
   marks: readonly Mark[],
-  link: string | undefined,
+  link: Pick<Span, 'link' | 'linkTitle'>,
   out: Span[],
   soft: string,
 ): void {
-  const push = (span: Span) => out.push(link === undefined ? span : { ...span, link });
+  const push = (span: Span) => out.push(link.link === undefined ? span : { ...span, ...link });
   for (const node of nodes) {
     switch (node.type) {
       case 'text':
@@ -132,7 +139,7 @@ function lowerInto(
         break;
       case 'link':
         // Links cannot nest, so the destination simply replaces any outer one.
-        lowerInto(node.children, marks, node.destination, out, soft);
+        lowerInto(node.children, marks, node.title ? { link: node.destination, linkTitle: node.title } : { link: node.destination }, out, soft);
         break;
       case 'image':
         push({ text: ATOM_CHAR, marks, image: imageAtom(node) });
@@ -172,8 +179,9 @@ function lowerBlock(node: BlockNode, out: Block[], o: MarkdownOptions): void {
   switch (node.type) {
     case 'paragraph': {
       const content = lowerInlines(node.children, o);
+      // A paragraph of only empty links (`[](/x)`) shows as an empty line, as elsewhere.
       if (isEmptyLine(content)) out.push(paragraph());
-      else if (content.length > 0) out.push(paragraph(content));
+      else if (content.length > 0 || node.children.length > 0) out.push(paragraph(content));
       break;
     }
     case 'heading':
@@ -239,9 +247,10 @@ function lowerQuote(children: readonly BlockNode[], out: Block[], o: MarkdownOpt
   children.forEach((child, i) => {
     if (child.type === 'list') lowerList(child, 0, out, o, callout ?? 'quote');
     if (child.type !== 'paragraph') return;
-    const content = lowerInlines(i === 0 && alert ? alert.rest : child.children, o);
+    const inlines = i === 0 && alert ? alert.rest : child.children;
+    const content = lowerInlines(inlines, o);
     if (isEmptyLine(content)) out.push(quote([], undefined, callout));
-    else if (content.length > 0) out.push(quote(content, undefined, callout));
+    else if (content.length > 0 || inlines.length > 0) out.push(quote(content, undefined, callout));
   });
   // An alert with nothing after its marker is an empty callout.
   if (callout && out.length === start) out.push(quote([], undefined, callout));

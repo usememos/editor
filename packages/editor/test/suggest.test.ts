@@ -71,10 +71,13 @@ describe('matchToken with the default tag grammar', () => {
     ['(#wo│)', '#wo', 'wo'],
     ['#工作│', '#工作', '工作'],
     ['#12│', '#12', '12'],
+    ['a#b│', '#b', 'b'],
+    ['C#│', '#', ''],
+    ['##│', '#', ''],
   ])('%s is the token %s with query %s', (source, token, query) => {
     expect(run(tag, source)).toMatchObject({ token, query });
   });
-  it.each(['#tag │', 'a#b│', 'C#│', '##│', 'no tag│', '#a\n│'])('%s has no token', (source) => {
+  it.each(['#tag │', 'no tag│', '#a\n│'])('%s has no token', (source) => {
     expect(run(tag, source)).toBeNull();
   });
   it('limits the query to maxLength', () => {
@@ -90,6 +93,8 @@ describe('matchToken with the default tag grammar', () => {
   it('works with mentions', () => {
     expect(run(matchToken(scanMentions), 'hi @ste│', ['@'])).toMatchObject({ token: '@ste', query: 'ste' });
     expect(run(matchToken(scanMentions), 'bob@exa│', ['@'])).toBeNull();
+    // The scan starts at a word start, so a long word before the @ still counts.
+    expect(run(matchToken(scanMentions), `${'b'.repeat(60)}@exa│`, ['@'])).toBeNull();
   });
 });
 

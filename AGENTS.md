@@ -33,6 +33,14 @@ To release, open Actions, pick "Release" and choose "Run workflow" on main. Tick
 
 Publishing uses npm trusted publishing, as `usememos/mui` does, so there is no npm token. On npmjs.com, the `@usememos/editor` package settings list `usememos/editor` and `release.yml` under "Trusted Publisher".
 
+## Pushing and CI
+
+The repo is private, so every CI minute is billed. Each push to main runs the checks and the Chromium browser tests (about 7 minutes); Firefox and WebKit run each night when main changed (see `docs/architecture.md`). So:
+
+- Push once per finished change, not once per commit: commit as you go, run `npm test` and the affected browser tests locally, then push the commits together.
+- Changes to `docs/`, `*.md` at the top level and `packages/*/*.md` run no CI.
+- To try a fix in Firefox or WebKit before pushing to main, push a branch and run the CI workflow on it by hand ("Run workflow" in Actions), or run `npx playwright test --project=webkit` locally.
+
 ## Commit messages
 
 Follow [Conventional Commits](https://www.conventionalcommits.org/):

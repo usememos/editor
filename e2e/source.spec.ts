@@ -1,0 +1,345 @@
+// Source mode: the whole document as plain Markdown text (README "Source mode").
+
+import { readFileSync } from 'node:fs';
+import { expect, md, type Page, test, viewProblems } from './helpers';
+
+const open = (page: Page, markdown: string) => page.goto(`/?source&md=${encodeURIComponent(markdown)}`);
+const frame = (page: Page) => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null)))));
+const mode = (page: Page) => page.evaluate(() => (window as any).editor.mode as string);
+const setMode = (page: Page, mode: 'rich' | 'source') => page.evaluate((mode) => (window as any).editor.setOptions({ mode }), mode);
+/** The text shown in source mode. */
+const shown = (page: Page) => page.locator('#editor .mbe-source-text').evaluate((el) => el.textContent);
+const offsets = (page: Page) =>
+  page.evaluate(() => {
+    const { anchor, focus } = (window as any).editor.state.selection;
+    return [anchor.offset, focus.offset];
+  });
+/** Puts the caret (or a selection) at text offsets in source mode. */
+const select = (page: Page, from: number, to = from) =>
+  page.evaluate(
+    ([from, to]) => {
+      const editor = (window as any).editor;
+      const id = editor.state.doc.blocks[0].id;
+      editor.focus();
+      editor.setSelection({ anchor: { blockId: id, offset: from }, focus: { blockId: id, offset: to } });
+    },
+    [from, to],
+  );
+const paste = (page: Page, data: Record<string, string>) =>
+  page.evaluate((data) => {
+    const transfer = new DataTransfer();
+    for (const [type, value] of Object.entries(data)) transfer.setData(type, value);
+    document.activeElement!.dispatchEvent((window as any).clipboardEvent('paste', transfer));
+  }, data);
+
+test('rich → source → rich leaves every fixture byte for byte, and source shows getMarkdown()', async ({ page }) => {
+  test.setTimeout(120_000);
+  const load = (name: string) =>
+    (JSON.parse(readFileSync(new URL(`../packages/editor/test/fixtures/${name}`, import.meta.url), 'utf8')) as { markdown: string }[]).map((e) => e.markdown);
+  const fixtures = [...load('commonmark-0.31.2.json'), ...load('gfm-extensions.json')];
+  await page.goto('/');
+  const sample = await md(page);
+  const failures = await page.evaluate((all) => {
+    const editor = (window as any).editor;
+    const text = () => document.querySelector('#editor .mbe-source-text')!.textContent;
+    const out: string[] = [];
+    for (const markdown of all) {
+      editor.setMarkdown(markdown);
+      const before = editor.getMarkdown();
+      editor.setOptions({ mode: 'source' });
+      if (text() !== before) out.push(`shown: ${JSON.stringify(markdown)}`);
+      if (editor.getMarkdown() !== before) out.push(`source: ${JSON.stringify(markdown)}`);
+      editor.setOptions({ mode: 'rich' });
+      if (editor.getMarkdown() !== before) out.push(`rich: ${JSON.stringify(markdown)}`);
+    }
+    return out;
+  }, [sample, ...fixtures]);
+  expect(failures).toEqual([]);
+});
+
+test('a switch emits no change, adds no undo step, and keeps focus', async ({ page }) => {
+  await page.goto(`/?md=${encodeURIComponent('hello\n')}`);
+  await page.locator('#editor .mbe-block').click();
+  await page.keyboard.press('End');
+  await page.keyboard.type(' world');
+  await frame(page);
+  await page.evaluate(() => {
+    const editor = (window as any).editor;
+    (window as any).changes = 0;
+    editor.on('change', () => (window as any).changes++);
+  });
+  await page.locator('#toggle-source').click();
+  expect(await mode(page)).toBe('source');
+  await expect(page.locator('#toggle-source')).toHaveClass(/on/);
+  expect(await shown(page)).toBe('hello world\n');
+  await setMode(page, 'rich');
+  await setMode(page, 'source');
+  await frame(page);
+  expect(await page.evaluate(() => (window as any).changes)).toBe(0);
+  expect(await page.evaluate(() => (window as any).editor.hasFocus())).toBe(true);
+  // The first undo undoes the typing, not the switch, and the mode stays.
+  await page.keyboard.press('Control+z');
+  expect(await md(page)).toBe('hello\n');
+  expect(await mode(page)).toBe('source');
+  expect(await shown(page)).toBe('hello\n');
+  await page.keyboard.press('Control+Shift+z');
+  expect(await md(page)).toBe('hello world\n');
+});
+
+test('undo works across modes: an edit in source mode is undone and redone in rich mode', async ({ page }) => {
+  await open(page, '# Title\n\n- a\n- b\n');
+  await select(page, '# Title\n\n- a\n- b'.length);
+  await page.keyboard.type('\n- c');
+  expect(await md(page)).toBe('# Title\n\n- a\n- b\n- c\n');
+  await setMode(page, 'rich');
+  expect(await md(page)).toBe('# Title\n\n- a\n- b\n- c\n');
+  // Enter is a step of its own, as in rich mode.
+  await page.keyboard.press('Control+z');
+  expect(await md(page)).toBe('# Title\n\n- a\n- b\n\n');
+  await page.keyboard.press('Control+z');
+  expect(await md(page)).toBe('# Title\n\n- a\n- b\n');
+  expect(await mode(page)).toBe('rich');
+  expect(await viewProblems(page)).toEqual([]);
+  await page.keyboard.press('Control+Shift+z');
+  await page.keyboard.press('Control+Shift+z');
+  expect(await md(page)).toBe('# Title\n\n- a\n- b\n- c\n');
+  expect(await viewProblems(page)).toEqual([]);
+});
+
+test('the caret keeps its block and column across a switch', async ({ page }) => {
+  const doc = '# Title\n\nsome text\n\n- item one\n';
+  await page.goto(`/?md=${encodeURIComponent(doc)}`);
+  await page.evaluate(() => {
+    const editor = (window as any).editor;
+    editor.focus();
+    editor.setSelection({ anchor: { block: 2, offset: 4 }, focus: { block: 2, offset: 4 } });
+  });
+  await setMode(page, 'source');
+  expect(await offsets(page)).toEqual([doc.indexOf('item one') + 4, doc.indexOf('item one') + 4]);
+  await page.keyboard.type('X');
+  expect(await md(page)).toBe('# Title\n\nsome text\n\n- itemX one\n');
+  await setMode(page, 'rich');
+  expect(await page.evaluate(() => (window as any).editor.selectionToJSON())).toEqual({
+    anchor: { block: 2, offset: 5 },
+    focus: { block: 2, offset: 5 },
+  });
+  await page.keyboard.type('Y');
+  expect(await md(page)).toBe('# Title\n\nsome text\n\n- itemXY one\n');
+});
+
+test('typing and Enter edit plain text: no list continuation and no Markdown shortcuts', async ({ page }) => {
+  await open(page, '- a\n');
+  await select(page, 3);
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('# b **c** https://x.org ');
+  expect(await md(page)).toBe('- a\n# b **c** https://x.org \n');
+  await page.keyboard.press('Backspace');
+  await page.keyboard.press('Shift+Enter');
+  await page.keyboard.type('d');
+  expect(await md(page)).toBe('- a\n# b **c** https://x.org\nd\n');
+  expect(await page.locator('#editor .mbe-block').count()).toBe(1);
+  expect(await shown(page)).toBe(await md(page));
+  expect(await viewProblems(page)).toEqual([]);
+});
+
+test('Backspace at the start and Delete at the end do nothing', async ({ page }) => {
+  await open(page, 'ab');
+  await select(page, 0);
+  await page.keyboard.press('Backspace');
+  await select(page, 2);
+  await page.keyboard.press('Delete');
+  expect(await md(page)).toBe('ab');
+  await page.keyboard.press('Backspace');
+  expect(await md(page)).toBe('a');
+});
+
+test('Tab and Shift+Tab indent as in a code block', async ({ page }) => {
+  await open(page, 'a\nb\n');
+  await select(page, 0);
+  await page.keyboard.press('Tab');
+  expect(await md(page)).toBe('  a\nb\n');
+  await select(page, 0, 5);
+  await page.keyboard.press('Tab');
+  expect(await md(page)).toBe('    a\n  b\n');
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Shift+Tab');
+  expect(await md(page)).toBe('a\nb\n');
+  expect(await page.evaluate(() => (window as any).editor.hasFocus())).toBe(true);
+});
+
+test('formatting keys and commands do nothing', async ({ page }) => {
+  await open(page, 'word\n');
+  await select(page, 0, 4);
+  for (const key of ['Control+b', 'Control+i', 'Control+e', 'Control+Shift+x', 'Control+Alt+2', 'Control+Alt+0', 'Control+Alt+c', 'Control+Shift+8', 'Control+Shift+6']) {
+    await page.keyboard.press(key);
+  }
+  expect(await md(page)).toBe('word\n');
+  const results = await page.evaluate(() => {
+    const { commands } = (window as any).editor;
+    return [
+      commands.toggleBold(),
+      commands.toggleHeading({ level: 1 }),
+      commands.toggleBulletList(),
+      commands.toggleCodeBlock(),
+      commands.setLink({ href: 'https://x.org' }),
+      commands.insertTable(),
+      commands.insertDivider(),
+      commands.toggleCallout(),
+      commands.toggleDetails(),
+      commands.selectBlocks(),
+    ];
+  });
+  expect(results.every((r) => r === false)).toBe(true);
+  expect(await md(page)).toBe('word\n');
+  const state = await page.evaluate(() => {
+    const editor = (window as any).editor;
+    return { bold: editor.isActive('bold'), code: editor.isActive('codeBlock'), attrs: editor.getAttributes('codeBlock') };
+  });
+  expect(state).toEqual({ bold: false, code: false, attrs: {} });
+  await expect(page.locator('.mbe-toolbar:visible')).toHaveCount(0);
+});
+
+test('no autocomplete: no suggestion popup, slash menu or Ctrl+Space', async ({ page }) => {
+  await open(page, 'x\n');
+  await select(page, 1);
+  await page.keyboard.type(' #wo @al :smi');
+  await page.keyboard.press('Control+Space');
+  await page.keyboard.type('\n/');
+  await frame(page);
+  await expect(page.locator('.mbe-menu-item:visible')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).editor.suggestion.state)).toBeNull();
+  expect(await md(page)).toBe('x #wo @al :smi\n/\n');
+});
+
+test('Escape leaves the editor', async ({ page }) => {
+  await open(page, 'x\n');
+  await select(page, 1);
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => (window as any).editor.hasFocus())).toBe(false);
+  expect(await page.evaluate(() => (window as any).editor.selectedBlocks.length)).toBe(0);
+});
+
+test('paste inserts the plain text as written; copy and cut write the selected text', async ({ page }) => {
+  await open(page, 'ab\n');
+  await select(page, 1);
+  await paste(page, { 'text/plain': '**x**\r\n- y', 'text/html': '<b>z</b>' });
+  expect(await md(page)).toBe('a**x**\n- yb\n');
+  // HTML alone pastes nothing: source mode takes plain text only.
+  await paste(page, { 'text/html': '<b>z</b>' });
+  expect(await md(page)).toBe('a**x**\n- yb\n');
+  await select(page, 1, 6);
+  const copied = await page.evaluate(() => {
+    const transfer = new DataTransfer();
+    document.activeElement!.dispatchEvent((window as any).clipboardEvent('cut', transfer));
+    return [transfer.getData('text/plain'), transfer.getData('text/html')];
+  });
+  expect(copied).toEqual(['**x**', '']);
+  expect(await md(page)).toBe('a\n- yb\n');
+});
+
+test('Mod+A selects all the text, and Mod+Enter submits', async ({ page }) => {
+  await open(page, 'one\n\ntwo\n');
+  await select(page, 2);
+  await page.keyboard.press('Control+a');
+  expect(await offsets(page)).toEqual([0, 9]);
+  await page.keyboard.press('Control+Enter');
+  await expect(page.locator('body')).toHaveAttribute('data-submitted', '1');
+});
+
+test('the placeholder shows when the text is empty', async ({ page }) => {
+  await page.goto('/?empty&source');
+  const content = () =>
+    page.locator('#editor .mbe-source-text').evaluate((el) => getComputedStyle(el, '::before').content);
+  expect(await content()).toContain('Write something');
+  await page.locator('#editor').click();
+  await page.keyboard.type('a');
+  expect(await content()).toBe('none');
+});
+
+test('read-only: the text can be selected but not edited', async ({ page }) => {
+  await open(page, 'abc\n');
+  await page.locator('#toggle-readonly').click();
+  await expect(page.locator('#editor')).toHaveAttribute('contenteditable', 'false');
+  await select(page, 0, 3);
+  await page.keyboard.type('x');
+  expect(await md(page)).toBe('abc\n');
+});
+
+test('a widget stays below the text, follows edits before it, and takes insertMarkdown at its place', async ({ page }) => {
+  await page.goto(`/?md=${encodeURIComponent('one\n\ntwo\n')}`);
+  await page.evaluate(() => {
+    const editor = (window as any).editor;
+    (window as any).widget = editor.addWidget({ at: { block: 0, offset: 0 }, render: (el: HTMLElement) => (el.textContent = 'uploading') });
+  });
+  await setMode(page, 'source');
+  await expect(page.locator('#editor > .mbe-widget')).toHaveText('uploading');
+  expect(await page.locator('#editor > *').evaluateAll((els) => els.map((el) => el.className.split(' ')[0]))).toEqual(['mbe-block', 'mbe-widget']);
+  await select(page, 0);
+  await page.keyboard.type('zero ');
+  await page.evaluate(() => {
+    const { editor, widget } = window as any;
+    editor.commands.insertMarkdown('![](a.png)', { at: widget, block: true });
+    widget.remove();
+  });
+  expect(await md(page)).toBe('zero one\n![](a.png)\n\ntwo\n');
+  await setMode(page, 'rich');
+  expect(await md(page)).toBe('zero one\n![](a.png)\n\ntwo\n');
+});
+
+test('insertText and insertMarkdown insert text as written', async ({ page }) => {
+  await open(page, 'ab\n');
+  await select(page, 1);
+  await page.evaluate(() => {
+    const { commands } = (window as any).editor;
+    commands.insertText('**');
+    commands.insertMarkdown('# h', { block: true });
+  });
+  expect(await md(page)).toBe('a**\n# h\nb\n');
+});
+
+test('the source mode option works on creation, and the URL toggle button switches back', async ({ page }) => {
+  await open(page, '**bold**\n');
+  expect(await mode(page)).toBe('source');
+  await expect(page.locator('#editor .mbe-source')).toHaveCount(1);
+  expect(await shown(page)).toBe('**bold**\n');
+  await page.locator('#toggle-source').click();
+  expect(await mode(page)).toBe('rich');
+  await expect(page.locator('#editor strong')).toHaveText('bold');
+  await expect(page.locator('#editor .mbe-source')).toHaveCount(0);
+});
+
+test('React: the mode prop switches live without recreating the editor', async ({ page }) => {
+  await page.goto('/react.html?demo=api');
+  const root = page.locator('#controlled .mbe-root');
+  await root.evaluate((el) => (el.dataset.marked = '1'));
+  await page.locator('#mode').click();
+  await expect(root.locator('.mbe-source')).toHaveText('start\n');
+  await expect(root).toHaveAttribute('data-marked', '1');
+  await root.click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('**');
+  await expect(page.locator('#value')).toHaveText('start**\n');
+  await page.locator('#mode').click();
+  await expect(root.locator('.mbe-source')).toHaveCount(0);
+  await expect(page.locator('#value')).toHaveText('start**\n');
+});
+
+test('IME text in source mode is inserted once; a switch during composition waits for it', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'IME is simulated through the Chrome DevTools Protocol');
+  await page.goto('/?empty&source');
+  await page.locator('#editor').click();
+  const cdp = await page.context().newCDPSession(page);
+  for (const text of ['n', 'ni', 'に']) {
+    await frame(page);
+    await cdp.send('Input.imeSetComposition', { text, selectionStart: text.length, selectionEnd: text.length });
+  }
+  await frame(page);
+  await setMode(page, 'rich');
+  expect(await mode(page)).toBe('rich');
+  await expect(page.locator('#editor .mbe-source')).toHaveCount(1);
+  await cdp.send('Input.insertText', { text: '日本' });
+  await frame(page);
+  expect(await md(page)).toBe('日本');
+  await expect(page.locator('#editor .mbe-source')).toHaveCount(0);
+  await expect(page.locator('#editor p')).toHaveText('日本');
+});

@@ -69,6 +69,8 @@ import {
   withContent,
   withQuote,
   createId,
+  sameLink,
+  keepQuoteStart,
 } from './model';
 import { emailLiterals, isLiteralBoundary, urlLiteralAt } from './markdown/autolink';
 import type { InlineSyntax } from './markdown/options';
@@ -224,7 +226,7 @@ export function deleteBackward(state: EditorState): EditorState {
   // At the start of a styled block, the first Backspace removes the style.
   // A list item in a quote becomes a paragraph of the quote first.
   if (block.type === 'listItem' && block.indent > 0) return replaceBlock(state, { ...block, indent: block.indent - 1 });
-  if (block.type === 'listItem' && block.quote) return replaceBlock(state, quote(block.content, block.id, block.callout));
+  if (block.type === 'listItem' && block.quote) return replaceBlock(state, keepQuoteStart(block, quote(block.content, block.id, block.callout)));
   if (block.type !== 'paragraph') return replaceBlock(state, paragraph(block.content, block.id));
 
   const prev = state.doc.blocks[index - 1];
@@ -407,7 +409,11 @@ export function splitBlock(state: EditorState): EditorState {
   // quote ends with an empty paragraph of the quote.
   if (length === 0 && block.type === 'listItem') {
     const next =
-      block.indent > 0 ? { ...block, indent: block.indent - 1 } : block.quote ? quote([], block.id, block.callout) : paragraph([], block.id);
+      block.indent > 0
+        ? { ...block, indent: block.indent - 1 }
+        : block.quote
+          ? keepQuoteStart(block, quote([], block.id, block.callout))
+          : paragraph([], block.id);
     return replaceBlock(s, next);
   }
   if (length === 0 && block.type === 'quote') return replaceBlock(s, paragraph([], block.id));
@@ -420,8 +426,12 @@ export function splitBlock(state: EditorState): EditorState {
   }
 
   // Enter at the start of a non-empty block inserts an empty block above
-  // and keeps the caret where it is.
+  // and keeps the caret where it is. The empty block starts the blockquote if this one did.
   if (pos.offset === 0 && length > 0) {
+    if (block.type !== 'heading' && block.type !== 'paragraph' && block.quoteStart) {
+      const { quoteStart: _start, ...rest } = block;
+      return withBlocks(s, splice(s, index, 1, keepQuoteStart(block, emptyLike(block)), rest as TextBlock), s.selection);
+    }
     return withBlocks(s, splice(s, index, 0, emptyLike(block)), s.selection);
   }
 
@@ -590,7 +600,7 @@ function keepIfSame(before: Inline, after: Inline): Inline {
   for (let i = 0; i < before.length; i++) {
     const x = before[i]!;
     const y = after[i]!;
-    if (x.text !== y.text || x.link !== y.link || x.token !== y.token || x.image !== y.image || !sameMarks(x.marks, y.marks)) return after;
+    if (x.text !== y.text || !sameLink(x, y) || x.token !== y.token || x.image !== y.image || !sameMarks(x.marks, y.marks)) return after;
   }
   return before;
 }
@@ -758,6 +768,10 @@ export type BlockTypeSpec =
  * A list item made a quote or callout keeps its list and goes into the quote.
  */
 function convert(block: TextBlock, spec: BlockTypeSpec): TextBlock {
+  return keepQuoteStart(block, convertType(block, spec));
+}
+
+function convertType(block: TextBlock, spec: BlockTypeSpec): TextBlock {
   const content = block.content;
   switch (spec.type) {
     case 'paragraph':
@@ -852,8 +866,8 @@ export function quoteRun(state: EditorState, blockId: string): { start: number; 
   if (quoteKind(block) === null) return null;
   let start = index;
   let end = index;
-  while (sameQuote(block, blocks[start - 1])) start--;
-  while (sameQuote(block, blocks[end + 1])) end++;
+  while (sameQuote(blocks[start - 1], blocks[start])) start--;
+  while (sameQuote(blocks[end], blocks[end + 1])) end++;
   return { start, end };
 }
 
@@ -864,7 +878,7 @@ export function setCallout(state: EditorState, blockId: string, callout: Callout
   const blocks = state.doc.blocks.slice(run.start, run.end + 1);
   if (blocks.every((b) => quoteKind(b) === (callout ?? 'quote'))) return state;
   const updated = blocks.map((b) =>
-    b.type === 'listItem' ? withQuote(b, callout ?? 'quote') : b.type === 'quote' ? quote(b.content, b.id, callout ?? undefined) : b,
+    b.type === 'listItem' ? withQuote(b, callout ?? 'quote') : b.type === 'quote' ? keepQuoteStart(b, quote(b.content, b.id, callout ?? undefined)) : b,
   );
   const doc = { blocks: splice(state, run.start, updated.length, ...updated) };
   return { doc, selection: state.selection, storedMarks: state.storedMarks };
@@ -909,7 +923,7 @@ export function toggleBlockType(state: EditorState, spec: BlockTypeSpec): Editor
   const off: BlockTypeSpec = { type: 'paragraph' };
   return convertSelected(state, off, (b) => {
     if (b.type === 'listItem' && spec.type === 'quote') return withQuote(b, null);
-    if (b.type === 'listItem' && b.quote && spec.type === 'listItem') return quote(b.content, b.id, b.callout);
+    if (b.type === 'listItem' && b.quote && spec.type === 'listItem') return keepQuoteStart(b, quote(b.content, b.id, b.callout));
     return convert(b, off);
   });
 }
@@ -1291,7 +1305,7 @@ export function applyBlockInputRules(state: EditorState, dialect: { callouts?: b
         start: converted.listType === 'ordered' && start ? Number(start[1]) : undefined,
         quote: quoteKind(converted),
       });
-      next = replaceBlock(next, updated, next.selection);
+      next = replaceBlock(next, keepQuoteStart(converted, updated), next.selection);
     }
     return next;
   }
@@ -1473,7 +1487,7 @@ export function applyAutolinkInputRule(state: EditorState): EditorState | null {
   const word = text.slice(start, end);
   let found: { from: number; to: number; href: string } | null = null;
   for (const m of word.matchAll(/www\.|(?:https?|ftp):\/\//gi)) {
-    if (!isLiteralBoundary(m.index === 0 ? undefined : word[m.index! - 1])) continue;
+    if (!isLiteralBoundary(m.index === 0 ? undefined : word[m.index! - 1], m[0].toLowerCase() === 'www.')) continue;
     const url = urlLiteralAt(word, m.index!);
     if (url) {
       found = { from: start + m.index!, to: start + url.end, href: url.href };
@@ -1668,5 +1682,9 @@ function insertAsBlocks(state: EditorState, fragment: readonly Block[], target: 
   const head = withContent(block, sliceInline(block.content, 0, target.offset));
   let tail: TextBlock = { ...withContent(block, sliceInline(block.content, target.offset)), id: createId() };
   if (tail.type === 'listItem' && tail.start !== undefined) tail = { ...tail, start: undefined };
+  if ((tail.type === 'quote' || tail.type === 'listItem') && tail.quoteStart) {
+    const { quoteStart: _start, ...rest } = tail;
+    tail = rest;
+  }
   return end(splice(state, index, 1, head, ...fragment, tail), last, startOf(tail));
 }

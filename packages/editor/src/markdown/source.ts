@@ -67,7 +67,7 @@ export function loadMarkdown(text: string, options?: MarkdownOptions): { doc: Do
     const lines = root.lines[last]!;
     const to = lineEnds[Math.max(lines.start, lines.end) - 1] ?? text.length;
     const source = text.slice(from, to);
-    const lowered = section ? [section] : last > i ? [htmlBlock(source)] : lowerTopLevel(node, options ?? DEFAULT_MARKDOWN, source);
+    const lowered = section ? [section] : last > i ? [htmlBlock(source)] : lowerTopLevel(node, options ?? DEFAULT_MARKDOWN, source, blocks[blocks.length - 1]);
     i = last;
     blocks.push(...lowered);
     // Line ranges never overlap; if they ever did, the block is just not kept.

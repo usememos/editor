@@ -19,12 +19,19 @@ function isDigit(ch: string | undefined): boolean {
   return ch !== undefined && ch >= '0' && ch <= '9';
 }
 
+/** True if the character at `i` follows an odd number of backslashes. */
+function escaped(text: string, i: number): boolean {
+  let n = 0;
+  while (text.charCodeAt(i - n - 1) === 0x5c) n++;
+  return n % 2 === 1;
+}
+
 const inline: InlineSyntax = {
   name: 'math',
   triggers: '$',
   match(text, pos) {
-    // The tail of a dollar run that did not open math is plain text.
-    if (text.charCodeAt(pos - 1) === DOLLAR) return -1;
+    // The tail of a dollar run that did not open math is plain text. An escaped `\$` is not part of a run.
+    if (text.charCodeAt(pos - 1) === DOLLAR && !escaped(text, pos - 1)) return -1;
     let openEnd = pos;
     while (text.charCodeAt(openEnd) === DOLLAR) openEnd++;
     const size = openEnd - pos;

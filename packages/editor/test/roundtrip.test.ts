@@ -114,7 +114,7 @@ describe('lowering: Markdown → model', () => {
       {
         type: 'paragraph',
         content: [
-          link('a', '/u'),
+          { ...link('a', '/u'), linkTitle: 'T' },
           t(' '),
           { text: ATOM_CHAR, marks: [], image: { src: 's', alt: 'i', title: 't' } },
           t(' '),

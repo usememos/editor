@@ -234,6 +234,8 @@
 }
 :is(.mbe-root, .mbe-flow) > .mbe-code pre,
 :is(.mbe-root, .mbe-flow) > pre.mbe-raw { white-space: pre-wrap; tab-size: 2; }
+/* Source mode: the document as plain text in the editor's font. */
+.mbe-root > .mbe-source { white-space: pre-wrap; tab-size: 4; overflow-wrap: anywhere; }
 :is(.mbe-root, .mbe-flow) > .mbe-code pre { margin: 0; }
 :is(.mbe-root, .mbe-flow) > .mbe-code pre code { display: block; }
 
@@ -291,12 +293,14 @@
 .mbe-root > .mbe-paragraph.mbe-empty.mbe-show-hint::before,
 .mbe-root:not(.mbe-readonly) > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote:not(.mbe-list-item))::before,
 .mbe-root:not(.mbe-readonly) > .mbe-list-item.mbe-empty[data-hint] > .mbe-content::before,
-.mbe-root:not(.mbe-readonly) > .mbe-details.mbe-empty[data-hint] > .mbe-content::before {
+.mbe-root:not(.mbe-readonly) > .mbe-details.mbe-empty[data-hint] > .mbe-content::before,
+.mbe-root > .mbe-source.mbe-empty:only-child > .mbe-source-text::before {
   opacity: 0.5;
   pointer-events: none;
   position: absolute;
 }
-.mbe-root > .mbe-paragraph.mbe-empty:only-child::before { content: var(--mbe-placeholder, ''); }
+.mbe-root > .mbe-paragraph.mbe-empty:only-child::before,
+.mbe-root > .mbe-source.mbe-empty:only-child > .mbe-source-text::before { content: var(--mbe-placeholder, ''); }
 .mbe-root > .mbe-paragraph.mbe-empty.mbe-show-hint::before { content: var(--mbe-slash-hint, ''); }
 .mbe-root:not(.mbe-readonly) > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote:not(.mbe-list-item))::before,
 .mbe-root:not(.mbe-readonly) > .mbe-list-item.mbe-empty[data-hint] > .mbe-content::before,

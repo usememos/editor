@@ -42,6 +42,8 @@ export interface Span {
   /** Sorted by MARK_ORDER, no duplicates. */
   readonly marks: readonly Mark[];
   readonly link?: string;
+  /** The link's title, shown as a tooltip and saved as `[text](url "title")`. Only with `link`. */
+  readonly linkTitle?: string;
   /** An image. Its `text` is a single ATOM_CHAR. */
   readonly image?: ImageAtom;
   /**
@@ -57,6 +59,7 @@ export type Inline = readonly Span[];
 export interface Format {
   readonly marks: readonly Mark[];
   readonly link?: string;
+  readonly linkTitle?: string;
   readonly token?: string;
 }
 
@@ -93,6 +96,8 @@ export interface ListItemBlock {
   readonly quote?: true;
   /** Quoted items only: the item is inside a callout of this type. */
   readonly callout?: CalloutType;
+  /** Quoted items only: the item starts a new blockquote (see `QuoteBlock.quoteStart`). */
+  readonly quoteStart?: true;
   readonly content: Inline;
 }
 
@@ -109,6 +114,11 @@ export interface QuoteBlock {
   readonly type: 'quote';
   /** Set on every paragraph of a callout, written as a GitHub alert (`> [!NOTE]`). */
   readonly callout?: CalloutType;
+  /**
+   * The block starts a new blockquote, though the block before it is in a
+   * blockquote of the same kind: in Markdown, a blank line between them.
+   */
+  readonly quoteStart?: true;
   readonly content: Inline;
 }
 
@@ -308,16 +318,28 @@ export function quoteKind(block: Block | undefined): QuoteKind | null {
   return null;
 }
 
-/** True if `a` and `b` are parts of one blockquote when they are neighbours. */
+/** True if `a` and `b` are parts of one blockquote when they are neighbours (`b` after `a`). */
 export function sameQuote(a: Block | undefined, b: Block | undefined): boolean {
   const kind = quoteKind(a);
-  return kind !== null && kind === quoteKind(b);
+  return kind !== null && kind === quoteKind(b) && !startsQuote(b);
+}
+
+/** True if a quoted block starts a new blockquote after one of the same kind (`quoteStart`). */
+function startsQuote(block: Block | undefined): boolean {
+  return (block?.type === 'quote' || block?.type === 'listItem') && block.quoteStart === true;
+}
+
+/** `to` with the `quoteStart` of `from`, when both are quoted: a block that changes type keeps its quote boundary. */
+export function keepQuoteStart<B extends Block>(from: Block, to: B): B {
+  if (!startsQuote(from) || quoteKind(to) === null || startsQuote(to)) return to;
+  return { ...to, quoteStart: true };
 }
 
 /** A list item moved into a blockquote of `kind`, or out of any with null. Keeps its ID. */
 export function withQuote(item: ListItemBlock, kind: QuoteKind | null): ListItemBlock {
-  const { quote: _quote, callout: _callout, ...rest } = item;
+  const { quote: _quote, callout: _callout, quoteStart, ...rest } = item;
   if (!kind) return rest;
+  if (quoteStart) return kind === 'quote' ? { ...rest, quote: true, quoteStart } : { ...rest, quote: true, callout: kind, quoteStart };
   return kind === 'quote' ? { ...rest, quote: true } : { ...rest, quote: true, callout: kind };
 }
 
@@ -420,7 +442,12 @@ export function sameMarks(a: readonly Mark[], b: readonly Mark[]): boolean {
 }
 
 function sameFormat(a: Span, b: Span): boolean {
-  return !a.image && !b.image && a.link === b.link && a.token === b.token && sameMarks(a.marks, b.marks);
+  return !a.image && !b.image && sameLink(a, b) && a.token === b.token && sameMarks(a.marks, b.marks);
+}
+
+/** Whether two spans are in the same link, or both in none: the same destination and title. */
+export function sameLink(a: Pick<Span, 'link' | 'linkTitle'>, b: Pick<Span, 'link' | 'linkTitle'> | undefined): boolean {
+  return a.link === b?.link && a.linkTitle === b?.linkTitle;
 }
 
 // ---------------------------------------------------------------------------
@@ -491,15 +518,21 @@ export function formatAt(inline: Inline, offset: number): Format {
   const marks = marksAt(inline, offset);
   const before = offset > 0 ? spanAt(inline, offset - 1) : undefined;
   const after = spanAt(inline, offset);
-  const link = before?.link && before.link === after?.link ? before.link : undefined;
+  const link = before?.link && sameLink(before, after) ? before : undefined;
   // Text typed inside a token is part of its source; at its edges it is not.
   const token = before?.token && before.token === after?.token ? before.token : undefined;
-  const format: Format = link ? { marks, link } : { marks };
+  const format: Format = link ? { marks, ...linkOf(link) } : { marks };
   return token ? { ...format, token } : format;
 }
 
+/** A span's link and title, as span fields. */
+function linkOf(s: Pick<Span, 'link' | 'linkTitle'>): Pick<Span, 'link' | 'linkTitle'> {
+  if (!s.link) return {};
+  return s.linkTitle === undefined ? { link: s.link } : { link: s.link, linkTitle: s.linkTitle };
+}
+
 export function insertInline(inline: Inline, offset: number, text: string, format: Format): Span[] {
-  let span: Span = format.link ? { text, marks: format.marks, link: format.link } : { text, marks: format.marks };
+  let span: Span = { text, marks: format.marks, ...linkOf(format) };
   if (format.token) span = { ...span, token: format.token };
   return concatInline(sliceInline(inline, 0, offset), [span], sliceInline(inline, offset));
 }
@@ -527,12 +560,17 @@ export function setTokenInRange(inline: Inline, from: number, to: number, token:
   return concatInline(sliceInline(inline, 0, from), middle, sliceInline(inline, to));
 }
 
-/** Sets (or with `href` null, removes) a link on [from, to). */
+/**
+ * Sets (or with `href` null, removes) a link on [from, to). A new link keeps
+ * the title of the first link in the range, so changing a link's URL keeps it.
+ */
 export function setLinkInRange(inline: Inline, from: number, to: number, href: string | null): Span[] {
-  const middle = sliceInline(inline, from, to).map((s) => {
+  const slice = sliceInline(inline, from, to);
+  const title = slice.find((s) => s.link !== undefined && !s.image)?.linkTitle;
+  const middle = slice.map((s) => {
     if (s.image) return s;
-    const { link: _old, ...rest } = s;
-    return href ? { ...rest, link: href } : rest;
+    const { link: _old, linkTitle: _title, ...rest } = s;
+    return href ? { ...rest, ...linkOf({ link: href, linkTitle: title }) } : rest;
   });
   return concatInline(sliceInline(inline, 0, from), middle, sliceInline(inline, to));
 }
@@ -560,7 +598,7 @@ export function linkAt(inline: Inline, offset: number): { href: string; from: nu
   const runs: { from: number; to: number }[] = [];
   for (const s of inline) {
     const end = pos + s.text.length;
-    if (s.link === href) {
+    if (sameLink(s, span)) {
       const last = runs[runs.length - 1];
       if (last && last.to === pos) last.to = end;
       else runs.push({ from: pos, to: end });

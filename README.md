@@ -54,6 +54,7 @@ The same names work in `new Editor(options)` and as React props, except that Rea
 | `placeholder` | `string` | Shown when the document is empty. |
 | `editable` | `boolean` | Default `true`. With `false`, no editing, and links open on click. |
 | `taskToggle` | `boolean` | Default `false`. While `editable` is `false`, lets the user tick and untick task items, for example for a memo's owner. Each tick emits `change` with Markdown in which only that item's `[ ]` or `[x]` changed. Ignored while `editable` is `true`. |
+| `mode` | `'rich' \| 'source'` | Default `'rich'`. `'source'` shows the whole document as its Markdown text, for people who prefer to edit the text itself. Switching changes no text, emits no `change` and keeps undo history. See [Source mode](#source-mode). |
 | `autofocus` | `boolean \| 'start' \| 'end'` | Focuses the editor on creation, with the caret at the start or the end. |
 | `attributes` | `Record<string, string>` | Attributes for the editable root, such as `autocorrect`, `autocapitalize` or `aria-label`. |
 | `resolveUrl` | `(url, kind) => string \| null` | The URL to use for a link (`kind` `'link'`) or an image (`'image'`), or `null` to drop it: the link is not clickable, the image has no `src`. The saved Markdown keeps the original. Default `defaultResolveUrl`, exported: relative URLs, `http`, `https`, `mailto` and `tel`. Call it from your own policy to extend it, for example to allow `sms:` or to block `http:` images. |
@@ -76,9 +77,9 @@ The same names work in `new Editor(options)` and as React props, except that Rea
 
 For note-style Markdown, as in the playground, use `markdown: { breaks: true, setext: false }` and `extensions: [math(), footnotes(), tags(), mentions()]`.
 
-`editor.setOptions({ placeholder, editable, taskToggle, attributes, resolveUrl, onLinkClick, theme })` changes those options while the editor runs. `setOptions({ extensions })` takes new callbacks for `suggestion()` extensions of the same names. The other options are fixed for the editor's lifetime.
+`editor.setOptions({ placeholder, editable, taskToggle, mode, attributes, resolveUrl, onLinkClick, theme })` changes those options while the editor runs. `setOptions({ extensions })` takes new callbacks for `suggestion()` extensions of the same names. The other options are fixed for the editor's lifetime.
 
-In React, `placeholder`, `editable`, `taskToggle`, `attributes`, `resolveUrl`, `onLinkClick` and `theme` update live. A change to the names in `extensions` recreates the editor and keeps its Markdown, so an inline array is fine; with the same names, the callbacks of `suggestion()` extensions update live, so `items` may read React state. Other props are read on mount; change the component's `key` to apply new values. A `ref` gives the core `Editor` instance. A `value` that arrives while an input method (IME) is composing text is applied when the composition ends.
+In React, `placeholder`, `editable`, `taskToggle`, `mode`, `attributes`, `resolveUrl`, `onLinkClick` and `theme` update live. A change to the names in `extensions` recreates the editor and keeps its Markdown, so an inline array is fine; with the same names, the callbacks of `suggestion()` extensions update live, so `items` may read React state. Other props are read on mount; change the component's `key` to apply new values. A `ref` gives the core `Editor` instance. A `value` that arrives while an input method (IME) is composing text is applied when the composition ends.
 
 For apps that manage the editor instance themselves, `useEditor(options, deps)` creates one and `<EditorContent editor={editor} />` shows it:
 
@@ -116,6 +117,7 @@ function Composer() {
 | `root` | The editable element: `element`, or for `useEditor`, the element `<EditorContent>` shows. |
 | `isComposing` | True while an input method (IME) is composing text. Replacing the document then would break the composition; the React wrapper waits for it to end. |
 | `destroy()`, `isDestroyed` | Removes the editor's content, listeners and popups from the page. After it, every call that would change the editor does nothing and commands return `false`, so a late callback (an upload that finishes after the editor closed) is safe. `getMarkdown()` still returns the last Markdown. |
+| `mode` | `'rich'` or `'source'`: the mode the editor shows now. See [Source mode](#source-mode). |
 | `hasFocus()`, `focus()`, `blur()`, `isEditable`, `setOptions(options)` | |
 
 `insertMarkdown(markdown, { at, block, select })`: `at` is `'selection'` (default; replaces the selection, like a paste), `'end'`, a position, or a widget; the last three replace nothing. A single paragraph is inserted inline unless `block: true`, which inserts it as its own block and splits the block at the target. `select: 'keep'` keeps the current selection instead of moving the caret after the inserted content.
@@ -317,6 +319,8 @@ To style the editor entirely with your own classes, import `@usememos/editor/bas
 
 With blocks selected: ArrowUp and ArrowDown select the block above or below, Shift extends the selection, Mod+A selects every block, Backspace and Delete delete them, Mod+C, Mod+X and paste copy, cut and replace them as whole blocks, Mod+D duplicates them, and the block type keys, Tab and the mark keys apply to all of them. Enter, ArrowLeft and ArrowRight go back to editing text. Typing does nothing. See [Block selection](docs/architecture.md#block-selection).
 
+In source mode the formatting keys do nothing and Enter inserts a line break; see [Source mode](#source-mode).
+
 Markdown shortcuts at the start of a line: `#`–`######`, `-`, `*`, `+`, `1.`, `[ ]`, `[x]`, `>`, `[!note]` and the other callout types, `>>>` (collapsible section), ` ``` `, `---`. Inline: `**bold**`, `*italic*`, `_italic_`, `` `code` ``, `~~strike~~`.
 
 ## Images
@@ -357,6 +361,40 @@ The title is plain text. The blocks inside are ordinary blocks, edited in place,
 Make one with Collapsible section in the slash menu, Mod+Shift+6, or `>>> ` at the start of a paragraph; a paragraph with text becomes the title. In the title, Enter moves to the first line of the section, or, in a collapsed section, adds a line after it. Enter on an empty last line of a section moves the line out of it. Arrow keys pass over a collapsed section, and a caret that lands inside one (from undo, for example) expands it. Backspace at the start of the line after a section moves into its last line. A block selection that includes a title or an end includes the whole section, so copying, cutting and deleting take it whole. Removing a title, with Backspace at its start or Mod+Shift+6, keeps the blocks inside as ordinary blocks.
 
 Only a `<details>` written the way the editor saves it loads as a section: the opening tag and a `<summary>` of plain text, a blank line, Markdown, and `</details>` at the start of a line. Other `<details>`, such as one on a single line, stay raw HTML.
+
+## Source mode
+
+With `mode: 'source'`, the editor shows the whole document as Markdown text, as Obsidian's source mode and GitLab's plain text editor do. The editor has no button or key for it: the app switches with `setOptions({ mode })` or the React `mode` prop, and remembers the choice if it wants to.
+
+```tsx
+<MarkdownEditor value={markdown} onChange={setMarkdown} mode={showSource ? 'source' : 'rich'} />
+```
+
+**Switching** is a change of view, not an edit. The text shown in source mode is exactly `getMarkdown()`. Going back to rich mode loads the text as `setMarkdown` does, so `getMarkdown()` returns it byte for byte, including lines edited in source mode. A switch emits no `change`, adds no undo step and does not move focus. Undo and redo work across it: undoing an edit made in the other mode restores it in the current mode. The caret stays in the same block, and keeps its column when the text before it in that block has no Markdown syntax; otherwise it goes to the start of the block's text. A switch requested while an input method is composing waits for the composition to end.
+
+**What works in source mode.** Source mode is plain text editing, like a `<textarea>` or a code block. It has no autocomplete and no formatting keys.
+
+| | |
+| --- | --- |
+| Typing, deleting, input methods, spellcheck | As in a code block |
+| Enter | Inserts a line break |
+| Tab, Shift+Tab | As in a code block: Tab inserts two spaces, or indents the selected lines by two spaces. Shift+Tab removes up to two spaces (or a tab) from the start of those lines |
+| Paste | The clipboard's plain text (`text/plain`). Files go to `fileHandler` as in rich mode |
+| Copy and cut | The selected text, as `text/plain` |
+| Mod+Enter, undo, redo, Mod+A | As in rich mode |
+| Escape | Leaves the editor |
+| Formatting keys (Mod+B, Mod+I, Mod+E, Mod+Shift+X, Mod+Alt+0–4, Mod+Alt+C, Mod+Shift+6–9) | Do nothing. Mod+K is left to the app |
+| Markdown shortcuts, autolinks | Do not run: the text is the Markdown |
+| Autocomplete | Off. `suggestion()` popups, the slash menu and Ctrl+Space do not open |
+| `fileHandler`, `handlePaste`, `handleDrop`, extension key bindings | As in rich mode |
+| `commands.*` | `insertText` and `insertMarkdown` insert the text as written; `insertMarkdown` with `block: true` puts it on lines of its own. `indent`, `outdent`, `undo`, `redo`, `selectAll`, `focus`, `blur` and `scrollIntoView` work. The mark, block type, link, image, table, divider, callout, section and `selectBlocks` commands return `false` |
+| Placeholder | Shown when the text is empty |
+| `addWidget` | Shown below the text. A widget remembers its place in the text, which moves with edits before it, and `insertMarkdown(md, { at: widget })` inserts there |
+| `editable: false` | The text is read-only and can be selected and copied. `taskToggle` has no effect |
+
+The toolbar, slash menu, autocomplete popup, block handle, block menu, link card, rendered views, decorations, images and syntax highlighting do not show. `isActive()` returns `false` and `getAttributes()` returns `{}`.
+
+**Positions.** In source mode the document is one block that holds all the text, so a `Position` names that block and its `offset` counts UTF-16 code units of the Markdown. `getSelection`, `setSelection`, `selectionToJSON` and `insertText({ range })` use that shape. A selection saved in the other mode is clamped.
 
 ## What saving changes
 

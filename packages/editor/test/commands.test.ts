@@ -305,6 +305,14 @@ describe('marks and links', () => {
     s = cmd.setLink(at(s, 0, 8), null);
     expect(show(s)).toEqual(['p:visit site now']);
   });
+
+  it('keeps a link title when typing inside the link or changing its URL', () => {
+    const titled = paragraph([{ text: 'site', marks: [], link: 'https://a.b', linkTitle: 'T' }]);
+    const content = (s: EditorState) => (s.doc.blocks[0] as { content: Inline }).content;
+    expect(content(cmd.insertText(at(state(titled), 0, 2), 'x'))).toEqual([{ text: 'sixte', marks: [], link: 'https://a.b', linkTitle: 'T' }]);
+    expect(content(cmd.setLink(at(state(titled), 0, 2), 'https://z.z'))).toEqual([{ text: 'site', marks: [], link: 'https://z.z', linkTitle: 'T' }]);
+    expect(content(cmd.setLink(at(state(titled), 0, 2), null))).toEqual([{ text: 'site', marks: [] }]);
+  });
 });
 
 describe('block types', () => {

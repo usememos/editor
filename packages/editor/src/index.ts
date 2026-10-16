@@ -22,6 +22,7 @@ export { parseMarkdown } from './markdown/parse';
 export { parseInline } from './markdown/inline';
 export { serializeMarkdown, serializeInline, type SerializeOptions } from './markdown/serialize';
 export { loadMarkdown, type MarkdownSource } from './markdown/source';
+export type { EditorMode } from './sourceMode';
 export type { MarkdownOptions } from './markdown/options';
 export { docToHtml } from './clipboard/toHtml';
 export { htmlToDoc } from './clipboard/fromHtml';

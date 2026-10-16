@@ -171,7 +171,7 @@ export function splitHtmlSection(source: string, options: MarkdownOptions = DEFA
       slots.push(slot);
       parts.push(`\n${slotMarker(slots.length - 1)}\n`);
     }
-    slot.push(...lowerTopLevel(node, options, textOf(i)));
+    slot.push(...lowerTopLevel(node, options, textOf(i), slot[slot.length - 1]));
   });
   return { html: parts.join('\n'), slots };
 }

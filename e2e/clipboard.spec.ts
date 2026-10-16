@@ -41,6 +41,21 @@ test('pasting from Google Docs keeps bold set by styles, not the wrapper', async
   expect(await md(page)).toBe('Hello **world**\n');
 });
 
+test('pasting Markdown copied from a code editor reads the text as Markdown', async ({ page }) => {
+  // VS Code writes the source as colored lines, with its own clipboard type.
+  await paste(page, {
+    'text/plain': '# Title\n\nSome **bold** text',
+    'text/html':
+      '<div style="font-family: Menlo, monospace;"><div><span style="color: #569cd6;font-weight: bold;"># Title</span></div><br><div><span>Some </span><span style="font-weight: bold;">**bold**</span><span> text</span></div></div>',
+    'vscode-editor-data': '{"version":1,"mode":"markdown"}',
+  });
+  expect(await blocks(page)).toEqual(['h1:Title', 'p:Some bold text']);
+  // A terminal or another editor: colored lines with no formatting.
+  await page.keyboard.press('Enter');
+  await paste(page, { 'text/plain': '- one\n- two', 'text/html': '<div><span style="color: #ccc">- one</span></div><div><span>- two</span></div>' });
+  expect(await blocks(page)).toEqual(['h1:Title', 'p:Some bold text', 'ul0:one', 'ul0:two']);
+});
+
 test('Ctrl+Shift+V pastes plain text without parsing Markdown', async ({ page }) => {
   // Simulate the keystroke without triggering the browser's own paste, then the paste event.
   await page.evaluate(() =>

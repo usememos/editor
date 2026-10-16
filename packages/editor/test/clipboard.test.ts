@@ -4,7 +4,7 @@
 import { Window } from 'happy-dom';
 import { describe, expect, it } from 'vitest';
 import { docToHtml } from '../src/clipboard/toHtml';
-import { htmlToDoc } from '../src/clipboard/fromHtml';
+import { htmlToDoc, isStyledText } from '../src/clipboard/fromHtml';
 import {
   ATOM_CHAR,
   type Doc,
@@ -38,7 +38,7 @@ describe('docToHtml', () => {
     const doc: Doc = {
       blocks: [
         heading(2, [t('Title & more')]),
-        paragraph([t('a '), t('b', 'bold', 'italic'), t(' '), link('l', 'http://x.y/?a=1&b="2"'), t('\n<c>', 'code')]),
+        paragraph([t('a '), t('b', 'bold', 'italic'), t(' '), link('l', 'http://x.y/?a=1&b="2"'), t('\n<c>', 'code'), { ...link('m', 'u'), linkTitle: 'Say "hi"' }]),
         codeBlock('js', 'if (a < b) {}'),
         quote([t('one')]),
         quote([t('two')]),
@@ -56,7 +56,7 @@ describe('docToHtml', () => {
     };
     expect(docToHtml(doc)).toBe(
       '<h2>Title &amp; more</h2>' +
-        '<p>a <strong><em>b</em></strong> <a href="http://x.y/?a=1&amp;b=&quot;2&quot;">l</a><code><br>&lt;c&gt;</code></p>' +
+        '<p>a <strong><em>b</em></strong> <a href="http://x.y/?a=1&amp;b=&quot;2&quot;">l</a><code><br>&lt;c&gt;</code><a href="u" title="Say &quot;hi&quot;">m</a></p>' +
         '<pre><code class="language-js">if (a &lt; b) {}</code></pre>' +
         '<blockquote><p>one</p><p>two</p></blockquote>' +
         '<hr>' +
@@ -113,6 +113,30 @@ describe('docToHtml', () => {
     ].join('\n');
     const doc = parseMarkdown(md);
     expect(shape(fromHtml(docToHtml(doc)))).toEqual(shape(doc));
+  });
+});
+
+describe('isStyledText', () => {
+  it('is true for HTML that only lays out and colors text, as code editors and terminals copy it', () => {
+    expect(isStyledText('')).toBe(true);
+    expect(isStyledText('# Title')).toBe(true);
+    expect(
+      isStyledText(
+        `<meta charset='utf-8'><div style="color: #cccccc;font-family: Menlo, monospace;white-space: pre;"><div><span style="color: #569cd6;"># Title</span></div><br><div><span>- one</span></div><!-- x --></div>`,
+      ),
+    ).toBe(true);
+  });
+
+  it('is false for HTML with structure or formatting', () => {
+    expect(isStyledText('<h1>Title</h1>')).toBe(false);
+    expect(isStyledText('<p>a</p>')).toBe(false);
+    expect(isStyledText('<div><a href="u">a</a></div>')).toBe(false);
+    expect(isStyledText('<pre><code>x</code></pre>')).toBe(false);
+    // Bold set by a style, as Google Docs and VS Code write it. VS Code is recognized by its own clipboard type.
+    expect(isStyledText('<div><span style="font-weight: bold;">a</span></div>')).toBe(false);
+    expect(isStyledText('<span style="font-weight:700">a</span>')).toBe(false);
+    expect(isStyledText('<span style="font-style: italic">a</span>')).toBe(false);
+    expect(isStyledText('<span style="text-decoration: underline line-through">a</span>')).toBe(false);
   });
 });
 

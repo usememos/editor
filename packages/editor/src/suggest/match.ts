@@ -71,7 +71,9 @@ export function matchToken(scan: TagScanner, { probe = 'a', maxLength = 30 }: Ma
     let lineEnd = text.indexOf('\n', caret);
     if (lineEnd < 0) lineEnd = text.length;
     const reach = maxLength + 16;
-    const from = Math.max(lineStart, caret - reach);
+    // Scanners read the scan's start as a word boundary, so it moves back to one.
+    let from = Math.max(lineStart, caret - reach);
+    while (from > lineStart && !/\s/.test(text[from - 1]!)) from--;
     const to = Math.min(lineEnd + probe.length, caret + probe.length + reach);
     for (const token of scan(probed, from, to)) {
       if (token.from >= caret || token.to < caret + probe.length) continue;

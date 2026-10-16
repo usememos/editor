@@ -19,6 +19,8 @@ export interface Widget {
 
 export class WidgetImpl implements Widget {
   blockId: string;
+  /** In source mode, the text offset the widget sits after. */
+  offset = 0;
   isRemoved = false;
   private cleanup: (() => void) | null = null;
 

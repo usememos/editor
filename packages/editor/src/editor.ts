@@ -13,7 +13,7 @@
 
 import * as cmd from './commands';
 import { docToHtml } from './clipboard/toHtml';
-import { htmlToDoc } from './clipboard/fromHtml';
+import { htmlToDoc, isStyledText } from './clipboard/fromHtml';
 import { type ChangeKind, History } from './history';
 import { DEFAULT_LABELS, type Labels } from './labels';
 import { type Icon, type IconName, type Icons, builtinIcon, iconNode } from './icons';
@@ -73,6 +73,8 @@ import { BLOCK_ATTR, BlockRenderer, atomAt, calloutName, childIndex, contentElem
 import { revealedViews, sameRevealed, viewEntry } from './view/reveal';
 import { scrollRectIntoView } from './view/scroll';
 import { type Theme, mergeClasses, tokenProperties } from './theme';
+import * as src from './sourceMode';
+import { type EditorMode, SOURCE_ID, isSourceDoc, sourceState, sourceText } from './sourceMode';
 
 export interface EditorOptions {
   /** The element the editor renders into. */
@@ -89,6 +91,8 @@ export interface EditorOptions {
   editable?: boolean;
   /** While `editable` is false, lets the user tick and untick task items. Default false. */
   taskToggle?: boolean;
+  /** `'source'` shows the whole document as its Markdown text. Default `'rich'`. */
+  mode?: EditorMode;
   /** Focus on creation: `true` or `'start'` puts the caret at the start, `'end'` at the end. */
   autofocus?: boolean | 'start' | 'end';
   /** Attributes for the editable root, such as `autocorrect` or `aria-label`. */
@@ -159,7 +163,7 @@ export interface EditorOptions {
 /** Options that `setOptions` can change while the editor runs. */
 export type RuntimeOptions = Pick<
   EditorOptions,
-  'placeholder' | 'editable' | 'taskToggle' | 'attributes' | 'resolveUrl' | 'onLinkClick' | 'theme' | 'extensions'
+  'placeholder' | 'editable' | 'taskToggle' | 'mode' | 'attributes' | 'resolveUrl' | 'onLinkClick' | 'theme' | 'extensions'
 >;
 
 export interface EditorEvents {
@@ -369,7 +373,11 @@ export class Editor {
   private source: MarkdownSource;
   /** The Markdown dialect: options plus the syntax of extensions. */
   private readonly markdown: ResolvedMarkdown;
-  private readonly history = new History();
+  private readonly history = new History(() => this.source);
+  /** Rich blocks, or the whole document as text in one block (see sourceMode.ts). */
+  private modeValue: EditorMode = 'rich';
+  /** A mode switch asked for during a composition, applied when it settles. */
+  private pendingMode: EditorMode | null = null;
   private readonly renderer: BlockRenderer;
   private composing = false;
   /**
@@ -583,6 +591,7 @@ export class Editor {
     this.listen(root.ownerDocument, 'scroll', () => this.onScroll(), true);
     this.listen(root.ownerDocument, 'pointerdown', (e) => this.onDocumentPointerDown(e), true);
 
+    if (options.mode === 'source') this.enterSource();
     this.paint(true, true);
     this.afterRender();
     for (const ext of this.extensions) {
@@ -597,6 +606,7 @@ export class Editor {
 
   /** The document as Markdown. Blocks that were not edited are written exactly as they were loaded. */
   getMarkdown(): string {
+    if (this.modeValue === 'source') return sourceText(this.current.doc);
     return serializeMarkdown(this.current.doc, { ...this.markdown, source: this.source });
   }
 
@@ -608,6 +618,15 @@ export class Editor {
     if (this.destroyed) return;
     if (options.history === 'keep') this.history.record(this.current, 'other');
     else this.history.clear();
+    if (this.modeValue === 'source') {
+      this.suggestions.reset();
+      this.current = sourceState(markdown, 0);
+      for (const widget of this.widgets) widget.offset = Math.min(widget.offset, markdown.length);
+      this.paint(true, true);
+      this.afterRender();
+      this.emit('selectionChange', { editor: this });
+      return;
+    }
     const loaded = loadMarkdown(markdown, this.markdown);
     this.source = loaded.source;
     this.blockSel = null;
@@ -624,6 +643,7 @@ export class Editor {
 
   /** True when the document holds only empty paragraphs. */
   get isEmpty(): boolean {
+    if (this.modeValue === 'source') return sourceText(this.current.doc) === '';
     return this.current.doc.blocks.every((b) => b.type === 'paragraph' && inlineLength(b.content) === 0);
   }
 
@@ -640,6 +660,11 @@ export class Editor {
     return this.composing;
   }
 
+  /** `'rich'` or `'source'`: the mode the editor shows now. */
+  get mode(): EditorMode {
+    return this.pendingMode ?? this.modeValue;
+  }
+
   get isEditable(): boolean {
     return !this.readOnly && !this.destroyed;
   }
@@ -651,6 +676,7 @@ export class Editor {
 
   /** True if `name` applies at the selection: a mark on the selected text, or the type of the block with the caret. */
   isActive(name: ActiveName, attrs?: Readonly<Record<string, unknown>>): boolean {
+    if (this.modeValue === 'source') return false;
     const s = this.current;
     switch (name) {
       case 'bold':
@@ -676,6 +702,7 @@ export class Editor {
 
   /** Attributes of `name` at the selection: `src`, `alt`, `title`, `align`, `width`, `height` and `block` (true for an image block) for a selected image, `href` for a link, `level` for a heading, `language` for a code block, `checked` for a task, `syntax` for a raw block, `callout` for a callout, `open` (saved as `<details open>`) and `collapsed` (shown collapsed now) for a section title. */
   getAttributes(name: ActiveName): Record<string, unknown> {
+    if (this.modeValue === 'source') return {};
     const s = this.current;
     if (name === 'link') {
       const link = cmd.activeLink(s);
@@ -770,6 +797,7 @@ export class Editor {
     const widget = new WidgetImpl(el, blockId, options.render, (w) => {
       this.widgets = this.widgets.filter((x) => x !== w);
     });
+    if (this.modeValue === 'source') widget.offset = options.at === 'end' ? sourceText(this.current.doc).length : at.offset;
     this.widgets.push(widget);
     this.paint();
     return widget;
@@ -834,6 +862,99 @@ export class Editor {
       this.applyReadOnly();
     }
     this.applyRuntime(options);
+    if (options.mode !== undefined) this.setMode(options.mode);
+  }
+
+  // -------------------------------------------------------------------------
+  // Source mode (see sourceMode.ts and docs/architecture.md, "Source mode")
+
+  /**
+   * Shows the document as blocks or as its Markdown text. The text does not
+   * change, so this emits no `change` and records no undo step. During a
+   * composition the switch waits for it to settle.
+   */
+  private setMode(mode: EditorMode): void {
+    if (mode !== 'rich' && mode !== 'source') return;
+    if (this.composing || this.composition) {
+      this.pendingMode = mode === this.modeValue ? null : mode;
+      return;
+    }
+    this.pendingMode = null;
+    if (mode === this.modeValue) return;
+    const hadFocus = this.hasFocus();
+    const caretTop = this.caretRect()?.top;
+    this.blockSel = null;
+    this.shortcut = null;
+    this.suggestions.reset();
+    this.hideUi();
+    this.closeBlockMenu();
+    this.history.breakGroup();
+    if (mode === 'source') this.enterSource();
+    else this.leaveSource();
+    this.paint(true, false, hadFocus);
+    this.afterRender();
+    // The caret's line stays where it was on screen.
+    const after = this.caretRect()?.top;
+    if (caretTop !== undefined && after !== undefined && Math.abs(after - caretTop) > 1) scrollBy(this.root, after - caretTop);
+    this.emit('selectionChange', { editor: this });
+  }
+
+  /** Rich blocks to text: the text is `getMarkdown()`; the selection and widgets keep their blocks. */
+  private enterSource(): void {
+    const { doc, selection } = this.current;
+    const text = this.getMarkdown();
+    const loaded = loadMarkdown(text, this.markdown);
+    const sel = src.selectionToSource(doc, selection, loaded);
+    for (const widget of this.widgets) {
+      widget.offset = src.blockEndOffset(doc, widget.blockId, loaded);
+      widget.blockId = SOURCE_ID;
+    }
+    this.collapsed.clear();
+    this.current = sourceState(text, sel.anchor, sel.focus);
+    this.modeValue = 'source';
+    this.renderer.source = true;
+    this.root.classList.add('mbe-source-mode');
+  }
+
+  /** Text to rich blocks, loaded as `setMarkdown` does, so the text saves byte for byte. */
+  private leaveSource(): void {
+    const { anchor, focus } = this.current.selection;
+    const loaded = this.loadSource(sourceText(this.current.doc));
+    for (const widget of this.widgets) widget.blockId = src.fromSourceOffset(widget.offset, loaded).blockId;
+    const sel = src.selectionFromSource(anchor.offset, focus.offset, loaded);
+    this.current = { doc: loaded.doc, selection: clampSelection(loaded.doc, sel), storedMarks: null };
+    this.modeValue = 'rich';
+    this.renderer.source = false;
+    this.root.classList.remove('mbe-source-mode');
+  }
+
+  /** Loads text as the document's blocks, with an empty paragraph for empty text, and makes its source current. */
+  private loadSource(text: string): { doc: Doc; source: MarkdownSource } {
+    const loaded = loadMarkdown(text, this.markdown);
+    const doc = createState(loaded.doc).doc;
+    this.source = loaded.source;
+    this.collapsed.clear();
+    this.collapseClosedSections(doc);
+    return { doc, source: loaded.source };
+  }
+
+  /** A history entry, in the current mode: an entry made in the other mode is serialized or loaded. */
+  private restore(entry: { state: EditorState; source: MarkdownSource }): EditorState {
+    const { state } = entry;
+    const isSource = isSourceDoc(state.doc);
+    if (this.modeValue === 'source') {
+      if (isSource) return state;
+      const text = serializeMarkdown(state.doc, { ...this.markdown, source: entry.source });
+      const sel = src.selectionToSource(state.doc, state.selection, loadMarkdown(text, this.markdown));
+      return sourceState(text, sel.anchor, sel.focus);
+    }
+    if (!isSource) {
+      this.source = entry.source;
+      return state;
+    }
+    const loaded = this.loadSource(sourceText(state.doc));
+    const sel = src.selectionFromSource(state.selection.anchor.offset, state.selection.focus.offset, loaded);
+    return { doc: loaded.doc, selection: clampSelection(loaded.doc, sel), storedMarks: null };
   }
 
   /** Subscribes to an event. Returns a function that unsubscribes. */
@@ -1000,6 +1121,41 @@ export class Editor {
         return true;
       },
     };
+    // Source mode is plain text: indent works as in a code block, insertMarkdown inserts text, and the
+    // formatting and block commands do nothing (see docs/architecture.md, "Source mode").
+    const rich = { ...commands };
+    const inSource = <A extends unknown[]>(name: keyof EditorCommands, fn: ((...args: A) => boolean) | null) => {
+      const richFn = rich[name] as unknown as (...args: A) => boolean;
+      (commands as unknown as Record<string, (...args: A) => boolean>)[name] = (...args: A) =>
+        this.modeValue === 'source' ? (fn ? fn(...args) : false) : richFn(...args);
+    };
+    inSource('indent', () => run((s) => cmd.indentCode(s, 1)));
+    inSource('outdent', () => run((s) => cmd.indentCode(s, -1)));
+    inSource('insertMarkdown', (markdown: string, options: InsertMarkdownOptions = {}) => this.insertSourceMarkdown(markdown, options));
+    for (const name of [
+      'toggleBold',
+      'toggleItalic',
+      'toggleStrike',
+      'toggleCode',
+      'setParagraph',
+      'toggleHeading',
+      'toggleBulletList',
+      'toggleOrderedList',
+      'toggleTaskList',
+      'toggleBlockquote',
+      'toggleCallout',
+      'setCallout',
+      'toggleDetails',
+      'toggleCodeBlock',
+      'setLink',
+      'unsetLink',
+      'updateImage',
+      'insertTable',
+      'insertDivider',
+      'selectBlocks',
+    ] as const) {
+      inSource(name, null);
+    }
     // After destroy every command does nothing, so late callbacks (an upload
     // that finishes after the editor closed) cannot render into the element.
     for (const name of Object.keys(commands) as (keyof EditorCommands)[]) {
@@ -1010,14 +1166,39 @@ export class Editor {
   }
 
   private toggleMark(mark: Mark): boolean {
+    if (this.modeValue === 'source') return false;
     return this.run((s) => cmd.toggleMark(s, mark));
+  }
+
+  /** `insertMarkdown` in source mode: the Markdown is inserted as text. */
+  private insertSourceMarkdown(markdown: string, options: InsertMarkdownOptions): boolean {
+    const at = options.at ?? 'selection';
+    const keep = options.select === 'keep';
+    const block = options.block === true;
+    if (at instanceof WidgetImpl) {
+      if (at.isRemoved) return false;
+      return this.run((s) => src.insertSourceAt(s, at.offset, markdown, true, keep));
+    }
+    if (at === 'selection' && !block && !keep) return this.run((s) => src.insertSourceText(s, markdown));
+    return this.run((s) => {
+      let state = s;
+      let offset: number;
+      if (at === 'selection') {
+        const { from, to } = src.sourceRange(s);
+        if (from !== to) state = src.insertSourceText(s, '');
+        offset = from;
+      } else {
+        offset = at === 'end' ? sourceText(s.doc).length : (at as Position).offset;
+      }
+      return src.insertSourceAt(state, offset, markdown, block, keep);
+    });
   }
 
   private undo(): boolean {
     if (this.readOnly) return false;
     const next = this.history.undo(this.current);
     if (!next) return false;
-    this.commit(next);
+    this.commit(this.restore(next));
     return true;
   }
 
@@ -1025,7 +1206,7 @@ export class Editor {
     if (this.readOnly) return false;
     const next = this.history.redo(this.current);
     if (!next) return false;
-    this.commit(next);
+    this.commit(this.restore(next));
     return true;
   }
 
@@ -1125,7 +1306,13 @@ export class Editor {
     const moved = next.selection !== this.state.selection;
     // Re-rendering a table replaces the focused cell, so remember focus first.
     const hadFocus = this.hasFocus();
-    if (docChanged) this.relocateWidgets(this.current.doc, next.doc, false);
+    if (docChanged && this.modeValue === 'source') {
+      const before = sourceText(this.current.doc);
+      const after = sourceText(next.doc);
+      for (const widget of this.widgets) widget.offset = src.mapOffset(widget.offset, before, after);
+    } else if (docChanged) {
+      this.relocateWidgets(this.current.doc, next.doc, false);
+    }
     this.current = next;
     if (this.blockSel) {
       // Block commands keep block IDs, so the same blocks stay selected.
@@ -1647,6 +1834,7 @@ export class Editor {
     this.refreshSelection();
     // Typing does not replace a selected image block; Enter and deleting still work.
     if ((type === 'insertText' || type === 'insertReplacementText') && cmd.selectedImageBlock(this.state)) return;
+    if (this.modeValue === 'source' && this.onSourceInput(type)) return;
 
     switch (type) {
       case 'insertText': {
@@ -1696,7 +1884,15 @@ export class Editor {
         if (range && !isCollapsed(range) && range.anchor.blockId === range.focus.blockId) {
           this.run((s) => cmd.deleteSelection({ ...s, selection: range }));
         } else {
-          this.run(type.endsWith('Backward') ? cmd.deleteBackward : cmd.deleteForward);
+          this.run(
+            this.modeValue === 'source'
+              ? type.endsWith('Backward')
+                ? (s) => src.sourceDeleteBackward(s, cmd.previousGrapheme)
+                : (s) => src.sourceDeleteForward(s, cmd.nextGrapheme)
+              : type.endsWith('Backward')
+                ? cmd.deleteBackward
+                : cmd.deleteForward,
+          );
         }
         return;
       }
@@ -1719,6 +1915,24 @@ export class Editor {
         // Paste, cut and drop have their own handlers. Everything else is ignored
         // so the browser never changes the DOM behind the model's back.
         return;
+    }
+  }
+
+  /** Input that works differently on text in source mode. Returns true when handled. */
+  private onSourceInput(type: string): boolean {
+    switch (type) {
+      case 'insertParagraph':
+      case 'insertLineBreak':
+        this.run((s) => src.insertSourceText(s, '\n'));
+        return true;
+      case 'deleteContentBackward':
+        this.run((s) => src.sourceDeleteBackward(s, cmd.previousGrapheme));
+        return true;
+      case 'deleteContentForward':
+        this.run((s) => src.sourceDeleteForward(s, cmd.nextGrapheme));
+        return true;
+      default:
+        return false;
     }
   }
 
@@ -1748,6 +1962,11 @@ export class Editor {
 
   /** Markdown shortcuts and suggestion menus that typing `text` triggers. */
   private afterTyping(text: string): void {
+    if (this.modeValue === 'source') {
+      // Plain text: no Markdown shortcuts, autolinks or suggestions.
+      this.shortcut = null;
+      return;
+    }
     // Shortcuts are separate undo steps, so undo restores the typed characters.
     const typed = this.state;
     if (text === ' ' || text === '-') this.run((s) => cmd.applyBlockInputRules(s, this.markdown));
@@ -1824,6 +2043,7 @@ export class Editor {
     this.afterRender();
     // Composed text opens a popup as typing does: a full-width slash opens the slash menu.
     if (composed) this.typedForSuggestion();
+    if (this.pendingMode) this.setMode(this.pendingMode);
   }
 
   private onInput(e: InputEvent): void {
@@ -2037,7 +2257,7 @@ export class Editor {
       const { selection } = this.state;
       if (isCollapsed(selection) && selection.focus.offset === 0) {
         e.preventDefault();
-        this.run(cmd.deleteBackward);
+        if (this.modeValue !== 'source') this.run(cmd.deleteBackward);
         return;
       }
     }
@@ -2054,7 +2274,7 @@ export class Editor {
         return;
       }
     }
-    if (e.key.startsWith('Arrow') && !mod && !e.shiftKey && !e.altKey) {
+    if (e.key.startsWith('Arrow') && !mod && !e.shiftKey && !e.altKey && this.modeValue === 'rich') {
       this.refreshSelection();
       // Step into the source of a rendered block, or into a table, which the browser may skip.
       const into = this.blockPast(e.key);
@@ -2173,7 +2393,7 @@ export class Editor {
       return;
     }
     this.dropBlockSelection();
-    if (target === this.root && e.button === 0 && !this.readOnly && this.clickBelowLastBlock(e)) return;
+    if (target === this.root && e.button === 0 && !this.readOnly && this.modeValue === 'rich' && this.clickBelowLastBlock(e)) return;
     // Clicking an image selects it as one unit; Shift+click extends the text selection as usual.
     const imageEl = e.button === 0 && !e.shiftKey && !this.readOnly ? target.closest?.<HTMLElement>('.mbe-image') : null;
     const image = imageEl && this.root.contains(imageEl) ? this.imageTarget(imageEl) : null;
@@ -2190,7 +2410,7 @@ export class Editor {
     }
     // A triple click selects the text of one block (or cell), not the line break after it,
     // so typing replaces that block instead of joining it with the next.
-    if (e.button === 0 && e.detail === 3 && !this.readOnly && this.selectBlockText(target)) {
+    if (e.button === 0 && e.detail === 3 && !this.readOnly && this.modeValue === 'rich' && this.selectBlockText(target)) {
       e.preventDefault();
       return;
     }
@@ -2343,6 +2563,16 @@ export class Editor {
 
   private onCopy(e: ClipboardEvent, cut: boolean): void {
     if (this.fromControl(e)) return;
+    if (this.modeValue === 'source') {
+      // The selected text, as it is.
+      this.refreshSelection();
+      if (isCollapsed(this.state.selection) || !e.clipboardData) return;
+      e.preventDefault();
+      const { from, to } = src.sourceRange(this.state);
+      e.clipboardData.setData('text/plain', sourceText(this.state.doc).slice(from, to));
+      if (cut && !this.readOnly) this.run((s) => src.insertSourceText(s, ''));
+      return;
+    }
     const range = this.blockRange();
     if (range) {
       // Whole blocks, even an empty one.
@@ -2371,9 +2601,17 @@ export class Editor {
     const data = e.clipboardData;
     if (!data) return;
     const text = data.getData('text/plain');
-    const html = data.getData('text/html');
+    // Markdown copied from a code editor comes with HTML that only colors its
+    // source (VS Code also adds its own type): the text is read as Markdown.
+    const rich = data.getData('text/html');
+    const html = data.types.includes('vscode-editor-data') || isStyledText(rich) ? '' : rich;
     const plainOnly = this.plainPasteNext;
     this.plainPasteNext = false;
+    if (this.modeValue === 'source') {
+      // Plain text only.
+      if (text) this.run((s) => src.insertSourceText(s, text.replace(/\r\n?/g, '\n')));
+      return;
+    }
 
     // Over a block selection: the pasted blocks replace the selected ones.
     const range = this.blockRange();
@@ -2419,6 +2657,11 @@ export class Editor {
     // Dropped text is inserted where it lands, like a paste there.
     const text = e.dataTransfer?.getData('text/plain');
     if (!text || !position) return;
+    if (this.modeValue === 'source') {
+      this.focus();
+      this.run((s) => src.insertSourceAt(s, position.offset, text.replace(/\r\n?/g, '\n'), false, false));
+      return;
+    }
     const fragment = parseMarkdown(text, this.markdown).blocks;
     this.focus();
     this.run((s) => cmd.insertFragment(s, fragment, { at: position }));
@@ -2779,6 +3022,7 @@ export class Editor {
    * or Markdown shortcuts.
    */
   hasBlockMenu(blockId: string): boolean {
+    if (this.modeValue === 'source') return false;
     const block = this.state.doc.blocks.find((b) => b.id === blockId);
     return block?.type === 'table' || block?.type === 'code' || isCallout(block) || (!!block && isImageBlock(block));
   }
@@ -2857,6 +3101,7 @@ export class Editor {
    */
   openLinkPopover(): boolean {
     if (this.readOnly) return false;
+    if (this.modeValue === 'source') return false;
     const block = getBlock(this.state.doc, this.state.selection.focus.blockId);
     if (isPlainTextBlock(block)) return false;
     if (isCollapsed(this.state.selection) && !cmd.activeLink(this.state)) return false;
@@ -3237,4 +3482,16 @@ function selectionFromJSON(doc: Doc, value: unknown): Selection | null {
 function taskName(box: HTMLElement, fallback: string): string {
   const text = box.closest('[data-block-id]')?.querySelector('.mbe-content')?.textContent?.trim();
   return text || fallback;
+}
+
+/** Scrolls the nearest scrolling ancestor of `el` (or the window) by `dy` pixels. */
+function scrollBy(el: HTMLElement, dy: number): void {
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    const overflow = getComputedStyle(node).overflowY;
+    if ((overflow === 'auto' || overflow === 'scroll') && node.scrollHeight > node.clientHeight) {
+      node.scrollTop += dy;
+      return;
+    }
+  }
+  el.ownerDocument.defaultView?.scrollBy(0, dy);
 }

@@ -125,7 +125,12 @@ describe('blocks', () => {
   section('Block quotes', NONE, [
     ["> a", ["quote a"], SAME],
     ["> a\n>\n> b", ["quote a", "quote b"], SAME],
-    ["> a\n\n> b", ["quote a", "quote b"], "> a\n>\n> b\n"],
+    ["> a\n\n> b", ["quote a", "new quote b"], SAME],
+    ["> a\n\n> b\n>\n> c", ["quote a", "new quote b", "quote c"], SAME],
+    ["> - a\n\n> - b", ["quote/bullet:0 a", "new quote/bullet:0 b"], SAME],
+    ["> [!NOTE]\n> a\n\n> [!NOTE]\n> b", ["callout(note) a", "new callout(note) b"], SAME],
+    ["> [!NOTE]\n> a\n\n> b", ["callout(note) a", "quote b"], SAME],
+    ["> a\n\nx\n\n> b", ["quote a", "p x", "quote b"], SAME],
     ["> a\nlazy", ["quote a lazy"], "> a lazy\n"],
     [">", [], ""],
   ]);
@@ -175,7 +180,9 @@ describe('blocks', () => {
   section('Tables', NONE, [
     ["| Left | Center | Right |\n| :--- | :----: | ----: |\n| 1 | 2 | 3 |", ["table(left,center,right) [Left | Center | Right] [1 | 2 | 3]"], "| Left | Center | Right |\n| :-- | :-: | --: |\n| 1 | 2 | 3 |\n"],
     ["| a |\n| - |", ["table(-) [a]"], "| a |\n| --- |\n"],
-    ["a | b\n- | -\nc | d", ["table(-,-) [a | b] [c | d]"], "| a | b |\n| --- | --- |\n| c | d |\n"],
+    ["a | b\n-- | --\nc | d", ["table(-,-) [a | b] [c | d]"], "| a | b |\n| --- | --- |\n| c | d |\n"],
+    // A list item comes before a delimiter row, as in cmark-gfm.
+    ["a | b\n- | -", ["p a | b", "bullet:0 | -"], "a | b\n\n- | \\-\n"],
     ["| a | b |\n| - | - |\n| only one |", ["table(-,-) [a | b] [only one | ]"], "| a | b |\n| --- | --- |\n| only one |  |\n"],
     ["| a \\| b |\n| - |\n| `c \\| d` |", ["table(-) [a | b] [<code>c | d</code>]"], "| a \\| b |\n| --- |\n| `c \\| d` |\n"],
   ]);
@@ -238,7 +245,7 @@ describe('blocks', () => {
   ]);
 
   section('Link reference definitions', NONE, [
-    ["[a][r]\n\n[r]: https://x \"T\"", ["p <a \"https://x\">a</a>"], "[a](https://x)\n"],
+    ["[a][r]\n\n[r]: https://x \"T\"", ["p <a \"https://x\">a</a>"], "[a](https://x \"T\")\n"],
     ["[r]\n\n[r]: https://x", ["p <a \"https://x\">r</a>"], "[r](https://x)\n"],
     ["[r]: https://x", [], ""],
     ["[missing]", ["p [missing]"], "\\[missing\\]\n"],
@@ -269,8 +276,10 @@ describe('inline', () => {
   ]);
 
   section('Links', NONE, [
-    ["[text](https://x \"title\")", ["p <a \"https://x\">text</a>"], "[text](https://x)\n"],
-    ["[t](u 'single')", ["p <a \"u\">t</a>"], "[t](u)\n"],
+    ["[text](https://x \"title\")", ["p <a \"https://x\">text</a>"], SAME],
+    ["[t](u 'single')", ["p <a \"u\">t</a>"], "[t](u \"single\")\n"],
+    ["[t](u 'say \"hi\"')", ["p <a \"u\">t</a>"], "[t](u \"say \\\"hi\\\"\")\n"],
+    ["[https://x.com](https://x.com \"T\")", ["p <a \"https://x.com\">https://x.com</a>"], SAME],
     ["[text](<a b>)", ["p <a \"a b\">text</a>"], SAME],
     ["[a [nested] b](u)", ["p <a \"u\">a [nested] b</a>"], "[a \\[nested\\] b](u)\n"],
     ["[a](u)[b](v)", ["p <a \"u\">a</a><a \"v\">b</a>"], SAME],
@@ -285,9 +294,9 @@ describe('inline', () => {
     ["<https://x.com>", ["p <a \"https://x.com\">https://x.com</a>"], "https://x.com\n"],
     ["<a@b.co>", ["p <a \"mailto:a@b.co\">a@b.co</a>"], "a@b.co\n"],
     ["<mailto:a@b.co>", ["p <a \"mailto:a@b.co\">mailto:a@b.co</a>"], SAME],
-    ["<ftp://x>", ["p <a \"ftp://x\">ftp://x</a>"], SAME],
+    ["<ftp://x>", ["p <a \"ftp://x\">ftp://x</a>"], "ftp://x\n"],
     ["<https://x.com>.", ["p <a \"https://x.com\">https://x.com</a>."], "https://x.com.\n"],
-    ["<https://x.com/a b>", ["p <https://x.com/a b>"], "\\<https://x.com/a b>\n"],
+    ["<https://x.com/a b>", ["p <<a \"https://x.com/a\">https://x.com/a</a> b>"], "\\<https://x.com/a b>\n"],
   ]);
 
   section('Autolink literals', NONE, [
@@ -298,8 +307,9 @@ describe('inline', () => {
     ["www.", ["p www."], SAME],
     ["www.x_y.com", ["p www.x_y.com"], SAME],
     ["www.a_b.x.com", ["p <a \"http://www.a_b.x.com\">www.a_b.x.com</a>"], SAME],
-    ["https://x", ["p https://x"], SAME],
-    ["https://localhost:3000/a", ["p https://localhost:3000/a"], SAME],
+    ["https://x", ["p <a \"https://x\">https://x</a>"], SAME],
+    ["https://localhost:3000/a", ["p <a \"https://localhost:3000/a\">https://localhost:3000/a</a>"], SAME],
+    ["https://-x.com", ["p https://-x.com"], SAME],
     ["http://x.com:8080/p?q=1#f", ["p <a \"http://x.com:8080/p?q=1#f\">http://x.com:8080/p?q=1#f</a>"], SAME],
     ["ftp://f.org/file", ["p <a \"ftp://f.org/file\">ftp://f.org/file</a>"], SAME],
     ["https://x.com/a)", ["p <a \"https://x.com/a\">https://x.com/a</a>)"], SAME],
@@ -316,7 +326,11 @@ describe('inline', () => {
     ["~https://x.com~", ["p <a \"https://x.com\"><s>https://x.com</s></a>"], "~~https://x.com~~\n"],
     ["www.x.com_", ["p <a \"http://www.x.com\">www.x.com</a>_"], "[www.x.com](http://www.x.com)\\_\n"],
     ["xhttps://x.com", ["p xhttps://x.com"], SAME],
-    ["\"https://x.com\"", ["p \"https://x.com\""], SAME],
+    ["\"https://x.com\"", ["p \"<a \"https://x.com\">https://x.com</a>\""], SAME],
+    ["xhttps://x.com 0https://x.com", ["p xhttps://x.com 0<a \"https://x.com\">https://x.com</a>"], SAME],
+    // As on GitHub, `www.` followed by more text is a link to `www`; at the end it is not.
+    ["www. www.", ["p <a \"http://www\">www</a>. www."], "[www](http://www). www.\n"],
+    ["react@0.11.1 a@b.co1", ["p react@0.11.1 a@b.co1"], SAME],
     ["https://x.com/路径", ["p <a \"https://x.com/路径\">https://x.com/路径</a>"], SAME],
     ["https://例子.测试/a", ["p <a \"https://例子.测试/a\">https://例子.测试/a</a>"], SAME],
     ["`https://x.com`", ["p <code>https://x.com</code>"], SAME],
@@ -328,7 +342,7 @@ describe('inline', () => {
     ["a.b-c_d@a.b_", ["p a.b-c_d@a.b_"], "a.b-c_d@a.b\\_\n"],
     ["hello@mail+xyz.example", ["p hello@mail+xyz.example"], SAME],
     ["hello+xyz@mail.example", ["p <a \"mailto:hello+xyz@mail.example\">hello+xyz@mail.example</a>"], SAME],
-    ["x@y.z@w.v", ["p <a \"mailto:x@y.z\">x@y.z</a>@w.v"], SAME],
+    ["x@y.z@w.v", ["p x@<a \"mailto:y.z@w.v\">y.z@w.v</a>"], SAME],
     ["**a@b.co**", ["p <a \"mailto:a@b.co\"><b>a@b.co</b></a>"], SAME],
   ]);
 
@@ -390,6 +404,8 @@ describe('inline', () => {
     ["$x $", ["p $x $"], "\\$x \\$\n"],
     ["$x$5", ["p $x$5"], "\\$x\\$5\n"],
     ["$a$$b$", ["p <math>$a$$b$</math>"], SAME],
+    // An escaped dollar is not part of a dollar run.
+    ["\\$$x$", ["p $<math>$x$</math>"], SAME],
     ["$`code`$", ["p <math>$`code`$</math>"], SAME],
     ["`$x$`", ["p <code>$x$</code>"], SAME],
     ["$$\nx\n$$", ["raw(math) $$⏎x⏎$$"], SAME],
@@ -483,10 +499,10 @@ describe('tags and mentions: highlighted ranges', () => {
     ['#2024/q1', ['#2024/q1']],
     ['#tag.', ['#tag']],
     ['#a/', ['#a']],
-    ['a#b, C#, ##x', []],
-    ['#123, #-a, # x', []],
+    ['a#b, C#, ##x', ['#b', '#x']],
+    ['#123, #-a, # x', ['#123', '#-a']],
     ['#️⃣', []],
-    ['@alice, @bob.smith.', ['@alice', '@bob.smith']],
+    ['@alice, @bob.smith.', ['@alice', '@bob']],
     ['(@carol)', ['@carol']],
     ['bob@example.com', []],
     ['@-x', []],
@@ -506,7 +522,7 @@ describe('tags and mentions: highlighted ranges', () => {
     ['```\n#x\n```', []],
     ['<div>#x</div>', []],
     ['<span>#x</span>', ['#x']],
-    ['#a#b', ['#a']],
+    ['#a#b', ['#a', '#b']],
     ['#a,#b;#c', ['#a', '#b', '#c']],
     ['#a/b/c #a//b', ['#a/b/c', '#a']],
     ['#a-b #_x', ['#a-b', '#_x']],
@@ -519,8 +535,8 @@ describe('tags and mentions: highlighted ranges', () => {
     ['\\#x #y', ['#y']],
     // An escaped backslash, then a tag.
     ['\\\\#x', ['#x']],
-    ['@a_b @a.b.c @日本 @1abc @_x', ['@a_b', '@a.b.c', '@日本', '@1abc', '@_x']],
-    ['@@x x@y +@z .@w', []],
+    ['@a_b @a.b.c @日本 @1abc @_x', ['@a', '@a', '@1abc']],
+    ['@@x x@y +@z .@w', ['@x', '@z', '@w']],
     ['\\@nobody @somebody', ['@somebody']],
     ['mail a@b.co or @team', ['@team']],
     ['#x $#y$ #z', ['#x', '#y', '#z']],
@@ -586,7 +602,8 @@ describe('typing', () => {
     ['go to https://x.com/a. ', ['p go to <a "https://x.com/a">https://x.com/a</a>. ']],
     ['(www.x.com) ', ['p (<a "http://www.x.com">www.x.com</a>) ']],
     ['mail me@x.io ', ['p mail <a "mailto:me@x.io">me@x.io</a> ']],
-    ['https://x ', ['p https://x ']],
+    ['https://x ', ['p <a "https://x">https://x</a> ']],
+    ['https://-x ', ['p https://-x ']],
     ['xhttps://x.com ', ['p xhttps://x.com ']],
     ['`https://x.com` ', ['p <code>https://x.com</code> ']],
     // Tokens and escapes

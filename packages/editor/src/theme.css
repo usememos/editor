@@ -242,7 +242,8 @@
 .mbe-root > .mbe-paragraph.mbe-empty.mbe-show-hint::before,
 .mbe-root:not(.mbe-readonly) > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote:not(.mbe-list-item))::before,
 .mbe-root:not(.mbe-readonly) > .mbe-list-item.mbe-empty[data-hint] > .mbe-content::before,
-.mbe-root:not(.mbe-readonly) > .mbe-details.mbe-empty[data-hint] > .mbe-content::before {
+.mbe-root:not(.mbe-readonly) > .mbe-details.mbe-empty[data-hint] > .mbe-content::before,
+.mbe-root > .mbe-source.mbe-empty:only-child > .mbe-source-text::before {
   color: var(--mbe-muted);
   opacity: 0.7;
 }

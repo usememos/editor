@@ -10,12 +10,16 @@ import { serializeMarkdown } from '../src/markdown/serialize';
 import { loadMarkdown } from '../src/markdown/source';
 import { type Block, type EditorState, type QuoteKind, caret, createState, inlineText, listItem, paragraph, plain, quote, withContent } from '../src/model';
 
-/** "quote:a" for a quote paragraph, "quote/bullet:0 a" for a quoted item, "note/..." in a callout. */
+/**
+ * "quote:a" for a quote paragraph, "quote/bullet:0 a" for a quoted item, "note/..." in a callout,
+ * "new quote:a" for a block that starts a new blockquote after one of the same kind.
+ */
 function show(blocks: readonly Block[]): string[] {
   return blocks.map((b) => {
     const text = 'content' in b ? inlineText(b.content) : '';
-    if (b.type === 'quote') return `${b.callout ?? 'quote'}:${text}`;
-    if (b.type === 'listItem') return `${b.quote ? `${b.callout ?? 'quote'}/` : ''}${b.listType}:${b.indent} ${text}`;
+    const fresh = (b.type === 'quote' || b.type === 'listItem') && b.quoteStart ? 'new ' : '';
+    if (b.type === 'quote') return `${fresh}${b.callout ?? 'quote'}:${text}`;
+    if (b.type === 'listItem') return `${b.quote ? `${fresh}${b.callout ?? 'quote'}/` : ''}${b.listType}:${b.indent} ${text}`;
     return `${b.type === 'paragraph' ? 'p' : b.type}:${text}`;
   });
 }
@@ -105,6 +109,49 @@ describe('commands', () => {
     const s = state([item('a', null), item('b', 'quote', 1)], 1, 0);
     expect(shown(cmd.clampListIndents(s, state([paragraph()])))).toEqual(['bullet:0 a', 'quote/bullet:0 b']);
     expect(cmd.indentListItems(state([item('a', null), item('b')], 1, 0), 1).doc.blocks[1]).toMatchObject({ indent: 0 });
+  });
+});
+
+describe('separate quotes', () => {
+  // Two quotes with a blank line between them in Markdown.
+  const load = () => {
+    const blocks = loadMarkdown('> a\n>\n> b\n\n> c\n>\n> d\n').doc.blocks.slice();
+    return { blocks, save: (s: EditorState) => serializeMarkdown(s.doc) };
+  };
+
+  it('stay separate when the second is edited', () => {
+    const { blocks, save } = load();
+    expect(show(blocks)).toEqual(['quote:a', 'quote:b', 'new quote:c', 'quote:d']);
+    // Enter in the middle of its first line.
+    let s = cmd.splitBlock(state(blocks, 2, 1));
+    expect(shown(s)).toEqual(['quote:a', 'quote:b', 'new quote:c', 'quote:', 'quote:d']);
+    // Enter at the start of its first line: the new empty line is part of the second quote.
+    s = cmd.splitBlock(state(blocks, 2, 0));
+    expect(shown(s)).toEqual(['quote:a', 'quote:b', 'new quote:', 'quote:c', 'quote:d']);
+    expect(save(s)).toBe('> a\n>\n> b\n\n> &nbsp;\n>\n> c\n>\n> d\n');
+  });
+
+  it('stay separate when the first line of the second becomes a list item and back', () => {
+    const { blocks, save } = load();
+    let s = cmd.applyBlockInputRules(cmd.insertText(state(blocks, 2, 0), '- '))!;
+    expect(shown(s)).toEqual(['quote:a', 'quote:b', 'new quote/bullet:0 c', 'quote:d']);
+    expect(save(s)).toBe('> a\n>\n> b\n\n> - c\n>\n> d\n');
+    s = cmd.deleteBackward(s);
+    expect(shown(s)).toEqual(['quote:a', 'quote:b', 'new quote:c', 'quote:d']);
+  });
+
+  it('change their callout one at a time', () => {
+    const { blocks } = load();
+    expect(shown(cmd.setCallout(state(blocks), blocks[0]!.id, 'note'))).toEqual(['note:a', 'note:b', 'new quote:c', 'quote:d']);
+    expect(shown(cmd.setCallout(state(blocks), blocks[3]!.id, 'note'))).toEqual(['quote:a', 'quote:b', 'new note:c', 'note:d']);
+  });
+
+  it('copy as two blockquotes and paste back as two', () => {
+    const { blocks } = load();
+    const html = docToHtml({ blocks });
+    expect(html).toBe('<blockquote><p>a</p><p>b</p></blockquote><blockquote><p>c</p><p>d</p></blockquote>');
+    const parser = new new Window().DOMParser() as unknown as DOMParser;
+    expect(show(htmlToDoc(html, parser).blocks)).toEqual(['quote:a', 'quote:b', 'new quote:c', 'quote:d']);
   });
 });
 

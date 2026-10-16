@@ -30,6 +30,14 @@ const CODE_INDENT = 4;
  * exhausting the stack in the recursive tree walks.
  */
 const MAX_NESTING = 100;
+/**
+ * Empty cells that short table rows may add, at least: a row with fewer
+ * cells than the header is filled with empty ones, so a wide header over
+ * many short rows makes columns times rows cells. As cmark-gfm does, a table
+ * ends where the filled cells would pass a limit, here the larger of this
+ * and the document's length, which keeps the work linear.
+ */
+const MIN_FILLED_CELLS = 65_536;
 
 const reHtmlBlockOpen: readonly RegExp[] = [
   /^$/, // unused: block types are numbered from 1
@@ -67,7 +75,7 @@ const reATXHeadingMarker = /^#{1,6}(?:[ \t]+|$)/;
 const reClosingCodeFence = /^(?:`{3,}|~{3,})(?=[ \t]*$)/;
 const reSetextHeadingLine = /^(?:=+|-+)[ \t]*$/;
 const reTableDelimiterCell = /^:?-+:?$/;
-const reTaskMarker = /^\[([ xX])\](?:[ \t\n]+|$)/;
+const reTaskMarker = /^\[([ \t\nxX])\](?:[ \t\n]+|$)/;
 
 // ---------------------------------------------------------------------------
 // Block nodes used while parsing
@@ -196,6 +204,9 @@ class BlockParser {
   private lastMatchedContainer: BNode = this.doc;
   private refs: RefMap = new Map();
   private definitions: string[] = [];
+  /** Empty cells added to short table rows so far, and how many the document may have. */
+  private filledCells = 0;
+  private maxFilledCells = 0;
 
   constructor(private readonly options: ResolvedMarkdown) {}
 
@@ -213,7 +224,9 @@ class BlockParser {
   private allClosed = true;
 
   parse(src: string): Root {
-    const lines = src.split(/\r\n|\n|\r/);
+    // A byte order mark is not text, as in cmark. The first line keeps its number.
+    const lines = (src.charCodeAt(0) === 0xfeff ? src.slice(1) : src).split(/\r\n|\n|\r/);
+    this.maxFilledCells = Math.max(MIN_FILLED_CELLS, src.length);
     let count = lines.length;
     // A final line ending does not start another (empty) line.
     if (src.endsWith('\n') || src.endsWith('\r')) count -= 1;
@@ -395,7 +408,18 @@ class BlockParser {
         }
       } else if (type === 'table') {
         if (!this.blank && this.offset < this.line.length) {
-          container.rows.push(fitRow(splitRow(this.line.slice(this.offset)), container.align.length));
+          const cells = splitRow(this.line.slice(this.offset));
+          const filled = Math.max(0, container.align.length - cells.length);
+          if (this.filledCells + filled <= this.maxFilledCells) {
+            this.filledCells += filled;
+            container.rows.push(fitRow(cells, container.align.length));
+          } else {
+            // Too many empty cells to fill: the table ends and the row is text.
+            this.finalize(container, this.lineNumber - 1);
+            this.addChild('paragraph');
+            this.advanceNextNonspace();
+            this.addLine();
+          }
         }
       } else if (this.offset < this.line.length && !this.blank) {
         this.addChild('paragraph');
@@ -424,7 +448,8 @@ class BlockParser {
         if (this.blank) {
           // An item can begin with at most one blank line.
           if (block.children.length === 0) return Continue.Failed;
-          this.advanceNextNonspace();
+          // Spaces past the item's content column stay, for a fenced code block's blank line.
+          this.advanceOffset(Math.min(this.indent, data.markerOffset + data.padding), true);
         } else if (this.indent >= data.markerOffset + data.padding) {
           this.advanceOffset(data.markerOffset + data.padding, true);
         } else {
@@ -536,9 +561,9 @@ class BlockParser {
       this.startFencedCode(rest) ||
       this.startHtmlBlock(container, rest) ||
       this.startSetextHeading(container, rest) ||
-      this.startTable(container, rest) ||
       this.startThematicBreak(rest) ||
       (nest && this.startListItem(container, rest)) ||
+      this.startTable(container, rest) ||
       this.startIndentedCode()
     );
   }
@@ -651,12 +676,14 @@ class BlockParser {
   /**
    * GFM table: a delimiter row (`| --- | :-: |`) under a paragraph whose last
    * line has the same number of cells. That line becomes the header row; any
-   * earlier lines stay a paragraph. We require a `|` in the delimiter row so
-   * that it cannot be confused with a setext underline or a list.
+   * earlier lines stay a paragraph. As in cmark-gfm, it is tried after setext
+   * underlines, thematic breaks and list items, so `- |` is a list item and
+   * `:-:` with no pipe is a delimiter row. Without setext headings, a setext
+   * underline (`-`) stays paragraph text rather than making a table.
    */
   private startTable(container: BNode, rest: string): Start {
     if (this.indented || container.type !== 'paragraph') return Start.None;
-    if (!rest.includes('|')) return Start.None;
+    if (!rest.includes('|') && reSetextHeadingLine.test(rest)) return Start.None;
     const align = parseDelimiterRow(rest);
     if (!align) return Start.None;
 
@@ -830,11 +857,12 @@ class BlockParser {
     let checked = false;
     const first = item.children[0];
     if (first?.type === 'paragraph') {
-      // GFM task list item: the first paragraph starts with [ ], [x] or [X].
+      // GFM task list item: the first paragraph starts with [x], [X] or a
+      // whitespace character in brackets ([ ], a tab, or a line ending).
       const m = reTaskMarker.exec(first.content);
       if (m) {
         task = true;
-        checked = m[1] !== ' ';
+        checked = m[1] === 'x' || m[1] === 'X';
         first.content = first.content.slice(m[0].length);
       }
     }
@@ -908,7 +936,8 @@ function splitRow(line: string): string[] {
     }
   }
   if (!endsWithPipe || cells.length === 0) cells.push(cell);
-  if (s.startsWith('|') && cells.length > 1) cells.shift();
+  // A leading pipe opens no cell: `|` alone is a row of none.
+  if (s.startsWith('|')) cells.shift();
   return cells.map((c) => c.replace(/^[ \t]+|[ \t]+$/g, ''));
 }
 

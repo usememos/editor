@@ -39,6 +39,7 @@ import {
   inlineText,
   normalizeInline,
   quoteKind,
+  sameLink,
   sameQuote,
   unquote,
   sameMarks,
@@ -327,7 +328,7 @@ function sameInline(a: Inline, b: Inline): boolean {
       const t = b[i]!;
       return (
         s.text === t.text &&
-        s.link === t.link &&
+        sameLink(s, t) &&
         sameMarks(s.marks, t.marks) &&
         s.image?.src === t.image?.src &&
         s.image?.alt === t.image?.alt &&
@@ -540,7 +541,7 @@ function tokenize(spans: readonly Span[], ctx: InlineContext, italic: '*' | '_',
     // A link: emphasis inside link text is separate from emphasis outside,
     // so only marks covering the whole link stay open across it.
     let j = i;
-    while (j < spans.length && spans[j]!.link === span.link) j++;
+    while (j < spans.length && sameLink(spans[j]!, span)) j++;
     const common = EMPHASIS.filter((m) => spans.slice(i, j).every((s) => s.marks.includes(m)));
     closeExcept(common, 0);
     openMarks(common, i, spans.length);
@@ -553,7 +554,7 @@ function tokenize(spans: readonly Span[], ctx: InlineContext, italic: '*' | '_',
       const base = stack.length;
       for (let k = i; k < j; k++) emitSpan(spans[k]!, base, k, j, true);
       closeTo(base);
-      tokens.push({ kind: 'raw', text: `](${linkDestination(span.link)})` });
+      tokens.push({ kind: 'raw', text: `](${linkDestination(span.link)}${linkTitle(span.linkTitle)})` });
     }
     i = j;
   }
@@ -652,26 +653,36 @@ function flanking(ch: string, before: string | undefined, after: string | undefi
 function render(spans: readonly Span[], ctx: InlineContext, strategy: Strategy, bare = false): string {
   const tokens = tokenize(spans, ctx, strategy.italic, bare);
   fixFlanking(tokens, strategy.encodeAll);
-  let out = '';
+  // Pieces joined at the end, and the last character so far: reading the end
+  // of a string built with += flattens it, which made long paragraphs quadratic.
+  const out: string[] = [];
+  let last: string | undefined;
+  const write = (text: string) => {
+    if (text === '') return;
+    out.push(text);
+    last = text[text.length - 1];
+  };
   tokens.forEach((tok, i) => {
-    if (tok.kind === 'delim') out += tok.ch.repeat(tok.count);
+    if (tok.kind === 'delim') write(tok.ch.repeat(tok.count));
     else if (tok.kind === 'raw') {
       // Inline HTML such as a comment, first on a line after a line break, would start an HTML
       // block there. Four spaces keep the line in the paragraph: an indented line cannot start an
       // HTML block, indented code cannot interrupt a paragraph, and the spaces are stripped.
-      if (ctx.lineStart && out.endsWith('\n') && interruptsParagraph(tok.text)) out += '    ';
-      out += tok.text;
+      if (ctx.lineStart && last === '\n' && interruptsParagraph(tok.text)) write('    ');
+      write(tok.text);
     }
     else {
-      out += escapeText(tok, ctx, {
-        before: out ? out[out.length - 1] : undefined,
-        after: edgeChar(tokens[i + 1], 'first'),
-        lineStart: out === '' || out.endsWith('\n'),
-        atEnd: i === tokens.length - 1,
-      });
+      write(
+        escapeText(tok, ctx, {
+          before: last,
+          after: edgeChar(tokens[i + 1], 'first'),
+          lineStart: last === undefined || last === '\n',
+          atEnd: i === tokens.length - 1,
+        }),
+      );
     }
   });
-  return out;
+  return out.join('');
 }
 
 const ALNUM = /[\p{L}\p{N}]/u;
@@ -765,7 +776,7 @@ function escapeLine(
   if (o.encodeFirst || (o.startsLine && (line[0] === ' ' || line[0] === '\t'))) encodeAt.add(0);
   if (o.encodeLast || (o.endsLine && (line[lastIndex] === ' ' || line[lastIndex] === '\t'))) encodeAt.add(lastIndex);
   const blockEscape = o.blockSyntax && !encodeAt.has(0) ? blockSyntaxEscapeIndex(line) : -1;
-  const urlEscapes = o.autolinks ? literalEscapes(line, o.before) : null;
+  const urlEscapes = o.autolinks ? literalEscapes(line, o.before, o.after) : null;
 
   let out = '';
   for (let i = 0; i < line.length; i++) {
@@ -823,14 +834,17 @@ function escapeLine(
  * in plain text do not read back as autolink literals: the ":" of `https://`,
  * the "." of `www.` or the "@" of an address.
  */
-function literalEscapes(line: string, before: string | undefined): Set<number> | null {
+function literalEscapes(line: string, before: string | undefined, after: string | undefined): Set<number> | null {
   const emails = emailLiterals(line);
   if (!emails.length && !/www\.|:\/\//i.test(line)) return null;
   const out = new Set<number>();
+  // Read with the character after the line: `www.` then a line break is a link, at the end of the text it is not.
+  const text = line + (after ?? '');
   for (const c of line.matchAll(/www\.|(?:https?|ftp):\/\//gi)) {
     const at = c.index!;
-    if (!isLiteralBoundary(at > 0 ? line[at - 1] : before) || !urlLiteralAt(line, at)) continue;
-    out.add(at + c[0].indexOf(c[0].startsWith('w') || c[0].startsWith('W') ? '.' : ':'));
+    const www = c[0].toLowerCase() === 'www.';
+    if (!isLiteralBoundary(at > 0 ? line[at - 1] : before, www) || !urlLiteralAt(text, at)) continue;
+    out.add(at + c[0].indexOf(www ? '.' : ':'));
   }
   for (const { from } of emails) out.add(line.indexOf('@', from));
   return out;
@@ -867,13 +881,13 @@ const reEmail = new RegExp(`^${AUTOLINK_EMAIL}$`);
 
 /** Whether a link span's text is a GFM autolink literal for its own destination. */
 function isBareLink(span: Span): boolean {
-  if (span.link === undefined || span.image || span.token || span.marks.includes('code') || span.marks.includes('html')) return false;
+  if (span.link === undefined || span.linkTitle !== undefined || span.image || span.token || span.marks.includes('code') || span.marks.includes('html')) return false;
   return literalHref(span.text) === span.link;
 }
 
 /** `<url>` when a link's text is its own URL (or e-mail address), else null. */
 function autolink(span: Span): string | null {
-  if (span.image || span.marks.includes('code') || span.marks.includes('html') || span.link === undefined) return null;
+  if (span.image || span.marks.includes('code') || span.marks.includes('html') || span.link === undefined || span.linkTitle !== undefined) return null;
   if (span.text === span.link && reAutolinkUri.test(span.link)) return `<${span.link}>`;
   if (span.link === 'mailto:' + span.text && reEmail.test(span.text)) return `<${span.text}>`;
   return null;
@@ -899,6 +913,12 @@ function linkDestination(url: string): string {
   return escapeEntities(url.replace(/\\/g, '\\\\'));
 }
 
+/** ` "title"` after a link or image destination, or nothing. A blank line would end the paragraph, so it is dropped. */
+function linkTitle(title: string | undefined): string {
+  if (!title) return '';
+  return ` "${escapeEntities(title.replace(/\n(?:[ \t]*\n)+/g, '\n').replace(/["\\]/g, '\\$&'))}"`;
+}
+
 function imageMarkdown(image: ImageAtom, ctx: InlineContext): string {
   // Alt text keeps line breaks as hard breaks: a soft break in alt text reads back as a space.
   const altCtx: InlineContext = ctx.newline === 'soft' ? { ...ctx, newline: 'break' } : ctx;
@@ -908,7 +928,7 @@ function imageMarkdown(image: ImageAtom, ctx: InlineContext): string {
     lineStart: false,
     atEnd: false,
   });
-  const title = image.title ? ` "${escapeEntities(image.title.replace(/["\\]/g, '\\$&'))}"` : '';
+  const title = linkTitle(image.title);
   // The alignment and size go after the alt text, as in Obsidian. When alt
   // text would read back as part of them (it ends like `|center` or `|320`),
   // its last "|" is written as a character reference, which is not a "|".

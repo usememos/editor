@@ -48,6 +48,8 @@ function encodeUrl(url: string): string {
 
 class Renderer {
   out = '';
+  /** A task item's checkbox, written at the start of its first paragraph. */
+  private checkbox = '';
 
   /** Adds a line ending unless the output already ends with one. */
   private cr(): void {
@@ -62,7 +64,8 @@ class Renderer {
           this.inlines(node.children);
         } else {
           this.cr();
-          this.out += '<p>';
+          this.out += '<p>' + this.checkbox;
+          this.checkbox = '';
           this.inlines(node.children);
           this.out += '</p>';
           this.cr();
@@ -144,7 +147,10 @@ class Renderer {
 
   private item(item: ListItemNode, tight: boolean): void {
     this.out += '<li>';
-    if (item.task) this.out += item.checked ? '<input checked="" disabled="" type="checkbox"> ' : '<input disabled="" type="checkbox"> ';
+    const box = !item.task ? '' : item.checked ? '<input checked="" disabled="" type="checkbox"> ' : '<input disabled="" type="checkbox"> ';
+    // In a loose item, inside the paragraph, as cmark-gfm writes it.
+    if (!tight && item.children[0]?.type === 'paragraph') this.checkbox = box;
+    else this.out += box;
     for (const child of item.children) this.block(child, tight);
     this.out += '</li>';
     this.cr();

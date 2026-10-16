@@ -4,100 +4,141 @@
 // the serializer and the typing rule that links a URL when a space is
 // typed after it.
 
-/** Characters of a domain segment. Non-ASCII letters and digits are allowed, as in cmark-gfm. */
-const reDomain = /(?:[\p{L}\p{N}_-]+)(?:\.[\p{L}\p{N}_-]+)*/uy;
-const reWww = /www\./iy;
 const reScheme = /(?:https?|ftp):\/\//iy;
-const reEmail = /[A-Za-z0-9._+-]+@[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+/g;
+const reAsciiAlnum = /[A-Za-z0-9]/;
 /** Trailing characters that are not part of a URL. */
-const TRAILING = '?!.,:*_~';
+const TRAILING = '?!.,:*_~\'"';
 
 /**
- * Whether a URL literal may start after `prev`: at the
- * start of a line, after whitespace, or after `*`, `_`, `~` or `(`.
+ * Whether a URL literal may start after `prev`, as in cmark-gfm. A `www.`
+ * literal starts at the start of the text, after a space, tab or line break, or after `*`,
+ * `_`, `~` or `(`. A scheme starts after anything but an ASCII letter, which
+ * would be part of the scheme: `0http://a.b` holds a link, `xhttp://a.b` none.
  */
-export function isLiteralBoundary(prev: string | undefined): boolean {
-  return prev === undefined || /[\s*_~(]/.test(prev);
+export function isLiteralBoundary(prev: string | undefined, www: boolean): boolean {
+  if (prev === undefined) return true;
+  return www ? /[ \t\n\r*_~(]/.test(prev) : !/[A-Za-z]/.test(prev);
 }
 
-/** A valid domain: segments separated by periods, at least one period, no "_" in the last two segments. */
+/**
+ * The end of a valid domain starting at `pos`, or -1, as cmark-gfm's
+ * `check_domain`: it reads ASCII letters, digits, "-", "_" and "." (and
+ * escaped characters) and stops at anything else; the text after it is still
+ * part of the URL. A `www.` domain needs a period. A "_" in either of the
+ * last two segments read rejects it, unless there are more than ten periods.
+ * As in cmark-gfm, the first character is not read, nor is the last one of
+ * the text, so `www.` at the very end is not a domain.
+ */
 function domainEnd(text: string, pos: number, requirePeriod: boolean): number {
-  reDomain.lastIndex = pos;
-  const m = reDomain.exec(text);
-  if (!m) return -1;
-  // A trailing "_" is punctuation after the domain, as in micromark:
-  // `_www.example.com_` is emphasis around a link.
-  const domain = m[0].replace(/_+$/, '');
-  const segments = domain.split('.');
-  if (segments.some((s) => s === '')) return -1;
-  if (requirePeriod && segments.length < 2) return -1;
-  if (segments.slice(-2).some((s) => s.includes('_'))) return -1;
-  return pos + domain.length;
+  let periods = 0;
+  let underscoresBefore = 0;
+  let underscores = 0;
+  let i = pos + 1;
+  for (; i < text.length - 1; i++) {
+    if (text[i] === '\\' && i < text.length - 2) i++;
+    const c = text[i]!;
+    if (c === '_') underscores++;
+    else if (c === '.') {
+      underscoresBefore = underscores;
+      underscores = 0;
+      periods++;
+    } else if (!reAsciiAlnum.test(c) && c !== '-') break;
+  }
+  if ((underscoresBefore > 0 || underscores > 0) && periods <= 10) return -1;
+  if (requirePeriod && periods === 0) return -1;
+  return i;
 }
 
-/** Trims trailing punctuation, unbalanced closing parentheses and entity-like endings. */
+/**
+ * Trims trailing punctuation, unbalanced closing parentheses and
+ * entity-like endings (`&hl;`), as cmark-gfm's `autolink_delim`.
+ */
 function trimEnd(text: string, start: number, end: number): number {
-  for (;;) {
+  let open = 0;
+  let close = 0;
+  for (let i = start; i < end; i++) {
+    if (text[i] === '(') open++;
+    else if (text[i] === ')') close++;
+  }
+  while (end > start) {
     const ch = text[end - 1]!;
     if (TRAILING.includes(ch)) {
       end--;
     } else if (ch === ')') {
-      let open = 0;
-      let close = 0;
-      for (let i = start; i < end; i++) {
-        if (text[i] === '(') open++;
-        else if (text[i] === ')') close++;
-      }
       if (close <= open) return end;
+      close--;
       end--;
     } else if (ch === ';') {
       // "&hl;" looks like an entity reference: leave it out. A lone ";" too.
       let i = end - 2;
-      while (i >= start && /[A-Za-z0-9]/.test(text[i]!)) i--;
-      end = i >= start && text[i] === '&' && i < end - 2 ? i : end - 1;
+      while (i > start && /[A-Za-z]/.test(text[i]!)) i--;
+      end = i < end - 2 && text[i] === '&' ? i : end - 1;
     } else {
       return end;
     }
-    if (end <= start) return end;
   }
+  return end;
 }
 
 /**
  * A `www.`, `http(s)://` or `ftp://` literal starting at `pos`: its end
- * (exclusive) and link destination, or null. The caller checks the boundary
- * before `pos`.
+ * (exclusive) and link destination, or null. `www.` and the scheme may be in
+ * any case, as on github.com. The caller checks the boundary before `pos`.
  */
 export function urlLiteralAt(text: string, pos: number): { end: number; href: string } | null {
-  let afterPrefix: number;
-  let www = false;
-  reWww.lastIndex = pos;
-  if (reWww.test(text)) {
-    afterPrefix = pos;
-    www = true;
+  let domainStart: number;
+  const www = text.slice(pos, pos + 4).toLowerCase() === 'www.';
+  if (www) {
+    domainStart = pos;
   } else {
     reScheme.lastIndex = pos;
     if (!reScheme.test(text)) return null;
-    afterPrefix = reScheme.lastIndex;
+    domainStart = reScheme.lastIndex;
+    // After a scheme the domain starts with a letter or digit: `http://-a` is text.
+    if (!/[\p{L}\p{N}]/u.test(text[domainStart] ?? '')) return null;
   }
-  const domain = domainEnd(text, afterPrefix, true);
+  // As in cmark-gfm, only a `www.` domain needs a period: `http://localhost:3000` is a link.
+  const domain = domainEnd(text, domainStart, www);
   if (domain < 0) return null;
   let end = domain;
-  while (end < text.length && !/[\s<]/.test(text[end]!)) end++;
+  // Only a space, tab or line break ends it (cmark-gfm's `cmark_isspace`).
+  while (end < text.length && !/[ \t\n\r<]/.test(text[end]!)) end++;
   end = trimEnd(text, pos, end);
-  if (end < domain || end <= afterPrefix) return null;
+  if (end <= domainStart) return null;
   const literal = text.slice(pos, end);
   return { end, href: www ? 'http://' + literal : literal };
 }
 
-/** E-mail literals in plain text: `[from, to)` ranges. */
+/**
+ * E-mail literals in plain text, as cmark-gfm finds them: `[from, to)`
+ * ranges. Before the "@", ASCII letters, digits, ".", "+", "-" and "_";
+ * after it, letters, digits, "-", "_" and periods followed by a letter or
+ * digit, with at least one period. The address ends with a letter, so
+ * `react@0.11.1` is not one.
+ */
 export function emailLiterals(text: string): { from: number; to: number }[] {
-  if (!text.includes('@')) return [];
   const out: { from: number; to: number }[] = [];
-  reEmail.lastIndex = 0;
-  for (const m of text.matchAll(reEmail)) {
-    const last = m[0][m[0].length - 1]!;
-    if (last === '-' || last === '_') continue;
-    out.push({ from: m.index!, to: m.index! + m[0].length });
+  let done = 0;
+  for (let at = text.indexOf('@'); at !== -1; at = text.indexOf('@', at + 1)) {
+    let from = at;
+    while (from > done && /[A-Za-z0-9.+\-_]/.test(text[from - 1]!)) from--;
+    if (from === at) continue;
+    let to = at;
+    let ats = 0;
+    let periods = 0;
+    for (; to < text.length; to++) {
+      const c = text[to]!;
+      if (reAsciiAlnum.test(c)) continue;
+      if (c === '@') {
+        // A second @ rejects the address, so the scan can stop (`a@a@a@…` stays linear).
+        if (++ats > 1) break;
+      } else if (c === '.' && reAsciiAlnum.test(text[to + 1] ?? '')) periods++;
+      else if (c !== '-' && c !== '_') break;
+    }
+    if (to - at < 2 || ats !== 1 || periods === 0 || !/[A-Za-z]/.test(text[to - 1]!)) continue;
+    out.push({ from, to });
+    done = to;
+    at = to - 1;
   }
   return out;
 }

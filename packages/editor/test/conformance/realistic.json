@@ -1,0 +1,254 @@
+[
+ {
+  "section": "Autolinks after CJK text",
+  "markdown": "链接：https://example.com"
+ },
+ {
+  "section": "Autolinks after CJK text",
+  "markdown": "中文https://example.com 中文"
+ },
+ {
+  "section": "Autolinks after CJK text",
+  "markdown": "请看https://example.com。"
+ },
+ {
+  "section": "Autolinks after CJK text",
+  "markdown": "地址:www.example.com，谢谢"
+ },
+ {
+  "section": "Autolinks after CJK text",
+  "markdown": "联系foo@bar.com"
+ },
+ {
+  "section": "Autolinks in quotes",
+  "markdown": "see \"https://example.com\" now"
+ },
+ {
+  "section": "Autolinks in quotes",
+  "markdown": "'https://example.com'"
+ },
+ {
+  "section": "Autolinks in quotes",
+  "markdown": "http://x.y\""
+ },
+ {
+  "section": "Autolinks in quotes",
+  "markdown": "http://x.y'"
+ },
+ {
+  "section": "Autolinks after punctuation",
+  "markdown": "url=https://example.com/a?b=1&c=2"
+ },
+ {
+  "section": "Autolinks after punctuation",
+  "markdown": "<b>https://example.com</b>"
+ },
+ {
+  "section": "Autolinks after punctuation",
+  "markdown": "[label]https://example.com"
+ },
+ {
+  "section": "Autolinks after punctuation",
+  "markdown": "(https://example.com)"
+ },
+ {
+  "section": "Autolinks",
+  "markdown": "https://localhost:3000"
+ },
+ {
+  "section": "Autolinks",
+  "markdown": "xhttps://x.com"
+ },
+ {
+  "section": "Autolinks",
+  "markdown": "foo@bar.com."
+ },
+ {
+  "section": "Autolinks",
+  "markdown": "a@b.co1."
+ },
+ {
+  "section": "Autolinks",
+  "markdown": "https://zh.wikipedia.org/wiki/中文"
+ },
+ {
+  "section": "Autolinks",
+  "markdown": "https://example.com/path_(x)"
+ },
+ {
+  "section": "Tables",
+  "markdown": "a\n:-:"
+ },
+ {
+  "section": "Tables",
+  "markdown": "Title\n| a |\n|---|\n| b |"
+ },
+ {
+  "section": "Tables",
+  "markdown": "| a | b |\n|---|---|\n| 1 | 2 |\n|"
+ },
+ {
+  "section": "Task lists",
+  "markdown": "- [ ]"
+ },
+ {
+  "section": "Task lists",
+  "markdown": "- [ ] "
+ },
+ {
+  "section": "Task lists",
+  "markdown": "> - [ ] task in quote"
+ },
+ {
+  "section": "Task lists",
+  "markdown": "- [ ] buy milk\n- [x] eggs\n  - [ ] nested"
+ },
+ {
+  "section": "Task lists",
+  "markdown": "1. [ ] ordered task"
+ },
+ {
+  "section": "Strikethrough",
+  "markdown": "~one~ ~~two~~ ~~~three~~~"
+ },
+ {
+  "section": "Strikethrough",
+  "markdown": "H~2~O and 2~3 days"
+ },
+ {
+  "section": "HTML",
+  "markdown": "<!a"
+ },
+ {
+  "section": "HTML",
+  "markdown": "<details>\n<summary>Title</summary>\n\nBody **bold**\n\n</details>"
+ },
+ {
+  "section": "HTML",
+  "markdown": "<div align=\"center\">\n\n**Release notes**\n\n</div>"
+ },
+ {
+  "section": "Line breaks",
+  "markdown": "line one\t\nline two"
+ },
+ {
+  "section": "Line breaks",
+  "markdown": "a  \nb\\\nc"
+ },
+ {
+  "section": "Lists",
+  "markdown": "- a\n- b\n+ c"
+ },
+ {
+  "section": "Lists",
+  "markdown": "1. a\n2. b\n3) c"
+ },
+ {
+  "section": "Lists",
+  "markdown": "- a\n\n- b"
+ },
+ {
+  "section": "Lists",
+  "markdown": "- a\n\n  b"
+ },
+ {
+  "section": "Lists",
+  "markdown": "* a\n  1. b\n     - c"
+ },
+ {
+  "section": "Quotes",
+  "markdown": "> a\n> - b\n> - c"
+ },
+ {
+  "section": "Quotes",
+  "markdown": "> [!NOTE]\n> Read this.\n> - item"
+ },
+ {
+  "section": "Quotes",
+  "markdown": "> # heading\n> text"
+ },
+ {
+  "section": "Quotes",
+  "markdown": ">"
+ },
+ {
+  "section": "Links",
+  "markdown": "[link](/uri \"title\")"
+ },
+ {
+  "section": "Links",
+  "markdown": "[](./target.md)"
+ },
+ {
+  "section": "Links",
+  "markdown": "[a](<b c>)"
+ },
+ {
+  "section": "Images",
+  "markdown": "![alt](/s.png \"title\")"
+ },
+ {
+  "section": "Entities",
+  "markdown": "foo&#10;&#10;bar"
+ },
+ {
+  "section": "Entities",
+  "markdown": "&nbsp;"
+ },
+ {
+  "section": "Empty lines",
+  "markdown": "a\n\n&nbsp;\n\nb"
+ },
+ {
+  "section": "Emphasis",
+  "markdown": "*foo **bar *baz* bim** bop*"
+ },
+ {
+  "section": "Emphasis",
+  "markdown": "**中文**加粗"
+ },
+ {
+  "section": "Emphasis",
+  "markdown": "中文**加粗**中文"
+ },
+ {
+  "section": "Emphasis",
+  "markdown": "**「引号」**后"
+ },
+ {
+  "section": "Code",
+  "markdown": "```js title\nx\n```"
+ },
+ {
+  "section": "Code",
+  "markdown": "    indented"
+ },
+ {
+  "section": "Headings",
+  "markdown": "## Notes #"
+ },
+ {
+  "section": "Headings",
+  "markdown": "#tag not a heading"
+ },
+ {
+  "section": "Setext",
+  "markdown": "Title\n---"
+ },
+ {
+  "section": "Link reference definitions",
+  "markdown": "[a]: /u\n''x\n\n[a]"
+ },
+ {
+  "section": "Link reference definitions",
+  "markdown": "[a]: /ub\"\n(x)\n\n[a]"
+ },
+ {
+  "section": "Lists",
+  "markdown": "- a\n\n  [b]: /u\n- c"
+ },
+ {
+  "section": "Lists",
+  "markdown": "- 1. a\n- b"
+ }
+]

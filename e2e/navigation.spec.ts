@@ -116,10 +116,16 @@ test('mouse: triple click selects one block, and typing replaces only that block
   expect(await blocks(page)).toEqual(['p:X', 'p:second', 'ul0:']);
 });
 
-/** The point on screen just before character `offset` of the `n`th paragraph's text. */
+/**
+ * The point on screen just before character `offset` of the `n`th paragraph's
+ * text. Measured after two frames: a loaded document's blocks have
+ * `content-visibility: auto`, and until the first frame decides they are on
+ * screen, WebKit gives their text an empty rectangle at 0,0.
+ */
 const pointAt = (page: Page, n: number, offset: number) =>
   page.evaluate(
-    ([n, offset]) => {
+    async ([n, offset]) => {
+      for (let i = 0; i < 2; i++) await new Promise(requestAnimationFrame);
       const text = document.querySelectorAll('#editor p')[n]!.firstChild!;
       const range = document.createRange();
       range.setStart(text, offset);

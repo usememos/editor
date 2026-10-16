@@ -36,18 +36,20 @@ function ApiDemo() {
   const [value, setValue] = useState('start');
   const [placeholder, setPlaceholder] = useState('First placeholder');
   const [editable, setEditable] = useState(true);
+  const [mode, setMode] = useState<'rich' | 'source'>('rich');
   const [hookOutput, setHookOutput] = useState('');
   const editor = useEditor({ content: '# From useEditor', autofocus: 'end', onChange: setHookOutput });
   return (
     <>
       <div className="comment" id="controlled">
-        <MarkdownEditor value={value} onChange={setValue} placeholder={placeholder} editable={editable} />
+        <MarkdownEditor value={value} onChange={setValue} placeholder={placeholder} editable={editable} mode={mode} />
       </div>
       <div className="row">
         <button id="set-outside" onClick={() => setValue('from outside')}>Set value</button>
         <button id="clear" onClick={() => setValue('')}>Clear</button>
         <button id="placeholder" onClick={() => setPlaceholder('Second placeholder')}>Placeholder</button>
         <button id="editable" onClick={() => setEditable((e) => !e)}>Editable</button>
+        <button id="mode" onClick={() => setMode((m) => (m === 'rich' ? 'source' : 'rich'))}>Source</button>
       </div>
       <pre id="value">{value}</pre>
       <div className="comment" id="hook">

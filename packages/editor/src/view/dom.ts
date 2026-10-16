@@ -27,6 +27,7 @@ import {
   quoteKind,
   sameQuote,
   sliceInline,
+  sameLink,
 } from '../model';
 import type { SyntaxView } from '../extension';
 import type { Labels } from '../labels';
@@ -110,10 +111,13 @@ export type ResolveUrl = (url: string, kind: UrlKind) => string | null;
  * for everything else.
  */
 export const defaultResolveUrl: ResolveUrl = (url) => {
-  const trimmed = url.trim();
-  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(trimmed);
-  if (!scheme) return trimmed; // relative URL or fragment
-  return ['http', 'https', 'mailto', 'tel'].includes(scheme[1]!.toLowerCase()) ? trimmed : null;
+  // Read as a browser reads it (the WHATWG URL parser): without leading and
+  // trailing control characters and spaces, or any tab or line break. Else
+  // `java\tscript:` passes as relative and runs as `javascript:`.
+  const read = url.replace(/^[\u0000- ]+|[\u0000- ]+$/g, '').replace(/[\t\n\r]/g, '');
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(read);
+  if (!scheme) return read; // relative URL or fragment
+  return ['http', 'https', 'mailto', 'tel'].includes(scheme[1]!.toLowerCase()) ? read : null;
 };
 
 /** What rendering needs besides the block. */
@@ -139,6 +143,8 @@ export interface RenderContext {
   readonly icon?: (name: IconName) => Node | null;
   /** Code blocks get a copy button. */
   readonly codeCopy?: boolean;
+  /** The document is source mode's one code block: render it as plain text. */
+  readonly source?: boolean;
   /** An image failed to load and its element was replaced by the unavailable state. */
   readonly onImageError?: () => void;
   /** A loaded image element with this `src` from the elements being replaced, to show again instead of a new one. */
@@ -254,6 +260,16 @@ function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HT
       break;
     }
     case 'code': {
+      if (ctx.source) {
+        // Source mode: the whole document as text, with no bar, view or decorations.
+        root = el('div');
+        root.dir = 'auto';
+        root.spellcheck = false;
+        const text = el('div', 'mbe-source-text');
+        fillContent(text, block.content, ctx, block, undefined, undefined, false);
+        root.appendChild(text);
+        break;
+      }
       // Rendered by a view of its language, such as a diagram, unless the selection is in it.
       const view = reveal?.has(REVEAL_BLOCK) ? null : ctx.view?.(codeViewName(block.language), inlineText(block.content), 'block');
       if (view) {
@@ -362,7 +378,8 @@ function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HT
   }
   root.setAttribute(BLOCK_ATTR, block.id);
   // One className write instead of several classList calls: this runs for every block on load.
-  const name = block.type === 'listItem' ? 'list-item' : block.type === 'detailsEnd' ? 'details-end' : block.type;
+  const name =
+    block.type === 'listItem' ? 'list-item' : block.type === 'detailsEnd' ? 'details-end' : block.type === 'code' && ctx.source ? 'source' : block.type;
   let className = `${root.className ? root.className + ' ' : ''}mbe-block mbe-${name}`;
   if (block.type === 'listItem' && block.checked) className += ' mbe-checked';
   if ('content' in block && inlineLength(block.content) === 0) className += ' mbe-empty';
@@ -391,7 +408,7 @@ function fillContent(
     return;
   }
   const decorations =
-    block.type === 'code' ? (ctx.decorateCode?.(block) ?? []) : decorated && ctx.decorate ? ctx.decorate(block, inline, cell) : [];
+    block.type === 'code' ? (ctx.source ? [] : (ctx.decorateCode?.(block) ?? [])) : decorated && ctx.decorate ? ctx.decorate(block, inline, cell) : [];
   const only = inline.length === 1 ? inline[0]! : null;
   if (only && decorations.length === 0 && only.marks.length === 0 && !only.link && !only.token && !only.image) {
     // Plain text, the most common content: one text node.
@@ -704,8 +721,9 @@ function renderInline(
       const href = ctx.resolveUrl(span.link, 'link');
       if (href !== null) a.setAttribute('href', href);
       a.dataset.href = span.link;
+      if (span.linkTitle) a.title = span.linkTitle;
       a.className = classes('mbe-link', ctx.classes.link);
-      while (i < pieces.length && pieces[i]!.span.link === span.link) {
+      while (i < pieces.length && sameLink(pieces[i]!.span, span)) {
         a.appendChild(render(pieces[i]!));
         i++;
       }
@@ -862,6 +880,8 @@ export class BlockRenderer {
   icon?: (name: IconName) => Node | null;
   /** Code blocks get a copy button. */
   codeCopy = false;
+  /** Source mode: the code block renders as plain text. Changing it needs a forced render. */
+  source = false;
   /** An image failed to load and now shows as unavailable. */
   onImageError?: () => void;
   /** Collapsible sections shown collapsed, by the ID of their title block. */
@@ -901,6 +921,7 @@ export class BlockRenderer {
       classes: this.classes,
       icon: this.icon,
       codeCopy: this.codeCopy,
+      source: this.source,
       onImageError: this.onImageError,
       loadedImage: (src) => this.loadedImages.get(src)?.shift(),
     };
@@ -1098,6 +1119,8 @@ function updateNeighborMarks(
   labels: Labels,
 ): void {
   const counters: (number | undefined)[] = [];
+  /** Whether the current list's last top-level item is numbered. */
+  let topOrdered: boolean | undefined;
   /** The open collapsible sections around the block: whether each is collapsed. */
   const sections: boolean[] = [];
   doc.blocks.forEach((block, i) => {
@@ -1113,16 +1136,17 @@ function updateNeighborMarks(
       setFlag(el, QUOTE_CONTINUED_ATTR, sameQuote(block, doc.blocks[i + 1]));
     }
     // A list ends where a quote starts or ends.
-    if (block.type !== 'listItem' || before?.type !== 'listItem' || quoteKind(before) !== quoteKind(block)) counters.length = 0;
+    if (block.type !== 'listItem' || before?.type !== 'listItem' || quoteKind(before) !== quoteKind(block)) {
+      counters.length = 0;
+      topOrdered = undefined;
+    }
     if (block.type !== 'listItem') return;
     // A list starts after a non-list block, or where a top-level item switches
-    // between numbered and not. The stylesheet puts the block gap above it.
+    // between numbered and not from the top-level item above it (nested items
+    // between them do not count). The stylesheet puts the block gap above it.
     const ordered = block.listType === 'ordered';
-    setFlag(
-      el,
-      LIST_START_ATTR,
-      counters.length === 0 || (block.indent === 0 && before?.type === 'listItem' && ordered !== (before.listType === 'ordered')),
-    );
+    setFlag(el, LIST_START_ATTR, counters.length === 0 || (block.indent === 0 && topOrdered !== undefined && ordered !== topOrdered));
+    if (block.indent === 0) topOrdered = ordered;
     counters.length = block.indent + 1;
     if (!ordered) {
       counters[block.indent] = undefined;

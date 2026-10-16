@@ -1,0 +1,7 @@
+{
+ ">": "bug: an empty quote (>) shows as an empty paragraph",
+ "*<pre>\n~": "small: a soft line break right after an inline <pre> that the browser moves out of the paragraph shows as a space",
+ "'<pre>\n]": "small: a soft line break right after an inline <pre> that the browser moves out of the paragraph shows as a space",
+ "___<a h=\"\">_~": "small: emphasis around only an inline HTML tag is dropped; it holds no text",
+ "_<pre>[](/v \"t\")": "small: a link with no text inside an inline <pre> that the browser moves out of the paragraph is dropped; it holds no text"
+}

@@ -271,7 +271,7 @@ const MAX_INLINE_NESTING = 100;
 /** The deepest subtree among the siblings after `from`, up to `to` (exclusive). */
 function innerDepth(from: Node, to: Node | null): number {
   let depth = 0;
-  for (let n = from.next; n && n !== to; n = n.next) if (n.depth >= depth) depth = n.depth + 1;
+  for (let n = from.next; n && n !== to && depth < MAX_INLINE_NESTING; n = n.next) if (n.depth >= depth) depth = n.depth + 1;
   return depth;
 }
 
@@ -379,6 +379,8 @@ class InlineParser {
   private backticksAfter = new Map<number, number>();
   /** Per opening quote character, a position from which no link title can close. */
   private titleFailedFrom = new Map<string, number>();
+  /** The last index of each end of raw HTML (`-->`, `?>`, `]]>`, `>`) in the subject, found once. */
+  private lastEnds = new Map<string, number>();
 
   /** Inline syntax extensions by trigger character code. */
   private readonly triggers = new Map<number, InlineSyntax[]>();
@@ -493,7 +495,7 @@ class InlineParser {
       const reCandidate = /www\.|(?:https?|ftp):\/\//gi;
       for (const c of m[0].matchAll(reCandidate)) {
         const at = start + c.index!;
-        if (!isLiteralBoundary(this.subject[at - 1])) continue;
+        if (!isLiteralBoundary(this.subject[at - 1], c[0].toLowerCase() === 'www.')) continue;
         const url = urlLiteralAt(this.subject, at);
         if (!url) continue;
         if (at > start) block.append(new Node('text', this.subject.slice(start, at)));
@@ -606,10 +608,33 @@ class InlineParser {
   }
 
   private parseHtmlTag(block: Node): boolean {
+    // A comment, processing instruction, CDATA section or declaration whose
+    // end is nowhere after it cannot match. Checking first keeps `<!--<!--…`
+    // linear: the pattern would scan to the end of the text at each one.
+    const s = this.subject;
+    const p = this.pos;
+    if (s.startsWith('<!--', p)) {
+      if (this.lastEnd('-->') < p + 2) return false;
+    } else if (s.startsWith('<?', p)) {
+      if (this.lastEnd('?>') < p + 1) return false;
+    } else if (s.startsWith('<![CDATA[', p)) {
+      if (this.lastEnd(']]>') < p + 9) return false;
+    } else if (s.startsWith('<!', p) && this.lastEnd('>') < p) {
+      return false;
+    }
     const m = this.match(reHtmlTag);
     if (!m) return false;
     block.append(new Node('html', m[0]));
     return true;
+  }
+
+  private lastEnd(end: string): number {
+    let at = this.lastEnds.get(end);
+    if (at === undefined) {
+      at = this.subject.lastIndexOf(end);
+      this.lastEnds.set(end, at);
+    }
+    return at;
   }
 
   private parseEntity(block: Node): boolean {
@@ -643,14 +668,19 @@ class InlineParser {
     const leftFlanking = !afterWs && (!afterPunct || beforeWs || beforePunct);
     const rightFlanking = !beforeWs && (!beforePunct || afterWs || afterPunct);
 
-    let canOpen: boolean;
-    let canClose: boolean;
+    let canOpen = leftFlanking;
+    let canClose = rightFlanking;
+    if (cc !== C_TILDE) {
+      // As in micromark and cmark-gfm, a `*` or `_` run next to a `~`
+      // counts as flanking on that side, so the closing `***` in
+      // `***~~a~~***b` closes.
+      if (after === '~') canOpen = true;
+      if (before === '~') canClose = true;
+    }
     if (cc === C_UNDERSCORE) {
-      canOpen = leftFlanking && (!rightFlanking || beforePunct);
-      canClose = rightFlanking && (!leftFlanking || afterPunct);
-    } else {
-      canOpen = leftFlanking;
-      canClose = rightFlanking;
+      const open = canOpen;
+      canOpen = open && (beforeWs || beforePunct || !canClose);
+      canClose = canClose && (afterWs || afterPunct || !open);
     }
     // GFM strikethrough uses runs of one or two tildes only.
     if (cc === C_TILDE && count > 2) canOpen = canClose = false;
@@ -736,7 +766,11 @@ class InlineParser {
         closer.count -= use;
         // Beyond the nesting limit the delimiters stay literal text.
         const literal = innerDepth(openerNode, closerNode) >= MAX_INLINE_NESTING;
-        if (!literal) {
+        if (literal) {
+          // Content around these delimiters is too deep too. Marking them so
+          // stops the next search at them: `*a **a *a …` stays linear.
+          openerNode.depth = closerNode.depth = MAX_INLINE_NESTING;
+        } else {
           openerNode.value = openerNode.value.slice(0, openerNode.value.length - use);
           closerNode.value = closerNode.value.slice(0, closerNode.value.length - use);
           const wrapper = new Node(type);
@@ -990,21 +1024,19 @@ class InlineParser {
     this.spnl();
     let title: string | null = null;
     if (this.pos !== beforeTitle) title = this.parseLinkTitle();
-    if (title === null) {
-      title = '';
-      this.pos = beforeTitle;
-    }
+    if (title === null) this.pos = beforeTitle;
     // The definition must end at the end of a line. If a title was found but
-    // is followed by more text, the definition may still be valid without it.
+    // is followed by more text (an empty one too: `""x`), the definition may
+    // still be valid without it.
     if (!this.match(reSpaceAtEndOfLine)) {
-      if (title === '') return 0;
-      title = '';
+      if (title === null) return 0;
+      title = null;
       this.pos = beforeTitle;
       if (!this.match(reSpaceAtEndOfLine)) return 0;
     }
     const label = normalizeLabel(rawLabel);
     if (label === '') return 0;
-    if (!this.refs.has(label)) this.refs.set(label, { destination: dest, title });
+    if (!this.refs.has(label)) this.refs.set(label, { destination: dest, title: title ?? '' });
     return this.pos;
   }
 }
