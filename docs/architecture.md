@@ -371,7 +371,7 @@ The browser tests run against the playground built with Vite and served as stati
 
 `e2e/fuzz.spec.ts` runs two fixed seeds with the other browser tests. A nightly workflow (`.github/workflows/fuzz.yml`) runs 30 new seeds in Chromium, Firefox and WebKit, numbered from the date. A failure prints its seed; `FUZZ_SEED=<seed>` replays it.
 
-CI (`.github/workflows/ci.yml`) runs the typecheck, unit tests, timing suite, build and the browser tests in Chromium (plain and themed) on every push to main and every pull request, except changes to docs alone. The browser tests in Firefox and WebKit run on pull requests, by hand, and each night when main has a commit from the last day: the repo is private, so CI minutes are billed, and these four jobs were two thirds of them. Firefox and WebKit each run in two shards, as four jobs side by side. Tests that drive IME through the Chrome DevTools Protocol run in Chromium only. The timing gates are left out because shared runners are too noisy for them.
+CI (`.github/workflows/ci.yml`) runs the typecheck, unit tests, timing suite, build and the browser tests in Chromium (plain and themed), Firefox and WebKit on every push to main and every pull request. Firefox and WebKit each run in two shards, as four jobs side by side. Tests that drive IME through the Chrome DevTools Protocol run in Chromium only. The timing gates are left out because shared runners are too noisy for them.
 
 IME is simulated through the Chrome DevTools Protocol. Real input methods are covered by the manual checklist in `docs/ime-checklist.md`.
 

@@ -1,27 +1,17 @@
 name: CI
 
-# The repo is private, so every minute here is billed. Each push and pull
-# request runs the checks and the browser tests in Chromium. Firefox and
-# WebKit run on pull requests, by hand, and each night when main changed
-# that day. Changes to docs alone run nothing.
 on:
   push:
     branches: [main]
-    paths-ignore: ['docs/**', '*.md', 'packages/*/*.md']
   pull_request:
-    paths-ignore: ['docs/**', '*.md', 'packages/*/*.md']
-  schedule:
-    - cron: '0 17 * * *'
   workflow_dispatch:
 
 concurrency:
-  # The nightly run must not cancel a push's run, or a push the nightly run.
-  group: ci-${{ github.event_name }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   check:
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +34,6 @@ jobs:
       - run: npm pack --dry-run -w @usememos/editor
 
   e2e:
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,21 +51,8 @@ jobs:
           path: test-results
           retention-days: 7
 
-  # The nightly run tests main only when it has a commit from the last day.
-  changed:
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    outputs:
-      recent: ${{ steps.age.outputs.recent }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: age
-        run: echo "recent=$(( $(date +%s) - $(git log -1 --format=%ct) < 86400 ))" >> "$GITHUB_OUTPUT"
-
   # Each browser in two shards, so the four jobs run side by side.
   e2e-firefox-webkit:
-    needs: changed
-    if: ${{ !cancelled() && github.event_name != 'push' && (github.event_name != 'schedule' || needs.changed.outputs.recent == '1') }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
