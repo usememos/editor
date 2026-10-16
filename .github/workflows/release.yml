@@ -1,12 +1,9 @@
 # Publishes @usememos/editor to npm. Run it by hand from the Actions tab
-# ("Release", "Run workflow") on main. The version comes from today's date
-# (UTC) and the versions already on npm, following
-# memos' CalVer (usememos discussion 6351): the first release in October
-# 2026 is 26.10, the next ones that month 26.10.1, 26.10.2, and so on. Ticking "Release candidate" publishes the next
-# version with -rc.N (26.10-rc.1) to the npm "next" tag; the rest go to
-# "latest". npm needs three numbers without leading zeros, so 26.10 is
-# published as 26.10.0 and 27.04 as 27.4.0. Releases are not tagged in
-# git.
+# ("Release", "Run workflow") on main. The version follows memos' CalVer
+# (usememos discussion 6351): year.month.n, where n counts the releases
+# that month on npm from 0. The first release in October 2026 is 26.10.0,
+# the next 26.10.1; the first in April 2027 is 27.4.0. Releases are not
+# tagged in git, and there are no release candidates.
 # Authenticates with npm trusted publishing (OIDC), like usememos/mui: no
 # token or secret. The package's npm settings must list this repository and
 # release.yml as a trusted publisher.
@@ -14,11 +11,6 @@ name: Release
 
 on:
   workflow_dispatch:
-    inputs:
-      rc:
-        description: 'Release candidate'
-        type: boolean
-        default: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -40,48 +32,25 @@ jobs:
       # Before the version is set, so package.json still matches the lockfile.
       - run: npm ci
       - name: Work out the version
-        id: version
-        env:
-          RC: ${{ inputs.rc }}
         run: |
           if [ "$GITHUB_REF" != "refs/heads/main" ]; then
             echo "Run this workflow on main"
             exit 1
           fi
-          month=$(date -u +%y.%m)
-          # Versions already on npm, written back in CalVer form
-          # (26.10.0 -> 26.10, 27.4.2 -> 27.04.2).
-          published=$(npm view @usememos/editor versions --json 2>/dev/null || echo '[]')
-          released=$(echo "$published" | node -e '
-            const list = [].concat(JSON.parse(require("fs").readFileSync(0, "utf8") || "[]"));
-            for (const v of list) {
-              const m = /^(\d+)\.(\d+)\.(\d+)(-rc\.\d+)?$/.exec(v);
-              if (m) console.log(`${m[1]}.${m[2].padStart(2, "0")}${m[3] === "0" ? "" : "." + m[3]}${m[4] ?? ""}`);
-            }' | sort -u)
-          esc=$(echo "$month" | sed 's/\./\\./')
-          # Releases this month: 26.10, 26.10.1, ... The next one counts on.
-          finals=$(echo "$released" | grep -E "^$esc(\.[0-9]+)?$" || true)
-          if [ -z "$finals" ]; then
-            version=$month
-          else
-            last=$(echo "$finals" | sed -E "s/^$esc\.?//; s/^$/0/" | sort -n | tail -1)
-            version="$month.$((last + 1))"
-          fi
-          pre=""
-          if [ "$RC" = "true" ]; then
-            vesc=$(echo "$version" | sed 's/\./\\./g')
-            n=$(echo "$released" | grep -E "^$vesc-rc\.[0-9]+$" | sed -E 's/.*-rc\.//' | sort -n | tail -1 || true)
-            pre="-rc.$(( ${n:-0} + 1 ))"
-          fi
-          core=${version#*.}
-          mm=${core%%.*}
-          point=0
-          [ "$core" != "$mm" ] && point=${core#*.}
-          npm_version="${version%%.*}.$((10#$mm)).$point$pre"
-          echo "Publishing $version$pre as $npm_version"
-          npm pkg set version="$npm_version" -w @usememos/editor
-          if [ -n "$pre" ]; then echo "dist_tag=next" >> "$GITHUB_OUTPUT"; else echo "dist_tag=latest" >> "$GITHUB_OUTPUT"; fi
+          month=$(date -u +%y.%-m)
+          # Fails the run if npm cannot be read, rather than guess a version.
+          versions=$(npm view @usememos/editor versions --json)
+          # The highest n already on npm for this month, or -1 if none.
+          last=$(echo "$versions" | MONTH=$month node -e '
+            const list = [].concat(JSON.parse(require("fs").readFileSync(0, "utf8")));
+            const prefix = process.env.MONTH + ".";
+            const ns = list.filter((v) => v.startsWith(prefix) && /^\d+$/.test(v.slice(prefix.length)));
+            console.log(Math.max(-1, ...ns.map((v) => Number(v.slice(prefix.length)))));
+          ')
+          version="$month.$((last + 1))"
+          echo "Publishing $version"
+          npm pkg set version="$version" -w @usememos/editor
       - run: npm run typecheck
       - run: npm test
       # prepack runs the build.
-      - run: npm publish -w @usememos/editor --access public --tag ${{ steps.version.outputs.dist_tag }}
+      - run: npm publish -w @usememos/editor --access public

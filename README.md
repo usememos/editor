@@ -6,7 +6,7 @@ A block editor for Markdown, for React or any web app.
 - Block editing: slash menu, a formatting toolbar, Markdown shortcuts, and a block handle on tables, code blocks and images that stand alone, which opens the block menu.
 - One package, `@usememos/editor`, with zero runtime dependencies. It works without a framework, and `@usememos/editor/react` is a thin React wrapper.
 
-Status: early releases, published to npm as [`@usememos/editor`](https://www.npmjs.com/package/@usememos/editor). Versions follow memos' CalVer (`26.10`, `26.10.1`) and do not signal breaking changes, so pin an exact version. [docs/syntax.md](docs/syntax.md) specifies the Markdown it reads and writes, and [docs/architecture.md](docs/architecture.md) explains how it works.
+Status: early releases, published to npm as [`@usememos/editor`](https://www.npmjs.com/package/@usememos/editor). Versions follow memos' CalVer (`26.10.0`, `26.10.1`) and do not signal breaking changes, so pin an exact version. [docs/syntax.md](docs/syntax.md) specifies the Markdown it reads and writes, and [docs/architecture.md](docs/architecture.md) explains how it works.
 
 ## Use it
 
