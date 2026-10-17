@@ -10,7 +10,7 @@ import { attach } from './popup';
 const MIN_WIDTH = 24;
 /** How close a width must come to another image's width or the column's to snap to it. */
 const SNAP = 8;
-/** The shortest a handle is (`min-height` in base.css): a frame with less room than that shows none. */
+/** The shortest a handle is (`min-height` in base.css): an image clipped to less than that shows no handles. A whole image that small still does, as before. */
 const MIN_HANDLE = 16;
 
 type Side = 'left' | 'right';
@@ -167,7 +167,7 @@ export class ResizeHandles {
     // its middle stay inside the scrolling container that clips the image
     // instead of floating over whatever is below it.
     const shown = visibleRect(img, rect);
-    if (!shown || shown.width < MIN_HANDLE || shown.height < MIN_HANDLE) {
+    if (!shown || shown.width < Math.min(rect.width, MIN_HANDLE) || shown.height < Math.min(rect.height, MIN_HANDLE)) {
       this.frame.hidden = true;
       return;
     }

@@ -104,7 +104,9 @@ test('dragging a resize handle resizes the image as one undo step', async ({ pag
 });
 
 test('the resize handles stay inside a scrolling container shorter than the image', async ({ page }) => {
-  await open(page, '![tall](/img/500x1400.svg)\n');
+  // Text below the image, so the container can scroll the image out of view.
+  const below = Array.from({ length: 20 }, (_, i) => `Paragraph ${i + 1}.`).join('\n\n') + '\n';
+  await open(page, '![tall](/img/500x1400.svg)\n\n' + below);
   // The memos composer: a scrolling wrapper around the editor, shorter than the image.
   const card = page.locator('.card');
   await page.evaluate(() => {
@@ -144,7 +146,7 @@ test('the resize handles stay inside a scrolling container shorter than the imag
   await expect(resizeHandle(page, 'right')).toBeVisible();
   // Resizing from the clipped frame still works on the image.
   await dragHandle(page, 'right', -100);
-  expect(await md(page)).toBe('![tall|400](/img/500x1400.svg)\n');
+  expect(await md(page)).toBe('![tall|400](/img/500x1400.svg)\n\n' + below);
   expect((await image(page).boundingBox())!.width).toBeCloseTo(400, 0);
 });
 
