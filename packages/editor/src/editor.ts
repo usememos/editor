@@ -65,6 +65,7 @@ import {
   quoteKind,
 } from './model';
 import { FormatToolbar, InputPopover, type ToolbarItem } from './ui/toolbar';
+import { ImageToolbar } from './ui/imageToolbar';
 import { BlockHandle } from './ui/blockHandle';
 import { LinkCard, type LinkTarget } from './ui/linkCard';
 import { ResizeHandles, type ImageTarget } from './ui/resizeHandles';
@@ -418,7 +419,7 @@ export class Editor {
   private focused = false;
   /** A mouse button is down in the editor. Rendered views keep their state until it is released, so a drag is not disturbed. */
   private pointerDown = false;
-  /** The selection the formatting toolbar was closed for with Escape. It stays closed until the selection changes. */
+  /** The selection the formatting or image toolbar was closed for with Escape. It stays closed until the selection changes. */
   private toolbarClosedFor: Selection | null = null;
   /** Handling a key press, typed text, a paste or a drop: changes then scroll the caret into view. */
   private typing = 0;
@@ -433,6 +434,7 @@ export class Editor {
   private readonly suggestions: SuggestionController;
   private readonly blockMenu: Menu;
   private readonly toolbar: FormatToolbar | null;
+  private readonly imageToolbar: ImageToolbar | null;
   /** The link popover, and the field for an image's alt text. */
   private readonly inputPopover: InputPopover;
   private readonly blockHandle: BlockHandle;
@@ -551,6 +553,16 @@ export class Editor {
     this.inputPopover = new InputPopover(this);
     this.toolbar = options.toolbar === false ? null : new FormatToolbar(this, typeof options.toolbar === 'object' ? options.toolbar.items : undefined);
     if (this.toolbar) this.toolbar.onMenuChange = () => this.syncActiveDescendant();
+    this.imageToolbar =
+      options.toolbar === false
+        ? null
+        : new ImageToolbar(this, {
+            // An image without an alignment sits on the left, so Left removes the word.
+            align: (target, align) => this.updateImageAt(target.pos, { align: align === 'left' ? null : align }),
+            altText: (target) => this.editAltText(target.pos, target.image.alt),
+            resetSize: (target) => this.updateImageAt(target.pos, { width: null }),
+            remove: (target) => this.deleteImageAt(target.pos),
+          });
     this.blockHandle = new BlockHandle(this);
     this.linkCard =
       options.linkCard === false
@@ -1279,6 +1291,7 @@ export class Editor {
     for (const widget of [...this.widgets]) widget.remove();
     this.blockMenu.destroy();
     this.toolbar?.destroy();
+    this.imageToolbar?.destroy();
     this.inputPopover.destroy();
     this.blockHandle.destroy();
     this.linkCard?.destroy();
@@ -2003,6 +2016,7 @@ export class Editor {
     // Marks chosen before composing (Mod-B, then compose) apply to all of the composed text.
     this.composition = { blockId: this.state.selection.focus.blockId, marks: this.state.storedMarks, recorded: false };
     this.toolbar?.hide();
+    this.imageToolbar?.hide();
   }
 
   private onCompositionEnd(e: Event): void {
@@ -2211,10 +2225,11 @@ export class Editor {
       if (e.key === 'Escape') return handled(() => (menu === this.blockMenu ? this.closeBlockMenu() : this.toolbar!.closeMenu()));
     }
 
-    if (e.key === 'Escape' && this.toolbar?.isOpen) {
+    if (e.key === 'Escape' && (this.toolbar?.isOpen || this.imageToolbar?.isOpen)) {
       return handled(() => {
         this.toolbarClosedFor = this.state.selection;
-        this.toolbar!.hide();
+        this.toolbar?.hide();
+        this.imageToolbar?.hide();
       });
     }
     if (this.readOnly) return;
@@ -2555,7 +2570,7 @@ export class Editor {
     this.blockHandle.hide();
     this.linkCard?.reposition();
     this.resizeHandles.reposition();
-    if (this.suggestions.isActive || this.toolbar?.isOpen || this.blockMenu.isOpen) this.updateUi();
+    if (this.suggestions.isActive || this.toolbar?.isOpen || this.imageToolbar?.isOpen || this.blockMenu.isOpen) this.updateUi();
   }
 
   // -------------------------------------------------------------------------
@@ -2786,6 +2801,7 @@ export class Editor {
     this.history.breakGroup();
     this.suggestions.close();
     this.toolbar?.hide();
+    this.imageToolbar?.hide();
     this.blockMenu.hide();
     this.refreshRevealed();
     this.paintBlockSelection();
@@ -3045,6 +3061,7 @@ export class Editor {
     this.dropBlockSelection();
     this.suggestions.close();
     this.toolbar?.hide();
+    this.imageToolbar?.hide();
     // Keep the caret in the table cell for table actions; select the image of an image block;
     // otherwise move the caret into the block. Either way the editor takes focus, so the menu's
     // keys work and a press outside closes it.
@@ -3077,7 +3094,8 @@ export class Editor {
 
   private closeBlockMenu(): void {
     this.blockMenu.hide();
-    this.syncActiveDescendant();
+    // The image toolbar, hidden behind the menu, comes back.
+    this.updateUi();
   }
 
   /**
@@ -3145,16 +3163,32 @@ export class Editor {
 
     this.suggestions.update(focused);
 
-    // The selected image: an outline and its handles.
+    // The selected image: an outline, its handles and its toolbar.
     const image = focused && !this.readOnly && !this.blockSel ? this.imageTargetAt(this.state) : null;
     this.paintSelectedImage(image?.el ?? null);
     this.resizeHandles.update(image);
 
+    // A toolbar closed with Escape stays closed for that selection.
+    const closed = this.toolbarClosedFor;
+    if (closed && !(samePosition(closed.anchor, this.state.selection.anchor) && samePosition(closed.focus, pos))) this.toolbarClosedFor = null;
+
+    // Image toolbar, over the selected image.
+    if (this.imageToolbar) {
+      const show =
+        image &&
+        !this.toolbarClosedFor &&
+        !this.composing &&
+        !this.suggestions.isActive &&
+        !this.blockMenu.isOpen &&
+        !this.inputPopover.isOpen &&
+        !this.resizeHandles.isDragging;
+      if (show) this.imageToolbar.show(image, cmd.selectedImageBlock(this.state) !== null);
+      else this.imageToolbar.hide();
+    }
+
     // Formatting toolbar.
     if (this.toolbar) {
       const block = this.state.doc.blocks.find((b) => b.id === pos.blockId);
-      const closed = this.toolbarClosedFor;
-      if (closed && !(samePosition(closed.anchor, this.state.selection.anchor) && samePosition(closed.focus, pos))) this.toolbarClosedFor = null;
       const show =
         !this.toolbarClosedFor &&
         focused &&
@@ -3359,19 +3393,34 @@ export class Editor {
   }
 
   /**
+   * @internal
    * Opens the alt text field under the image after `pos`. Enter saves the text,
    * Escape keeps the old one. Either way the image stays selected.
    */
-  private editAltText(pos: Position, alt: string): void {
-    // Opening the block menu selected the image.
+  editAltText(pos: Position, alt: string): void {
+    // Opening the block menu or the image toolbar selected the image.
     const rect = (this.imageTargetAt(this.state)?.el ?? this.blockElement(pos.blockId))?.getBoundingClientRect();
     if (!rect) return;
+    this.imageToolbar?.hide();
     const { labels } = this;
     const options = { value: alt, label: labels.altText, placeholder: labels.altTextPlaceholder, type: 'text' } as const;
     this.inputPopover.open(rect, options, (value) => {
       if (value !== null) this.updateImageAt(pos, { alt: value });
       else this.current = cmd.selectImage(this.state, pos);
       this.focus();
+    });
+  }
+
+  /**
+   * @internal
+   * Deletes the image after `pos`: the whole block of an image block, as
+   * Backspace on the selected image does, else the image alone.
+   */
+  deleteImageAt(pos: Position): void {
+    this.run((s) => {
+      const selected = cmd.selectImage(s, pos);
+      if (selected === s) return null;
+      return cmd.selectedImageBlock(selected) ? cmd.deleteBlock(selected, pos.blockId) : cmd.deleteSelection(selected);
     });
   }
 
@@ -3392,6 +3441,7 @@ export class Editor {
     this.suggestions.close();
     this.blockMenu.hide();
     this.toolbar?.hide();
+    this.imageToolbar?.hide();
     this.blockHandle.hide();
     this.linkCard?.setCaret(null);
     this.resizeHandles.hide();

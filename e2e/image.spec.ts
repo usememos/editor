@@ -417,3 +417,179 @@ test('an image block lays out the same before and after it renders again while e
   await page.evaluate(() => document.querySelector('#editor .mbe-image-block')!.classList.remove('mbe-lazy'));
   expect(await layout()).toEqual(loaded);
 });
+
+// -- Image toolbar ----------------------------------------------------------
+
+const imageToolbar = (page: Page) => page.locator('.mbe-image-toolbar');
+/** The command modifier of the platform the browser runs on (see `isMac` in ui/popup.ts). */
+const MOD = process.platform === 'darwin' ? 'Meta' : 'Control';
+const tool = (page: Page, name: string) => imageToolbar(page).getByRole('button', { name, exact: true });
+
+test('clicking an image shows the image toolbar: alignment on an image block, alt text and delete on every image', async ({ page }) => {
+  await open(page, '![chart|200](/img/400x200.svg)\n\na ![inline](/img/100x50.svg) b\n\n> quoted ![quoted](/img/100x50.svg) text\n');
+  await image(page).click();
+  await expect(imageToolbar(page)).toBeVisible();
+  await expect(imageToolbar(page)).toHaveAttribute('aria-label', 'Image');
+  for (const name of ['Align left', 'Align center', 'Align right', 'Alt text', 'Reset size', 'Delete']) await expect(tool(page, name)).toBeVisible();
+  await expect(tool(page, 'Align left')).toHaveAttribute('aria-pressed', 'true');
+  await expect(tool(page, 'Align center')).toHaveAttribute('aria-pressed', 'false');
+  // Above the image, starting at its left edge.
+  const box = (await image(page).boundingBox())!;
+  const bar = (await imageToolbar(page).boundingBox())!;
+  expect(bar.y + bar.height).toBeLessThanOrEqual(box.y);
+  expect(bar.x).toBeCloseTo(box.x, 0);
+  // An inline image has no alignment and no width to reset.
+  await image(page, 1).click();
+  await expect(imageToolbar(page)).toBeVisible();
+  await expect(tool(page, 'Align left')).toBeHidden();
+  await expect(tool(page, 'Reset size')).toBeHidden();
+  await expect(tool(page, 'Alt text')).toBeVisible();
+  await expect(tool(page, 'Delete')).toBeVisible();
+  // So does an image in a quote, which has no block menu.
+  await image(page, 2).click();
+  await expect(imageToolbar(page)).toBeVisible();
+  await expect(tool(page, 'Alt text')).toBeVisible();
+  await expect(page.locator('.mbe-block-handle')).toBeHidden();
+  // The formatting toolbar is for text.
+  await expect(page.locator('.mbe-toolbar')).toBeHidden();
+});
+
+test('the image toolbar aligns an image block and resets its size', async ({ page }) => {
+  await open(page, '![chart|200](/img/400x200.svg)\n');
+  const column = (await page.locator('#editor .mbe-image-block').boundingBox())!;
+  await image(page).click();
+  await tool(page, 'Align center').click();
+  expect(await md(page)).toBe('![chart|center|200](/img/400x200.svg)\n');
+  // The image stays selected, and the toolbar follows it.
+  expect(await page.evaluate(() => (window as any).editor.isActive('image'))).toBe(true);
+  await expect(tool(page, 'Align center')).toHaveAttribute('aria-pressed', 'true');
+  const box = (await image(page).boundingBox())!;
+  expect(box.x + box.width / 2).toBeCloseTo(column.x + column.width / 2, 0);
+  expect((await imageToolbar(page).boundingBox())!.x).toBeCloseTo(box.x, 0);
+  await tool(page, 'Align right').click();
+  expect(await md(page)).toBe('![chart|right|200](/img/400x200.svg)\n');
+  // Left removes the word, as one undo step.
+  await tool(page, 'Align left').click();
+  expect(await md(page)).toBe('![chart|200](/img/400x200.svg)\n');
+  await page.keyboard.press(`${MOD}+z`);
+  expect(await md(page)).toBe('![chart|right|200](/img/400x200.svg)\n');
+  await tool(page, 'Reset size').click();
+  expect(await md(page)).toBe('![chart|right](/img/400x200.svg)\n');
+  await expect(tool(page, 'Reset size')).toBeHidden();
+});
+
+test('the image toolbar edits the alt text of an inline image', async ({ page }) => {
+  await open(page, 'a ![chart](/img/100x50.svg) b\n');
+  await image(page).click();
+  await tool(page, 'Alt text').click();
+  const input = page.locator('.mbe-popover-input');
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue('chart');
+  // The toolbar makes room for the field.
+  await expect(imageToolbar(page)).toBeHidden();
+  await page.keyboard.press(`${MOD}+a`);
+  await page.keyboard.type('Sales by month');
+  await page.keyboard.press('Enter');
+  expect(await md(page)).toBe('a ![Sales by month](/img/100x50.svg) b\n');
+  await expect(image(page)).toHaveAttribute('alt', 'Sales by month');
+  // The image stays selected, with its toolbar.
+  expect(await page.evaluate(() => (window as any).editor.isActive('image'))).toBe(true);
+  await expect(imageToolbar(page)).toBeVisible();
+  // Escape keeps the old text.
+  await tool(page, 'Alt text').click();
+  await page.keyboard.type('x');
+  await page.keyboard.press('Escape');
+  expect(await md(page)).toBe('a ![Sales by month](/img/100x50.svg) b\n');
+  await expect(imageToolbar(page)).toBeVisible();
+});
+
+test('Delete in the image toolbar removes an inline image alone and an image block whole', async ({ page }) => {
+  await open(page, 'a ![chart](/img/100x50.svg) b\n\n![block](/img/400x200.svg)\n\nend\n');
+  await image(page).click();
+  await tool(page, 'Delete').click();
+  expect(await md(page)).toBe('a  b\n\n![block](/img/400x200.svg)\n\nend\n');
+  await expect(imageToolbar(page)).toBeHidden();
+  // The caret stays where the image was.
+  await page.keyboard.type('X');
+  expect(await md(page)).toBe('a X b\n\n![block](/img/400x200.svg)\n\nend\n');
+  await image(page).click();
+  await tool(page, 'Delete').click();
+  expect(await blocks(page)).toEqual(['p:a X b', 'p:end']);
+  await page.keyboard.press(`${MOD}+z`);
+  expect(await blocks(page)).toEqual(['p:a X b', 'p:￼', 'p:end']);
+});
+
+test('Escape closes the image toolbar until the selection changes', async ({ page }) => {
+  await open(page, 'a ![chart](/img/100x50.svg) b\n');
+  await image(page).click();
+  await expect(imageToolbar(page)).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(imageToolbar(page)).toBeHidden();
+  // The image is still selected; the next Escape selects the block, as for text.
+  expect(await page.evaluate(() => (window as any).editor.isActive('image'))).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#editor')).toHaveClass(/mbe-block-selecting/);
+  await expect(imageToolbar(page)).toBeHidden();
+  // Selecting the image again shows it again.
+  await page.keyboard.press('ArrowRight');
+  await image(page).click();
+  await expect(imageToolbar(page)).toBeVisible();
+});
+
+test('the image toolbar hides while a handle is dragged, with the block menu, and when read-only', async ({ page }) => {
+  await open(page, '![chart](/img/400x200.svg)\n');
+  await image(page).click();
+  await expect(imageToolbar(page)).toBeVisible();
+  const handle = (await resizeHandle(page, 'right').boundingBox())!;
+  const x = handle.x + handle.width / 2;
+  const y = handle.y + handle.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  // In steps, as a mouse moves and as `dragHandle` does.
+  for (let i = 1; i <= 5; i++) {
+    await page.mouse.move(x - (50 * i) / 5, y);
+    await expect(imageToolbar(page)).toBeHidden();
+  }
+  await page.mouse.up();
+  expect(await md(page)).toBe('![chart|350](/img/400x200.svg)\n');
+  await expect(imageToolbar(page)).toBeVisible();
+  await page.keyboard.press(`${MOD}+/`);
+  await expect(page.locator('.mbe-block-menu')).toBeVisible();
+  await expect(imageToolbar(page)).toBeHidden();
+  await page.keyboard.press('Escape');
+  await expect(imageToolbar(page)).toBeVisible();
+  await page.evaluate(() => (window as any).editor.setOptions({ editable: false }));
+  await expect(imageToolbar(page)).toBeHidden();
+});
+
+test('toolbar: false turns the image toolbar off too', async ({ page }) => {
+  await page.goto('/?empty');
+  await page.evaluate(() => {
+    (window as any).editor.destroy();
+    (window as any).editor = new (window as any).core.Editor({ element: document.getElementById('editor'), content: '![chart](/img/400x200.svg)\n', toolbar: false });
+  });
+  await page.waitForFunction(() => Array.from(document.querySelectorAll<HTMLImageElement>('#editor img')).every((img) => img.complete && img.naturalWidth > 0));
+  await image(page).click();
+  expect(await page.evaluate(() => (window as any).editor.isActive('image'))).toBe(true);
+  await expect(imageToolbar(page)).toHaveCount(0);
+});
+
+test('the image toolbar sits over the visible part of a tall image in a short scrolling container', async ({ page }) => {
+  await open(page, '![tall](/img/500x1400.svg)\n');
+  await page.evaluate(() => {
+    Object.assign(document.querySelector<HTMLElement>('#editor')!.style, { maxHeight: 'none', overflow: 'visible' });
+    Object.assign(document.querySelector<HTMLElement>('.card')!.style, { maxHeight: '320px', overflowY: 'auto' });
+  });
+  const card = page.locator('.card');
+  await card.evaluate((el) => (el.scrollTop = 400));
+  const view = await card.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    return { top: box.top + el.clientTop, bottom: box.top + el.clientTop + el.clientHeight };
+  });
+  await image(page).click({ position: { x: 100, y: 500 } });
+  await expect(imageToolbar(page)).toBeVisible();
+  const bar = (await imageToolbar(page).boundingBox())!;
+  // The image's top is scrolled away; the toolbar is placed from the visible part, inside the container.
+  expect(bar.y).toBeGreaterThanOrEqual(view.top - bar.height - 8);
+  expect(bar.y + bar.height).toBeLessThanOrEqual(view.bottom);
+});

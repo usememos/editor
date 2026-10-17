@@ -78,8 +78,12 @@ export const DEFAULT_LABELS = {
   alignCenter: 'Center',
   alignRight: 'Right',
   tableSection: 'Table',
-  /** The title of the block menu's section of image block actions. */
+  /** The title of the block menu's section of image block actions, and the accessible name of the image toolbar. */
   imageSection: 'Image',
+  /** The image toolbar's alignment buttons, for image blocks. */
+  imageAlignLeft: 'Align left',
+  imageAlignCenter: 'Align center',
+  imageAlignRight: 'Align right',
   /** Removes an image's width, so it shows at its own size. */
   resetImageSize: 'Reset size',
   /** Edits an image's alt text, and names the field that edits it. */

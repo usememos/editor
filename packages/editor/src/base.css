@@ -317,6 +317,7 @@
 .mbe-ui[hidden] { display: none !important; }
 .mbe-menu,
 .mbe-toolbar,
+.mbe-image-toolbar,
 .mbe-link-card,
 .mbe-input-popover {
   position: fixed;
@@ -348,8 +349,10 @@
 .mbe-menu-loading { padding: 6px 8px; }
 
 /* Wider than the screen, the toolbar scrolls sideways; its max-width is set to fit. */
-.mbe-toolbar { box-sizing: border-box; display: flex; align-items: center; gap: 2px; padding: 4px; overflow-x: auto; scrollbar-width: none; }
-.mbe-toolbar::-webkit-scrollbar { display: none; }
+.mbe-toolbar,
+.mbe-image-toolbar { box-sizing: border-box; display: flex; align-items: center; gap: 2px; padding: 4px; overflow-x: auto; scrollbar-width: none; }
+.mbe-toolbar::-webkit-scrollbar,
+.mbe-image-toolbar::-webkit-scrollbar { display: none; }
 .mbe-tool {
   flex: none;
   font: inherit;

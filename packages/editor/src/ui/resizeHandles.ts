@@ -91,6 +91,11 @@ export class ResizeHandles {
     return this.frame.contains(node);
   }
 
+  /** True while a handle is being dragged. */
+  get isDragging(): boolean {
+    return this.drag !== null;
+  }
+
   /** Shows the handles for the selected image, or for none. */
   update(selected: ImageTarget | null): void {
     this.selected = selected;
@@ -236,12 +241,13 @@ export class ResizeHandles {
 }
 
 /**
+ * @internal
  * The part of `rect`, the image's rectangle, that its scrolling ancestors and
  * the viewport show, or null when none of it is visible. Ancestors that scroll
  * are detected as in `scrollRectIntoView`; a host with `overflow: hidden` and
  * nothing to scroll is left alone, as it is for the other floating UI.
  */
-function visibleRect(img: HTMLElement, rect: DOMRect): { left: number; top: number; width: number; height: number } | null {
+export function visibleRect(img: HTMLElement, rect: DOMRect): { left: number; top: number; width: number; height: number } | null {
   const doc = img.ownerDocument;
   const view = doc.defaultView;
   let left = rect.left;

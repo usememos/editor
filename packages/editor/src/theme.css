@@ -258,6 +258,7 @@
 }
 .mbe-menu,
 .mbe-toolbar,
+.mbe-image-toolbar,
 .mbe-link-card,
 .mbe-input-popover {
   color: var(--mbe-text);
@@ -277,7 +278,9 @@
 .mbe-menu-detail { font-size: 12px; color: var(--mbe-muted); }
 
 .mbe-toolbar,
+.mbe-image-toolbar,
 .mbe-link-card { border-radius: calc(var(--mbe-radius) + 2px); }
+.mbe-tool-delete:hover { color: var(--mbe-danger); }
 .mbe-link-card-url { font-size: 13px; color: var(--mbe-link); text-decoration: none; }
 .mbe-link-card-url:hover { text-decoration: underline; }
 .mbe-tool { border-radius: 7px; }
