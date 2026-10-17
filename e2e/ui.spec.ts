@@ -130,6 +130,13 @@ test('formatting toolbar: nine controls in three groups, named without shortcuts
     ['Code block', 1],
     ['List', 2],
   ]);
+  // Compact next to the 24px lines it floats over: 28px controls with 16px icons in 4px of padding,
+  // 36px plus the theme's 1px border.
+  const sizes = await toolbar.evaluate((el) => {
+    const size = (node: Element) => [node.getBoundingClientRect().width, node.getBoundingClientRect().height];
+    return { bar: size(el)[1], tool: size(el.querySelector('.mbe-tool-bold')!), icon: size(el.querySelector('.mbe-tool-bold .mbe-icon')!) };
+  });
+  expect(sizes).toEqual({ bar: 38, tool: [28, 28], icon: [16, 16] });
   // No shortcut is shown anywhere; assistive technology gets it from aria-keyshortcuts.
   await toolbar.locator('.mbe-tool-text-style').click();
   const text = await page.evaluate(() =>
@@ -337,6 +344,9 @@ test('link: Ctrl+K on a selection, then edit and remove', async ({ page }) => {
   await page.keyboard.press('Control+k');
   const input = page.locator('.mbe-popover-input');
   await expect(input).toBeFocused();
+  // The popover is the size of the toolbars: a 28px input in 4px of padding and the theme's border.
+  expect(await page.locator('.mbe-input-popover').boundingBox()).toMatchObject({ height: 38 });
+  expect(await input.boundingBox()).toMatchObject({ height: 28 });
   await input.fill('https://example.com');
   await input.press('Enter');
   expect(await md(page)).toBe('see [docs](https://example.com)\n');

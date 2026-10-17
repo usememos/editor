@@ -180,6 +180,10 @@
 .mbe-root.mbe-readonly a.mbe-link { cursor: pointer; }
 /* Inline even under a CSS reset such as Tailwind's preflight, which makes images blocks; alignment needs it. */
 .mbe-root .mbe-image { display: inline-block; max-width: 100%; height: auto; margin: 8px 0; vertical-align: bottom; }
+/* An inline image gets room between the lines of text around it. An image
+   alone in its block does not: the block gap already separates it, and the
+   margin would make its block 16px taller than the image. */
+.mbe-root .mbe-image-block .mbe-image { margin: 0; }
 /* An image alone in its paragraph moves within the column; it keeps its width. */
 .mbe-root .mbe-image-block[data-align="left"] { text-align: left; }
 .mbe-root .mbe-image-block[data-align="center"] { text-align: center; }
@@ -353,15 +357,18 @@
 .mbe-image-toolbar { box-sizing: border-box; display: flex; align-items: center; gap: 2px; padding: 4px; overflow-x: auto; scrollbar-width: none; }
 .mbe-toolbar::-webkit-scrollbar,
 .mbe-image-toolbar::-webkit-scrollbar { display: none; }
+/* A tool is a 28px control with a 16px icon, so a bar is 36px tall with its
+   4px padding: compact next to the 24px lines it floats over, and the size
+   of a host app's own controls. */
 .mbe-tool {
   flex: none;
   font: inherit;
   color: inherit;
   background: none;
   border: none;
-  padding: 4px 7px;
-  min-width: 32px;
-  min-height: 32px;
+  padding: 2px 6px;
+  min-width: 28px;
+  min-height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -369,13 +376,13 @@
 }
 .mbe-tool[hidden],
 .mbe-tool-sep[hidden] { display: none; }
-.mbe-tool .mbe-icon { width: 18px; height: 18px; }
-.mbe-tool-menu { gap: 1px; padding-inline: 7px 4px; }
+.mbe-tool .mbe-icon { width: 16px; height: 16px; }
+.mbe-tool-menu { gap: 1px; padding-inline: 6px 3px; }
 .mbe-tool-icon,
 .mbe-tool-chevron { display: inline-flex; }
-.mbe-tool .mbe-tool-chevron .mbe-icon { width: 13px; height: 13px; }
+.mbe-tool .mbe-tool-chevron .mbe-icon { width: 12px; height: 12px; }
 .mbe-tool.mbe-active { background: Highlight; color: HighlightText; }
-.mbe-tool-sep { flex: none; width: 1px; height: 18px; margin: 0 3px; background: GrayText; }
+.mbe-tool-sep { flex: none; width: 1px; height: 16px; margin: 0 2px; background: GrayText; }
 .mbe-menu-check { flex: none; display: inline-flex; margin-inline-start: auto; }
 .mbe-menu-submenu { flex: none; display: inline-flex; margin-inline-start: auto; }
 .mbe-menu-submenu .mbe-icon { width: 14px; height: 14px; }
@@ -417,7 +424,7 @@
 .mbe-image-frame-small .mbe-resize-handle-right { left: 100%; }
 .mbe-image-resizing,
 .mbe-image-resizing .mbe-resize-handle { cursor: ew-resize; }
-.mbe-popover-input { font: inherit; color: inherit; width: 260px; padding: 5px 8px; }
+.mbe-popover-input { font: inherit; color: inherit; box-sizing: border-box; height: 28px; width: 260px; padding: 0 8px; }
 
 .mbe-block-handle {
   position: fixed;

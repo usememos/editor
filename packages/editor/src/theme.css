@@ -283,7 +283,7 @@
 .mbe-tool-delete:hover { color: var(--mbe-danger); }
 .mbe-link-card-url { font-size: 13px; color: var(--mbe-link); text-decoration: none; }
 .mbe-link-card-url:hover { text-decoration: underline; }
-.mbe-tool { border-radius: 7px; }
+.mbe-tool { border-radius: 6px; }
 .mbe-tool:hover,
 .mbe-tool.mbe-open { background: var(--mbe-hover); }
 .mbe-tool.mbe-active { color: var(--mbe-accent); background: var(--mbe-hover); }

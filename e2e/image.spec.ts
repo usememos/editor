@@ -198,6 +198,24 @@ test('the selected outline is drawn inside the image', async ({ page }) => {
   expect(await image(page).evaluate((el) => getComputedStyle(el).outlineOffset)).toBe('-2px');
 });
 
+test('an image block is as tall as its image and one block gap from the text around it', async ({ page }) => {
+  await open(page, 'above\n\n![chart|200](/img/400x200.svg)\n\nbelow\n');
+  const boxes = async () => {
+    const [above, block, below] = await page.locator('#editor > p').evaluateAll((els) => els.map((el) => el.getBoundingClientRect()));
+    const img = (await image(page).boundingBox())!;
+    return { block: block!.height, image: img.height, gapAbove: block!.top - above!.bottom, gapBelow: below!.top - block!.bottom };
+  };
+  expect(await boxes()).toEqual({ block: 100, image: 100, gapAbove: 8, gapBelow: 8 });
+  // Selecting the image changes nothing: the resize frame covers exactly the image.
+  await image(page).click();
+  await expect(resizeHandle(page, 'right')).toBeVisible();
+  expect(await boxes()).toEqual({ block: 100, image: 100, gapAbove: 8, gapBelow: 8 });
+  expect(await page.locator('.mbe-image-frame').boundingBox()).toEqual(await image(page).boundingBox());
+  // An inline image keeps its room between the lines of text.
+  await open(page, 'a ![inline](/img/100x50.svg) b\n');
+  expect((await page.locator('#editor > p').boundingBox())!.height).toBe(50 + 16);
+});
+
 test('updateImage changes the selected image', async ({ page }) => {
   await open(page, '![chart|120x60](/img/400x200.svg)\n');
   await image(page).click();
@@ -433,11 +451,13 @@ test('clicking an image shows the image toolbar: alignment on an image block, al
   for (const name of ['Align left', 'Align center', 'Align right', 'Alt text', 'Reset size', 'Delete']) await expect(tool(page, name)).toBeVisible();
   await expect(tool(page, 'Align left')).toHaveAttribute('aria-pressed', 'true');
   await expect(tool(page, 'Align center')).toHaveAttribute('aria-pressed', 'false');
-  // Above the image, starting at its left edge.
+  // 8px above the image, starting at its left edge; the same size as the formatting toolbar.
   const box = (await image(page).boundingBox())!;
   const bar = (await imageToolbar(page).boundingBox())!;
-  expect(bar.y + bar.height).toBeLessThanOrEqual(box.y);
+  expect(bar.y + bar.height).toBe(box.y - 8);
   expect(bar.x).toBeCloseTo(box.x, 0);
+  expect(bar.height).toBe(38);
+  expect(await tool(page, 'Delete').boundingBox()).toMatchObject({ width: 28, height: 28 });
   // An inline image has no alignment and no width to reset.
   await image(page, 1).click();
   await expect(imageToolbar(page)).toBeVisible();

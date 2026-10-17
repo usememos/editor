@@ -17,6 +17,9 @@ test('resting the pointer on a link shows its card with the URL; leaving hides i
   const linkBox = (await page.locator('#editor a.mbe-link').boundingBox())!;
   const cardBox = (await card(page).boundingBox())!;
   expect(cardBox.y).toBeGreaterThanOrEqual(linkBox.y + linkBox.height);
+  // The same compact controls as the toolbars.
+  expect(cardBox.height).toBe(38);
+  expect(await card(page).locator('button').first().boundingBox()).toMatchObject({ width: 28, height: 28 });
   // Moving from the link onto the card keeps it; moving away hides it.
   await card(page).hover();
   await expect(card(page)).toBeVisible();
