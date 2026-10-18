@@ -98,7 +98,9 @@ test('the sample shows every kind of block and saves byte for byte', async ({ pa
   await expect(editor.locator('.mbe-checkbox:checked')).toHaveCount(1);
   await expect(editor.locator('blockquote')).toHaveText('Quotes stay quiet.');
   await expect(editor.locator('.katex')).toHaveCount(2); // inline and block math, rendered
-  await expect(editor.locator('.mbe-code')).toHaveCount(1);
+  // One code block as code; the mermaid block is drawn as a diagram.
+  await expect(editor.locator('.mbe-code:not(.mbe-view-block)')).toHaveCount(1);
+  await expect(editor.locator('.mbe-view-block[data-language="mermaid"] svg')).toHaveCount(1);
   await expect(editor.locator('table th')).toHaveText(['Feature', 'Status']);
   await expect(editor.locator('hr')).toHaveCount(1);
   await expect(editor.locator('.mbe-footnote-ref')).toHaveText('1');

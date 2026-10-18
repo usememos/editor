@@ -36,11 +36,11 @@ test('ArrowDown visits every block of the sample in order, and ArrowUp comes bac
   await open(page, SAMPLE);
   await page.locator('#editor h2').click();
   await page.keyboard.press('Home');
-  // 14 is the divider, which holds no caret.
-  const all = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15];
+  // 15 is the divider, which holds no caret. 13 is the mermaid diagram, entered as its code.
+  const all = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16];
   const down = await walk(page, 'ArrowDown');
   expect(down.visited).toEqual(all);
-  expect(down.last).toBe('15:36');
+  expect(down.last).toBe('16:36');
   const up = await walk(page, 'ArrowUp');
   expect(up.visited).toEqual([...all].reverse());
   expect(up.last).toBe('0:0');

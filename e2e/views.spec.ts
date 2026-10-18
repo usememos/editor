@@ -578,7 +578,8 @@ test('the playground draws a mermaid block as a diagram in the editor font; clic
   await expect(svg.locator('text')).toHaveText(['graph TD', 'Write --> Preview', 'Preview --> Share']);
   const fontBefore = await svg.getAttribute('data-font');
   expect(fontBefore).toBe(await editor.evaluate((el) => getComputedStyle(el).fontFamily));
-  await expect(editor.locator('.mbe-code')).toHaveCount(0);
+  // The diagram's block keeps the code block's class, but shows no code.
+  await expect(editor.locator('.mbe-code:not(.mbe-view-block)')).toHaveCount(0);
 
   // An arrow key steps into the code: the block shows as a code block with its language.
   await editor.locator('p').first().click();
