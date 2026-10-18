@@ -78,7 +78,7 @@ export function footnotes(options: FootnotesOptions = {}): Extension {
   return {
     name: 'footnotes',
     markdown: { inline: [inline], block: [block] },
-    views: { footnote: (source, element, kind) => (kind === 'inline' ? renderReference : renderDefinition)(source, element, kind) },
+    views: { footnote: (source, element, kind, ctx) => (kind === 'inline' ? renderReference : renderDefinition)(source, element, kind, ctx) },
     onCreate: ({ editor }) => {
       // Read-only, a reference leads to its definition in the same document.
       const onClick = (e: MouseEvent) => {

@@ -355,3 +355,166 @@ test('the copy button of a code block inside a section copies its code', async (
   await code.locator('.mbe-code-copy').click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('const a = 1;');
 });
+
+test('a view gets the editor; refreshViews renders views again, one syntax or all, and tries a failed view again', async ({ page }) => {
+  await page.goto('/?empty');
+  await page.evaluate(() => {
+    const { Editor } = (window as any).core;
+    const w = window as any;
+    w.editor.destroy();
+    w.calls = { a: 0, b: 0 };
+    w.sameEditor = [] as boolean[];
+    w.editor = new Editor({
+      element: document.getElementById('editor'),
+      content: 'text\n\n```a\none\n```\n\n```b\ntwo\n```\n\n```b\nfail\n```',
+      extensions: [
+        {
+          name: 'views',
+          views: {
+            'code:a': (source: string, el: HTMLElement, _kind: string, ctx: { editor: unknown }) => {
+              w.calls.a++;
+              w.sameEditor.push((ctx.editor as { root: Element }).root === document.getElementById('editor'));
+              el.textContent = `a:${source}#${w.calls.a}`;
+            },
+            'code:b': (source: string, el: HTMLElement) => {
+              w.calls.b++;
+              // The failing block renders once refreshed.
+              if (source === 'fail' && w.calls.b < 3) return false;
+              el.textContent = `b:${source}#${w.calls.b}`;
+            },
+          },
+        },
+      ],
+    });
+  });
+  const views = page.locator('#editor .mbe-view-block');
+  await expect(views).toHaveText(['a:one#1', 'b:two#1']);
+  await expect(page.locator('#editor .mbe-code code')).toHaveText('fail');
+  // The view gets the editor showing it, already during its first render.
+  expect(await page.evaluate(() => (window as any).sameEditor)).toEqual([true]);
+
+  // One syntax: only its blocks render again; the other keeps its cached element.
+  const text = await page.locator('#editor > p').elementHandle();
+  await page.evaluate(() => (window as any).editor.refreshViews('code:a'));
+  await expect(views).toHaveText(['a:one#2', 'b:two#1']);
+  expect(await page.evaluate(() => (window as any).calls)).toEqual({ a: 2, b: 2 });
+
+  // All: every view renders again, and the failed one is tried again and now renders.
+  await page.evaluate(() => (window as any).editor.refreshViews());
+  await expect(views).toHaveText(['a:one#3', 'b:two#3', 'b:fail#4']);
+  // Blocks without a view were not rebuilt.
+  expect(await text!.evaluate((el) => el.isConnected)).toBe(true);
+  expect(await md(page)).toBe('text\n\n```a\none\n```\n\n```b\ntwo\n```\n\n```b\nfail\n```');
+});
+
+test('a font token change renders views again; a color change does not', async ({ page }) => {
+  await page.goto('/?empty');
+  await page.evaluate(() => {
+    const { Editor, math } = (window as any).core;
+    const w = window as any;
+    w.editor.destroy();
+    w.renders = 0;
+    w.editor = new Editor({
+      element: document.getElementById('editor'),
+      content: 'Euler $e$ here\n\nplain',
+      extensions: [
+        math({
+          render: (tex: string, el: HTMLElement) => {
+            w.renders++;
+            el.textContent = `formula ${tex} (${getComputedStyle(w.editor?.root ?? document.body).fontFamily})`;
+          },
+        }),
+      ],
+    });
+  });
+  const view = page.locator('#editor .mbe-view-math');
+  await expect(view).toHaveCount(1);
+  expect(await page.evaluate(() => (window as any).renders)).toBe(1);
+  const plain = await page.locator('#editor > p').last().elementHandle();
+  const setTheme = (theme: unknown) => page.evaluate((t) => (window as any).editor.setOptions({ theme: t }), theme);
+
+  await setTheme({ tokens: { light: { text: 'rgb(1, 2, 3)' } } });
+  expect(await page.evaluate(() => (window as any).renders)).toBe(1);
+
+  await setTheme({ tokens: { light: { text: 'rgb(1, 2, 3)' }, font: 'monospace' } });
+  await expect(view).toHaveText('formula e (monospace)');
+  expect(await page.evaluate(() => (window as any).renders)).toBe(2);
+  // Only the formula's block was rebuilt.
+  expect(await plain!.evaluate((el) => el.isConnected)).toBe(true);
+
+  // The same tokens again change nothing.
+  await setTheme({ tokens: { light: { text: 'rgb(1, 2, 3)' }, font: 'monospace' } });
+  expect(await page.evaluate(() => (window as any).renders)).toBe(2);
+  await setTheme({ tokens: { fontSize: 18 } });
+  expect(await page.evaluate(() => (window as any).renders)).toBe(3);
+});
+
+test('a pending view that refreshViews dropped does not mark its source as failed when it rejects later', async ({ page }) => {
+  await page.goto('/?empty');
+  await page.evaluate(() => {
+    const { Editor } = (window as any).core;
+    const w = window as any;
+    w.editor.destroy();
+    w.reject = () => {};
+    let first = true;
+    w.editor = new Editor({
+      element: document.getElementById('editor'),
+      content: '```d\nx\n```',
+      extensions: [
+        {
+          name: 'd',
+          views: {
+            'code:d': (source: string, el: HTMLElement) => {
+              el.textContent = first ? 'loading' : `drawn ${source}`;
+              if (!first) return;
+              first = false;
+              return new Promise<void>((_, reject) => (w.reject = reject));
+            },
+          },
+        },
+      ],
+    });
+  });
+  const view = page.locator('#editor .mbe-view-block');
+  await expect(view).toHaveText('loading');
+  await page.evaluate(() => (window as any).editor.refreshViews('code:d'));
+  await expect(view).toHaveText('drawn x');
+  await page.evaluate(() => (window as any).reject(new Error('too late')));
+  await page.waitForTimeout(50);
+  await expect(view).toHaveText('drawn x');
+});
+
+test('the playground draws a mermaid block as a diagram in the editor font; clicking it shows the code', async ({ page }) => {
+  const doc = 'before\n\n```mermaid\ngraph TD\n  Write --> Preview\n  Preview --> Share\n```\n\nafter';
+  await page.goto(`/?md=${encodeURIComponent(doc)}`);
+  const editor = page.locator('#editor');
+  const svg = editor.locator('.mbe-view-block[data-language="mermaid"] svg');
+  await expect(svg).toHaveCount(1);
+  await expect(svg.locator('text')).toHaveText(['graph TD', 'Write --> Preview', 'Preview --> Share']);
+  const fontBefore = await svg.getAttribute('data-font');
+  expect(fontBefore).toBe(await editor.evaluate((el) => getComputedStyle(el).fontFamily));
+  await expect(editor.locator('.mbe-code')).toHaveCount(0);
+
+  // An arrow key steps into the code: the block shows as a code block with its language.
+  await editor.locator('p').first().click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('ArrowDown');
+  await expect(svg).toHaveCount(0);
+  await expect(editor.locator('.mbe-code-lang')).toHaveValue('mermaid');
+  await page.keyboard.press('ArrowUp');
+  await expect(svg).toHaveCount(1);
+
+  // A click shows the code; the saved Markdown is unchanged.
+  await svg.click();
+  await expect(editor.locator('.mbe-code code')).toHaveText('graph TD\n  Write --> Preview\n  Preview --> Share');
+  expect(await md(page)).toBe(doc);
+  await editor.locator('p').last().click();
+  await expect(svg).toHaveCount(1);
+
+  // A new font lays the diagram out again; read-only keeps the diagram.
+  await page.evaluate(() => (window as any).editor.setOptions({ theme: { tokens: { font: 'monospace' } } }));
+  await expect(svg).toHaveAttribute('data-font', 'monospace');
+  await page.evaluate(() => (window as any).editor.setOptions({ editable: false }));
+  await svg.click();
+  await expect(svg).toHaveCount(1);
+});

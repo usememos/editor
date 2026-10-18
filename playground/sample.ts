@@ -25,6 +25,12 @@ $$
 const editor = new Editor({ element, content, onChange });
 \`\`\`
 
+\`\`\`mermaid
+graph TD
+  Write --> Preview
+  Preview --> Share
+\`\`\`
+
 | Feature | Status |
 | :-- | --: |
 | Tables | Done |

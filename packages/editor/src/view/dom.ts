@@ -29,7 +29,7 @@ import {
   sliceInline,
   sameLink,
 } from '../model';
-import type { SyntaxView } from '../extension';
+import type { ExtensionContext, SyntaxView } from '../extension';
 import type { Labels } from '../labels';
 import type { IconName } from '../icons';
 import type { ThemeClasses } from '../theme';
@@ -872,6 +872,8 @@ export class BlockRenderer {
   widgetsAfter?: (blockId: string) => readonly HTMLElement[] | undefined;
   /** Views of extension syntaxes, by syntax name. */
   views?: ReadonlyMap<string, SyntaxView>;
+  /** What a view gets besides its source: the editor. Set with `views`. */
+  viewContext?: ExtensionContext;
   /** The document's Markdown options, for the Markdown inside an HTML section. */
   markdown?: MarkdownOptions;
   /** Theme classes for rendered elements. Set before a full render. */
@@ -897,6 +899,8 @@ export class BlockRenderer {
   private readonly pendingViews = new Map<string, Set<string>>();
   /** Views whose promise rejected or resolved to false: their source shows. */
   private readonly failedViews = new Set<string>();
+  /** Per cached or failed view, the blocks that showed it, to render again when `dropViews` forgets it. */
+  private readonly viewBlocks = new Map<string, Set<string>>();
   /** The block being rendered, so a pending view knows which blocks to render again. */
   private renderingBlock = '';
   /** During a render, the loaded images of the block elements it replaces, by `src`. */
@@ -929,9 +933,12 @@ export class BlockRenderer {
 
   private renderView(syntax: string, source: string, kind: 'inline' | 'block'): HTMLElement | null {
     const view = this.views?.get(syntax);
-    if (!view) return null;
+    if (!view || !this.viewContext) return null;
     const key = `${kind}\0${syntax}\0${source}`;
-    if (this.failedViews.has(key)) return null;
+    if (this.failedViews.has(key)) {
+      this.noteViewBlock(key);
+      return null;
+    }
     let el = this.viewCache.get(key);
     if (el) {
       this.viewCache.delete(key);
@@ -939,17 +946,36 @@ export class BlockRenderer {
       el = this.root.ownerDocument.createElement(kind === 'inline' ? 'span' : 'div');
       let result: ReturnType<SyntaxView>;
       try {
-        result = view(source, el, kind);
+        result = view(source, el, kind, this.viewContext);
       } catch {
+        result = false;
+      }
+      if (result === false) {
+        // Not remembered: the view runs again when the block renders again, and on `dropViews`.
+        this.noteViewBlock(key);
         return null;
       }
-      if (result === false) return null;
       if (result && typeof result.then === 'function') this.awaitView(key, result);
-      if (this.viewCache.size >= 500) this.viewCache.delete(this.viewCache.keys().next().value!);
+      if (this.viewCache.size >= 500) {
+        const oldest = this.viewCache.keys().next().value!;
+        this.viewCache.delete(oldest);
+        this.viewBlocks.delete(oldest);
+      }
     }
     this.pendingViews.get(key)?.add(this.renderingBlock);
+    this.noteViewBlock(key);
     this.viewCache.set(key, el);
     return el.cloneNode(true) as HTMLElement;
+  }
+
+  private noteViewBlock(key: string): void {
+    let blocks = this.viewBlocks.get(key);
+    if (!blocks) {
+      // Declined views are not in the cache, so this map is bounded on its own.
+      if (this.viewBlocks.size >= 1000) this.viewBlocks.delete(this.viewBlocks.keys().next().value!);
+      this.viewBlocks.set(key, (blocks = new Set()));
+    }
+    blocks.add(this.renderingBlock);
   }
 
   /**
@@ -957,20 +983,42 @@ export class BlockRenderer {
    * it filled in at once, and its blocks render again when it settles.
    */
   private awaitView(key: string, result: PromiseLike<void | false>): void {
-    this.pendingViews.set(key, new Set());
+    const blocks = new Set<string>();
+    this.pendingViews.set(key, blocks);
     const settle = (ok: boolean) => {
-      const blocks = this.pendingViews.get(key);
+      // Dropped by `dropViews` while pending: a later render of the same source owns the key now.
+      if (this.pendingViews.get(key) !== blocks) return;
       this.pendingViews.delete(key);
       if (!ok) {
         this.failedViews.add(key);
         this.viewCache.delete(key);
       }
-      if (blocks && blocks.size > 0) this.onViewSettled?.([...blocks]);
+      if (blocks.size > 0) this.onViewSettled?.([...blocks]);
     };
     result.then(
       (value) => settle(value !== false),
       () => settle(false),
     );
+  }
+
+  /**
+   * Forgets rendered and failed views, of one syntax or all, so the next
+   * render runs the view again: for when what it shows depends on something
+   * besides its source that changed, such as the editor's font. Returns the
+   * rendered blocks that showed them, for the caller to render again.
+   */
+  dropViews(syntax?: string): string[] {
+    const matches = (key: string) => syntax === undefined || key.split('\0', 3)[1] === syntax;
+    for (const key of [...this.viewCache.keys()]) if (matches(key)) this.viewCache.delete(key);
+    for (const key of [...this.failedViews]) if (matches(key)) this.failedViews.delete(key);
+    for (const key of [...this.pendingViews.keys()]) if (matches(key)) this.pendingViews.delete(key);
+    const ids = new Set<string>();
+    for (const [key, blocks] of [...this.viewBlocks]) {
+      if (!matches(key)) continue;
+      this.viewBlocks.delete(key);
+      for (const id of blocks) if (this.rendered.has(id)) ids.add(id);
+    }
+    return [...ids];
   }
 
   /**

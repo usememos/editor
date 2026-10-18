@@ -136,6 +136,9 @@ const SIZE_VARS = {
   blockGap: '--mbe-block-gap',
 } as const;
 
+/** The token properties that change how text measures: a view that laid out text (a diagram) renders again when one changes. */
+export const FONT_PROPERTIES: readonly string[] = [SIZE_VARS.font, SIZE_VARS.mono, SIZE_VARS.fontSize, SIZE_VARS.lineHeight];
+
 /**
  * The custom properties for `tokens`. Colors go in `--mbe-<name>-light` and
  * `--mbe-<name>-dark`, which the stylesheet picks between with `light-dark()`.

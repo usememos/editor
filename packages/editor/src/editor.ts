@@ -73,7 +73,7 @@ import { Menu, type MenuItem, type MenuSection, isMac, isSafari, isTouch, matche
 import { BLOCK_ATTR, BlockRenderer, atomAt, calloutName, childIndex, contentElement, domText, MARKDOWN_VIEW, domToPosition, positionToDom, type ResolveUrl, defaultResolveUrl } from './view/dom';
 import { revealedViews, sameRevealed, viewEntry } from './view/reveal';
 import { scrollRectIntoView } from './view/scroll';
-import { type Theme, mergeClasses, tokenProperties } from './theme';
+import { FONT_PROPERTIES, type Theme, mergeClasses, tokenProperties } from './theme';
 import * as src from './sourceMode';
 import { type EditorMode, SOURCE_ID, isSourceDoc, sourceState, sourceText } from './sourceMode';
 
@@ -489,6 +489,7 @@ export class Editor {
     };
     // Raw Markdown blocks are rendered by the editor itself (see MARKDOWN_VIEW).
     this.renderer.views = new Map([['markdown', MARKDOWN_VIEW], ...this.extensions.flatMap((e) => Object.entries(e.views ?? {}))]);
+    this.renderer.viewContext = { editor: this };
     this.renderer.markdown = this.markdown;
     this.renderer.onViewSettled = (ids) => this.viewsSettled(ids);
     const codeDecorators = this.extensions.flatMap((e) => (e.codeDecorations ? [e.codeDecorations] : []));
@@ -1009,8 +1010,9 @@ export class Editor {
     if ('theme' in options && this.applyTheme(options.theme)) this.paint(true);
   }
 
-  /** Sets the theme. Returns true when blocks must re-render for new classes. */
+  /** Sets the theme. Returns true when every block must re-render, for new classes. */
   private applyTheme(theme: Theme | undefined): boolean {
+    const before = tokenProperties(this.runtime.theme?.tokens);
     this.runtime = { ...this.runtime, theme };
     // Tokens and the color scheme are custom properties and CSS: no re-render.
     const style = this.root.style;
@@ -1020,6 +1022,8 @@ export class Editor {
     this.tokenNames = [...props.keys()];
     const scheme = theme?.colorScheme ?? 'auto';
     style.colorScheme = scheme === 'auto' ? '' : scheme;
+    // A view that measured text (a diagram) laid it out for the old font: its blocks render again.
+    if (FONT_PROPERTIES.some((name) => before.get(name) !== props.get(name))) this.renderBlocksAgain(this.renderer.dropViews());
     // Earlier extensions win over later ones, and the editor's own theme over all.
     const classes = mergeClasses([...this.extensions.map((e) => e.theme?.classes).reverse(), theme?.classes]);
     const key = JSON.stringify(classes);
@@ -1618,6 +1622,32 @@ export class Editor {
     }
     this.redecoratePending = false;
     this.paint(true);
+    this.afterRender();
+  }
+
+  /**
+   * Renders every view (`Extension.views`) again, or those of one syntax
+   * (`'math'`, `'code:mermaid'`), for when what a view shows depends on
+   * something besides its source that changed: a renderer that finished
+   * loading, or the font a diagram measured its text with. A view that
+   * failed is tried again. Only the blocks that show those views render
+   * again. The editor calls it itself when the theme's font tokens change.
+   * Waits for an input method to finish composing.
+   */
+  refreshViews(syntax?: string): void {
+    if (this.destroyed) return;
+    this.renderBlocksAgain(this.renderer.dropViews(syntax));
+  }
+
+  /** Renders the given blocks again now, or when the composition in progress settles. */
+  private renderBlocksAgain(ids: readonly string[]): void {
+    if (ids.length === 0) return;
+    if (this.composing || this.composition) {
+      for (const id of ids) this.unsettled.add(id);
+      return;
+    }
+    for (const id of ids) this.renderer.invalidate(id);
+    this.paint();
     this.afterRender();
   }
 

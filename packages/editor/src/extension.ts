@@ -23,14 +23,21 @@ export type KeyHandler = (ctx: ExtensionContext) => boolean;
  * Renders the Markdown source of a token (`kind` is `inline`, `element` a
  * span), a raw block, or the code of a code block (`block`, a div) into
  * `element`. Returns false, or throws, to show the source instead. Results
- * are cached by source, so the output must depend on nothing else.
+ * are cached by source, so the output must depend on nothing else; what a
+ * view reads from the editor instead (its font, for a layout that measures
+ * text) is current again after `editor.refreshViews()`, which the editor
+ * calls itself when the theme's font tokens change.
+ *
+ * `element` is not in the page yet, so it has no layout. A view that
+ * measures text uses the editor: `getComputedStyle(ctx.editor.root)` gives
+ * the font the view's text will have, for a canvas `measureText`.
  *
  * A view that finishes later (a diagram, a renderer that loads on demand)
  * fills in what it can at once and returns a promise: the editor shows that
  * meanwhile, and the finished element when the promise resolves. A promise
  * that rejects or resolves to false shows the source.
  */
-export type SyntaxView = (source: string, element: HTMLElement, kind: 'inline' | 'block') => void | false | PromiseLike<void | false>;
+export type SyntaxView = (source: string, element: HTMLElement, kind: 'inline' | 'block', ctx: ExtensionContext) => void | false | PromiseLike<void | false>;
 
 /** A code block's code, for decorations such as syntax highlighting. */
 export interface CodeDecorationContext {

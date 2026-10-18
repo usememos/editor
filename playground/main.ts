@@ -1,5 +1,6 @@
 // The playground: a note composer built only on the public API. It uses
-// line breaks, no setext headings, math rendered with KaTeX and footnotes;
+// line breaks, no setext headings, math rendered with KaTeX, footnotes and
+// a stand-in diagram view for ```mermaid blocks (diagram.ts);
 // #tag and @mention highlighting; three autocomplete popups as examples of
 // callers (#tags, @people from a fake async search, and [[ page links),
 // plus :emoji from @usememos/editor/emoji;
@@ -47,6 +48,7 @@ import {
 import { emoji } from '@usememos/editor/emoji';
 import style from '../packages/editor/src/style.css?inline';
 import baseStyle from '../packages/editor/src/base.css?inline';
+import { diagram } from './diagram';
 import { SAMPLE } from './sample';
 
 const TAGS = ['work', 'work/meeting', 'work/planning', 'reading', 'ideas', 'journal', '日记'];
@@ -160,6 +162,8 @@ const composer: Partial<EditorOptions> = {
   extensions: [
     math({ render: (tex, el, options) => katex.render(tex, el, { ...options, throwOnError: false }) }),
     footnotes(),
+    // ```mermaid blocks render as a diagram; the code shows at the caret.
+    { name: 'diagrams', views: { 'code:mermaid': diagram } },
     tags({ class: 'tag' }),
     mentions({ class: 'mention' }),
     // #tags: opens where a tag is highlighted, and lists known tags. A pick writes "#tag ".
