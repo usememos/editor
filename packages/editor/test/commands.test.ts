@@ -123,6 +123,38 @@ describe('insertText', () => {
   });
 });
 
+describe('insertToken', () => {
+  it('spaces the token as a word: a space before it after a letter, and one after it', () => {
+    const s = cmd.insertToken(at(state(paragraph(txt('note'))), 0, 4), '#tag');
+    expect(show(s)).toEqual(['p:note #tag ']);
+    expect(s.selection.focus.offset).toBe(10);
+  });
+
+  it('adds no space at the start of the text or after whitespace', () => {
+    expect(show(cmd.insertToken(at(state(paragraph(txt('note'))), 0, 0), '#tag'))).toEqual(['p:#tag note']);
+    expect(show(cmd.insertToken(at(state(paragraph(txt('a b'))), 0, 2), '#tag'))).toEqual(['p:a #tag b']);
+    expect(show(cmd.insertToken(at(state(paragraph(txt('a\nb'))), 0, 2), '#tag'))).toEqual(['p:a\n#tag b']);
+  });
+
+  it('reuses a space that follows, and leaves the caret after it', () => {
+    const s = cmd.insertToken(at(state(paragraph(txt('a b'))), 0, 1), '#tag');
+    expect(show(s)).toEqual(['p:a #tag b']);
+    expect(s.selection.focus.offset).toBe(7);
+  });
+
+  it('keeps selected text and inserts at the focus end', () => {
+    const s = cmd.insertToken(range(state(paragraph(txt('one two'))), [0, 0], [0, 3]), '#tag');
+    expect(show(s)).toEqual(['p:one #tag two']);
+    expect(s.selection).toEqual(caret(s.doc.blocks[0]!.id, 9));
+  });
+
+  it('is plain text in a code block', () => {
+    let s = at(state(codeBlock('js', 'x')), 0, 1);
+    s = cmd.toggleMark(s, 'bold');
+    expect(show(cmd.insertToken(s, '#tag'))).toEqual(['code(js):x #tag ']);
+  });
+});
+
 describe('splitBlock (Enter)', () => {
   it('splits a paragraph and moves the caret to the new block', () => {
     const s = cmd.splitBlock(at(state(paragraph(txt('hello world'))), 0, 5));

@@ -79,9 +79,9 @@ For note-style Markdown, as in the playground, use `markdown: { breaks: true, se
 
 `editor.setOptions({ placeholder, editable, taskToggle, mode, attributes, resolveUrl, onLinkClick, theme })` changes those options while the editor runs. `setOptions({ extensions })` takes new callbacks for `suggestion()` extensions of the same names. The other options are fixed for the editor's lifetime.
 
-In React, `placeholder`, `editable`, `taskToggle`, `mode`, `attributes`, `resolveUrl`, `onLinkClick` and `theme` update live. A change to the names in `extensions` recreates the editor and keeps its Markdown, so an inline array is fine; with the same names, the callbacks of `suggestion()` extensions update live, so `items` may read React state. Other props are read on mount; change the component's `key` to apply new values. A `ref` gives the core `Editor` instance. A `value` that arrives while an input method (IME) is composing text is applied when the composition ends.
+In React, `placeholder`, `editable`, `taskToggle`, `mode`, `attributes`, `resolveUrl`, `onLinkClick` and `theme` update live. `onChange`, `onSubmit`, `onFocus` and `onBlur` always call the latest prop, so they may be inline functions that close over state; no ref is needed. A change to the names in `extensions` recreates the editor and keeps its Markdown, so an inline array is fine; with the same names, the callbacks of `suggestion()` extensions update live, so `items` may read React state. Other props are read on mount; change the component's `key` to apply new values. A `ref` gives the core `Editor` instance. A `value` that arrives while an input method (IME) is composing text is applied when the composition ends.
 
-For apps that manage the editor instance themselves, `useEditor(options, deps)` creates one and `<EditorContent editor={editor} />` shows it:
+For apps that manage the editor instance themselves, `useEditor(options, deps)` creates one and `<EditorContent editor={editor} />` shows it. Its `onChange`, `onSubmit`, `onFocus`, `onBlur` and `onLinkClick` call the latest options too, and so do `suggestion()` callbacks:
 
 ```tsx
 import { EditorContent, useEditor } from '@usememos/editor/react';
@@ -100,7 +100,7 @@ function Composer() {
 | `setMarkdown(markdown, { history? })` | Replaces the document. `history: 'clear'` (default) clears undo history; `'keep'` makes the replacement one undo step. Does not emit `change`. |
 | `isEmpty` | True when the document holds only empty paragraphs. |
 | `state` | The document and selection, immutable. |
-| `commands.*` | Edits. Each applies one change, records one undo step, and returns `true` if it did something: `toggleBold`, `toggleItalic`, `toggleStrike`, `toggleCode`, `setParagraph`, `toggleHeading({ level })`, `toggleBulletList`, `toggleOrderedList`, `toggleTaskList`, `toggleBlockquote`, `toggleCallout({ type? })`, `setCallout({ type })`, `toggleDetails`, `toggleCodeBlock({ language? })`, `setLink({ href })`, `unsetLink`, `updateImage({ alt?, title?, align?, width? })`, `insertText(text, { range? })`, `insertMarkdown(markdown, options?)`, `insertTable({ rows?, cols? })`, `insertDivider`, `indent`, `outdent`, `undo`, `redo`, `selectAll`, `selectBlocks`, `focus(position?)`, `blur`, `scrollIntoView`. `selectBlocks` selects the blocks the selection touches as whole blocks, as Escape does; it returns `false` when read-only. `updateImage` changes the selected image; `null` removes its title, alignment or width, and a new width drops a height so the image keeps its aspect ratio. `toggleCallout` turns the selected blocks into a callout (`note` unless `type` says otherwise: `note`, `tip`, `important`, `warning` or `caution`), or back into paragraphs. `setCallout` changes the type of the whole callout or quote with the caret; `type: null` makes it a plain quote. `toggleDetails` makes the block with the caret the title of a collapsible section, or, on a title, removes the section and keeps its blocks. `toggleCallout`, `setCallout` and `toggleDetails` return `false` when the `markdown` option turns that syntax off. `scrollIntoView` changes nothing in the document: it scrolls the caret into view in the editor's scrolling containers and the window, for example after an `insertMarkdown` from code. |
+| `commands.*` | Edits. Each applies one change, records one undo step, and returns `true` if it did something: `toggleBold`, `toggleItalic`, `toggleStrike`, `toggleCode`, `setParagraph`, `toggleHeading({ level })`, `toggleBulletList`, `toggleOrderedList`, `toggleTaskList`, `toggleBlockquote`, `toggleCallout({ type? })`, `setCallout({ type })`, `toggleDetails`, `toggleCodeBlock({ language? })`, `setLink({ href })`, `unsetLink`, `updateImage({ alt?, title?, align?, width? })`, `insertText(text, { range? })`, `insertToken(text)`, `insertMarkdown(markdown, options?)`, `insertTable({ rows?, cols? })`, `insertDivider`, `indent`, `outdent`, `undo`, `redo`, `selectAll`, `selectBlocks`, `focus(position?)`, `blur`, `scrollIntoView`. `selectBlocks` selects the blocks the selection touches as whole blocks, as Escape does; it returns `false` when read-only. `updateImage` changes the selected image; `null` removes its title, alignment or width, and a new width drops a height so the image keeps its aspect ratio. `toggleCallout` turns the selected blocks into a callout (`note` unless `type` says otherwise: `note`, `tip`, `important`, `warning` or `caution`), or back into paragraphs. `setCallout` changes the type of the whole callout or quote with the caret; `type: null` makes it a plain quote. `toggleDetails` makes the block with the caret the title of a collapsible section, or, on a title, removes the section and keeps its blocks. `toggleCallout`, `setCallout` and `toggleDetails` return `false` when the `markdown` option turns that syntax off. `scrollIntoView` changes nothing in the document: it scrolls the caret into view in the editor's scrolling containers and the window, for example after an `insertMarkdown` from code. |
 | `run(fn)` | Applies a custom command: a function from state to a new state, or `null`. The pure commands are exported as `commands` from the package. |
 | `isActive(name, attrs?)` | `bold`, `italic`, `strike`, `code`, `link`, `image` (the selection is exactly one image), or the type of the block with the caret: `paragraph`, `heading`, `bulletList`, `orderedList`, `taskList`, `blockquote` (also true in a list inside a quote), `details` (a collapsible section's title or end), `codeBlock`, `table`, `divider`, `raw`. `attrs` narrows it, for example `isActive('heading', { level: 2 })`. |
 | `getAttributes(name)` | `src`, `alt`, `title`, `align`, `width`, `height` and `block` (true for an image block) of the selected image, `href` of a link, `level` of a heading, `language` of a code block, `checked` of a task, `syntax` of a raw block, `callout` of a callout (`getAttributes('blockquote')`, also in a list item inside a callout), `open` (saved open) and `collapsed` (shown collapsed) of a collapsible section title (`getAttributes('details')`). |
@@ -113,7 +113,7 @@ function Composer() {
 | `addWidget({ at, render })` | Shows app UI after the block that contains `at` (a position or `'end'`), such as an upload placeholder. Returns a widget with `update(render?)`, `remove()` and `isRemoved`. A widget is never saved and is not part of undo history. It moves with its block; if the block is deleted, it moves to the nearest remaining block. `insertMarkdown(md, { at: widget })` inserts after the widget's block. |
 | `positionAtPoint(x, y)` | The document position at a viewport point, or `null`. |
 | `redecorate()` | Computes decorations again for every block, for when what they show depends on something outside the document: which mentioned people exist, a tag's color, a highlighter's language that finished loading. Waits for an input method to finish composing. |
-| `refreshViews(syntax?)` | Renders every view (`views` in extensions) again, or those of one syntax (`'math'`, `'code:mermaid'`), for when what a view shows depends on something besides its source that changed: a renderer that finished loading, the font a diagram measured its text with. A view that failed is tried again. Only the blocks that show those views render again. Waits for an input method to finish composing. |
+| `refreshViews(name?)` | Renders every view (`views` and `blockView` in extensions) again, or those of one syntax (`'math'`, `'code:mermaid'`) or of the extension with that name (its `blockView`), for when what a view shows depends on something besides its source that changed: a renderer that finished loading, the font a diagram measured its text with, the page's color scheme a diagram was drawn in. A view that failed is tried again. Only the blocks that show those views render again; the document, selection and history stay. Waits for an input method to finish composing. |
 | `submit()` | Emits a pending `change`, then `submit` with the current Markdown, as Mod+Enter does. Returns `false` when nothing listens for `submit`. |
 | `root` | The editable element: `element`, or for `useEditor`, the element `<EditorContent>` shows. |
 | `isComposing` | True while an input method (IME) is composing text. Replacing the document then would break the composition; the React wrapper waits for it to end. |
@@ -121,7 +121,9 @@ function Composer() {
 | `mode` | `'rich'` or `'source'`: the mode the editor shows now. See [Source mode](#source-mode). |
 | `hasFocus()`, `focus()`, `blur()`, `isEditable`, `setOptions(options)` | |
 
-`insertMarkdown(markdown, { at, block, select })`: `at` is `'selection'` (default; replaces the selection, like a paste), `'end'`, a position, or a widget; the last three replace nothing. A single paragraph is inserted inline unless `block: true`, which inserts it as its own block and splits the block at the target. `select: 'keep'` keeps the current selection instead of moving the caret after the inserted content.
+`insertMarkdown(markdown, { at, block, select })`: `at` is `'selection'` (default; replaces the selection, like a paste), `'end'`, a position, or a widget; the last three replace nothing, so `at: editor.getSelection().focus` inserts at the caret and keeps selected text. A single paragraph is inserted inline unless `block: true`, which inserts it as its own block and splits the block at the target; an empty paragraph at the target is replaced, as a paste would, so no empty line is left above the inserted blocks. `select: 'keep'` keeps the current selection instead of moving the caret after the inserted content.
+
+`insertToken(text)` inserts a token such as `#tag` at the caret as a word of its own: a space before it unless the caret is at the start of the text or after whitespace, and a space after it, reusing one that is already there; the caret ends after that space. Selected text is kept, the token takes the format at the caret as typed text would (plain text in a code block), and it returns `false` without inserting while an input method is composing.
 
 ### Extensions
 
@@ -144,7 +146,7 @@ const tags: Extension = {
 textDecorator({ pattern: /\bTODO\b/, class: 'todo' })
 ```
 
-`tags()` and `mentions()` highlight `#tag` and `@name` (classes `mbe-tag` and `mbe-mention`) and keep `\#` and `\@` as written, so an escaped trigger survives edits. Their `class` and `attributes` can be functions of the match as written (`#work/planning`), for a color per tag or a `data-` attribute per person; call `editor.redecorate()` when what they read changes. Tags and mentions stay plain text and are saved exactly as typed. `scan` replaces the default grammar (`scanTags`, `scanMentions`); see [docs/syntax.md](docs/syntax.md#tags-and-mentions). For autocomplete, add a `suggestion()` next to them.
+`tags()` and `mentions()` highlight `#tag` and `@name` (classes `mbe-tag` and `mbe-mention`) and keep `\#` and `\@` as written, so an escaped trigger survives edits. Their `class` and `attributes` can be functions of the match as written (`#work/planning`), for a color per tag or a `data-` attribute per person; call `editor.redecorate()` when what they read changes. `onClick({ editor, match, event })` is called when a tag or mention is clicked to be followed, with the same contract as `onLinkClick`: a plain click while read-only, Mod+click while editing; return `true` to handle it, and the click goes no further. With `onClick`, read-only tags and mentions show a pointer cursor and mentions underline on hover, so an app needs no selectors of its own; whether a mention names someone who exists is the handler's call. Tags and mentions stay plain text and are saved exactly as typed. `scan` replaces the default grammar (`scanTags`, `scanMentions`); see [docs/syntax.md](docs/syntax.md#tags-and-mentions). For autocomplete, add a `suggestion()` next to them.
 
 #### Autocomplete
 
@@ -245,6 +247,22 @@ import katex from 'katex';
 import 'katex/dist/katex.min.css';
 
 math({ render: (tex, element, options) => katex.render(tex, element, { ...options, throwOnError: false }) });
+```
+
+`blockView` draws whole blocks the app wants to show its own way, such as a paragraph that is one bare link shown as a preview card with data from the app's server. `match(block)` picks the blocks, and `render(block, element, { editor })` draws one into `element`, a div the editor owns and keeps while the block is unchanged: typing elsewhere, a new selection, `redecorate()` and a switch to read-only never call `render` again, so app UI mounted into the element, such as a React portal, stays. `render` runs again for a block whose content changed and for a new block, and may return a function, which the editor calls when it lets the element go: the block was removed or changed, `refreshViews()` ran, or the editor was destroyed. Returning `false` leaves the block as the editor draws it. While editing, the block shows as the editor draws it, editable, when the selection is in it, and a click on the view puts the caret there, as for a formula; read-only always shows the view. `refreshViews(name)` with the extension's name draws its blocks again.
+
+```tsx
+const linkCards: Extension = {
+  name: 'linkCards',
+  blockView: {
+    match: (block) => block.type === 'paragraph' && block.content.length === 1 && block.content[0].link === inlineText(block.content),
+    render: (block, element) => {
+      const root = createRoot(element);
+      root.render(<LinkCard href={block.content[0].link} />);
+      return () => root.unmount();
+    },
+  },
+};
 ```
 
 ### Theming

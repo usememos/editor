@@ -29,7 +29,7 @@ import {
   sliceInline,
   sameLink,
 } from '../model';
-import type { ExtensionContext, SyntaxView } from '../extension';
+import type { BlockView, ExtensionContext, SyntaxView } from '../extension';
 import type { Labels } from '../labels';
 import type { IconName } from '../icons';
 import type { ThemeClasses } from '../theme';
@@ -135,6 +135,8 @@ export interface RenderContext {
   readonly views?: ReadonlyMap<string, SyntaxView>;
   /** A token or raw block of an extension syntax, rendered; null shows its source. */
   readonly view?: (syntax: string, source: string, kind: 'inline' | 'block') => HTMLElement | null;
+  /** The element an extension's block view draws a block of the document into, or null for none (see `BlockView`). */
+  readonly blockView?: (block: Block) => HTMLElement | null;
   /** The document's Markdown options, for the Markdown inside an HTML section. */
   readonly markdown?: MarkdownOptions;
   /** Theme classes for rendered elements. */
@@ -221,7 +223,13 @@ function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HT
     return e;
   };
   let root: HTMLElement;
-  switch (block.type) {
+  // Drawn by an extension's block view, unless the selection is in the block.
+  const hosted = reveal?.has(REVEAL_BLOCK) || ctx.source ? null : ctx.blockView?.(block);
+  if (hosted) {
+    root = el('div', 'mbe-view-block mbe-block-view');
+    root.contentEditable = 'false';
+    root.appendChild(hosted);
+  } else switch (block.type) {
     case 'paragraph':
     case 'heading':
     case 'quote':
@@ -484,8 +492,10 @@ function renderFlow(blocks: readonly Block[], ctx: RenderContext): HTMLElement {
 
 function appendBlocks(flow: HTMLElement, blocks: readonly Block[], ctx: RenderContext): void {
   const elements = new Map<string, HTMLElement>();
+  // These blocks are content, not blocks of the document: block views, which are kept per document block, do not apply.
+  const inner: RenderContext = ctx.blockView ? { ...ctx, blockView: undefined } : ctx;
   for (const block of blocks) {
-    const el = renderBlock(block, ctx);
+    const el = renderBlock(block, inner);
     elements.set(block.id, el);
     flow.appendChild(el);
   }
@@ -874,6 +884,14 @@ export class BlockRenderer {
   views?: ReadonlyMap<string, SyntaxView>;
   /** What a view gets besides its source: the editor. Set with `views`. */
   viewContext?: ExtensionContext;
+  /** Block views of extensions, with the extension's name, in extension order. */
+  blockViews: readonly { readonly name: string; readonly view: BlockView }[] = [];
+  /**
+   * Per block drawn by a block view, the element the view drew into (null
+   * when every matching view declined), kept while the block object is the
+   * same, and the function to call when the element is let go.
+   */
+  private readonly hosted = new Map<string, { block: Block; name: string; el: HTMLElement | null; dispose?: () => void }>();
   /** The document's Markdown options, for the Markdown inside an HTML section. */
   markdown?: MarkdownOptions;
   /** Theme classes for rendered elements. Set before a full render. */
@@ -921,6 +939,7 @@ export class BlockRenderer {
       decorateCode: this.decorateCode,
       views: this.views,
       view: this.views && ((syntax, source, kind) => this.renderView(syntax, source, kind)),
+      blockView: this.blockViews.length > 0 ? (block) => this.renderBlockView(block) : undefined,
       markdown: this.markdown,
       classes: this.classes,
       icon: this.icon,
@@ -966,6 +985,58 @@ export class BlockRenderer {
     this.noteViewBlock(key);
     this.viewCache.set(key, el);
     return el.cloneNode(true) as HTMLElement;
+  }
+
+  /** Whether a block view draws `block`: its blocks show their editable form only while the selection is in them. */
+  isHosted(block: Block): boolean {
+    return this.blockViews.some(({ view }) => view.match(block));
+  }
+
+  /**
+   * The element a block view drew `block` into: the one from the last render
+   * while the block object is the same, else a fresh one from the first
+   * matching view that does not decline. Null when none draws it.
+   */
+  private renderBlockView(block: Block): HTMLElement | null {
+    const prev = this.hosted.get(block.id);
+    if (prev && prev.block === block) return prev.el;
+    if (prev) this.disposeHosted(block.id);
+    const ctx = this.viewContext;
+    if (!ctx) return null;
+    let matched: string | null = null;
+    for (const { name, view } of this.blockViews) {
+      if (!view.match(block)) continue;
+      matched = name;
+      const el = this.root.ownerDocument.createElement('div');
+      let result: ReturnType<BlockView['render']>;
+      try {
+        result = view.render(block, el, ctx);
+      } catch {
+        result = false;
+      }
+      if (result === false) continue;
+      this.hosted.set(block.id, { block, name, el, dispose: typeof result === 'function' ? result : undefined });
+      return el;
+    }
+    // Every matching view declined: remembered, so the views do not run again until the block changes.
+    if (matched !== null) this.hosted.set(block.id, { block, name: matched, el: null });
+    return null;
+  }
+
+  private disposeHosted(id: string): void {
+    const entry = this.hosted.get(id);
+    if (!entry) return;
+    this.hosted.delete(id);
+    try {
+      entry.dispose?.();
+    } catch {
+      // A view's cleanup must not stop the render.
+    }
+  }
+
+  /** Lets every block view's element go: on destroy. */
+  destroy(): void {
+    for (const id of [...this.hosted.keys()]) this.disposeHosted(id);
   }
 
   private noteViewBlock(key: string): void {
@@ -1018,6 +1089,12 @@ export class BlockRenderer {
       this.viewBlocks.delete(key);
       for (const id of blocks) if (this.rendered.has(id)) ids.add(id);
     }
+    // Block views, by their extension's name.
+    for (const [id, entry] of [...this.hosted]) {
+      if (syntax !== undefined && entry.name !== syntax) continue;
+      this.disposeHosted(id);
+      if (this.rendered.has(id)) ids.add(id);
+    }
     return [...ids];
   }
 
@@ -1059,6 +1136,8 @@ export class BlockRenderer {
       next.set(block.id, { block, el, reveal });
     }
     this.loadedImages.clear();
+    // A block view's element goes when its block is gone, or changed while the block showed its editable form.
+    for (const [id, entry] of [...this.hosted]) if (next.get(id)?.block !== entry.block) this.disposeHosted(id);
 
     // Block elements in order, each followed by its widgets.
     const nodes: HTMLElement[] = [];

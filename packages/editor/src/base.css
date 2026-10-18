@@ -248,6 +248,10 @@
 :is(.mbe-root, .mbe-flow) > .mbe-view-block { overflow-x: auto; overflow-y: hidden; }
 /* A renderer's own block margins (KaTeX's display math has 1em) would add to the block gap. */
 :is(.mbe-root, .mbe-flow) > .mbe-view-block > * { margin-block: 0; }
+/* A block an extension's block view draws (see Extension.blockView): the app owns what is inside, so nothing is clipped. */
+.mbe-root > .mbe-block-view { overflow: visible; }
+/* Tags and mentions with an onClick, read-only: clickable, as links are. */
+.mbe-root.mbe-readonly :is([data-mbe-tag], [data-mbe-mention]) { cursor: pointer; }
 /* Rendered HTML: line breaks between its tags are not text. The Markdown
    between the tags of an HTML section (.mbe-flow) is blocks again, one
    block gap from the HTML around it. */

@@ -330,6 +330,27 @@ export function insertText(state: EditorState, text: string): EditorState {
 }
 
 /**
+ * Inserts a token such as `#tag` at the selection's focus, spaced as a word
+ * among words: a space before it unless the caret is at the start of the
+ * text or after whitespace, and a space after it unless one follows, which
+ * the caret moves past; either way the caret ends after that space. Selected
+ * text is kept, and the token takes the format at the caret as typed text
+ * would: plain in a code or raw block.
+ */
+export function insertToken(state: EditorState, token: string): EditorState {
+  const pos = state.selection.focus;
+  const content = containerContent(getBlock(state.doc, pos.blockId), pos.cell);
+  if (content === null) return state;
+  const text = inlineText(content);
+  const before = pos.offset > 0 && !/\s/.test(text[pos.offset - 1]!) ? ' ' : '';
+  const spaced = text[pos.offset] === ' ' || text[pos.offset] === '\t';
+  const next = insertText({ ...state, selection: { anchor: pos, focus: pos } }, before + token + (spaced ? '' : ' '));
+  if (!spaced) return next;
+  const after = { ...next.selection.focus, offset: next.selection.focus.offset + 1 };
+  return { ...next, selection: { anchor: after, focus: after } };
+}
+
+/**
  * ArrowDown on the last line of the last block, or ArrowUp on the first line
  * of the first block, when that block is a code block, table or divider, or
  * a selected image block: adds an empty paragraph past it, so the caret is

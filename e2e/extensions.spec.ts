@@ -151,6 +151,72 @@ test('tags take a class and attributes per match, and redecorate() applies outsi
   await expect(mentionEls.nth(1)).toHaveAttribute('data-known', '');
 });
 
+test('tags and mentions with onClick follow a click when read-only and Mod+click while editing', async ({ page }) => {
+  await page.goto('/?empty');
+  await page.evaluate(() => {
+    const { Editor, tags, mentions } = (window as any).core;
+    const w = window as any;
+    w.clicks = [];
+    w.outside = 0;
+    w.editor.destroy();
+    document.getElementById('editor')!.parentElement!.addEventListener('click', () => w.outside++);
+    w.editor = new Editor({
+      element: document.getElementById('editor'),
+      content: 'see #work and @alice or @bob',
+      editable: false,
+      extensions: [
+        tags({ class: 'tag', onClick: ({ match, editor }: { match: string; editor: unknown }) => void w.clicks.push(`${match}:${editor === w.editor}`) }),
+        mentions({
+          attributes: (m: string) => (m === '@alice' ? { 'data-resolved': '' } : undefined),
+          // A handled click goes no further; an unknown person is left to the page.
+          onClick: ({ match, event }: { match: string; event: MouseEvent }) => {
+            w.clicks.push(`${match}:${(event.target as HTMLElement).closest('[data-resolved]') !== null}`);
+            return match === '@alice';
+          },
+        }),
+      ],
+    });
+  });
+  const tag = page.locator('#editor [data-mbe-tag]');
+  const alice = page.locator('#editor [data-mbe-mention="@alice"]');
+  const bob = page.locator('#editor [data-mbe-mention="@bob"]');
+  await expect(tag).toHaveText('#work');
+  await expect(tag).toHaveClass(/tag/);
+  await expect(tag).toHaveCSS('cursor', 'pointer');
+  await expect(alice).toHaveCSS('cursor', 'pointer');
+  await alice.hover();
+  await expect(alice).toHaveCSS('text-decoration-line', 'underline');
+  await tag.click();
+  await alice.click();
+  await bob.click();
+  const clicks = () => page.evaluate(() => (window as any).clicks);
+  expect(await clicks()).toEqual(['#work:true', '@alice:true', '@bob:false']);
+  // Two clicks were not handled (the tag's handler returned nothing) and reached the page; @alice's did not.
+  expect(await page.evaluate(() => (window as any).outside)).toBe(2);
+
+  // Editing: a plain click puts the caret in the text; Mod+click follows the tag.
+  await page.evaluate(() => (window as any).editor.setOptions({ editable: true }));
+  await expect(tag).not.toHaveCSS('cursor', 'pointer');
+  await tag.click();
+  expect(await clicks()).toHaveLength(3);
+  await page.keyboard.press('End');
+  await page.keyboard.type(' x');
+  expect(await md(page)).toBe('see #work and @alice or @bob x');
+  await tag.click({ modifiers: ['ControlOrMeta'] });
+  expect(await clicks()).toEqual(['#work:true', '@alice:true', '@bob:false', '#work:true']);
+
+  // Without onClick, nothing is marked and nothing is clickable.
+  await page.evaluate(() => {
+    const { Editor, tags } = (window as any).core;
+    const w = window as any;
+    w.editor.destroy();
+    w.editor = new Editor({ element: document.getElementById('editor'), content: '#work', editable: false, extensions: [tags()] });
+  });
+  await expect(page.locator('#editor .mbe-tag')).toHaveText('#work');
+  await expect(page.locator('#editor [data-mbe-tag]')).toHaveCount(0);
+  await expect(page.locator('#editor .mbe-tag')).not.toHaveCSS('cursor', 'pointer');
+});
+
 test('headingIds gives headings element ids that follow edits', async ({ page }) => {
   await page.goto('/?empty');
   await page.evaluate(() => {

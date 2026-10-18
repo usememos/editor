@@ -6,7 +6,7 @@ import type { Decoration, Decorator } from './decorations';
 import type { Editor } from './editor';
 import type { SuggestionConfig } from './extensions/suggestion';
 import type { MarkdownSyntax } from './markdown/options';
-import type { CodeBlock, Position } from './model';
+import type { Block, CodeBlock, Position } from './model';
 import type { ThemeClasses } from './theme';
 
 export interface ExtensionContext {
@@ -38,6 +38,26 @@ export type KeyHandler = (ctx: ExtensionContext) => boolean;
  * that rejects or resolves to false shows the source.
  */
 export type SyntaxView = (source: string, element: HTMLElement, kind: 'inline' | 'block', ctx: ExtensionContext) => void | false | PromiseLike<void | false>;
+
+/**
+ * Draws whole blocks the app wants to show its own way, such as a paragraph
+ * that is one bare link shown as a preview card with data from a server.
+ * `match` picks the blocks; `render` draws one into `element`, a div the
+ * editor owns and keeps while the block is unchanged: typing elsewhere, a
+ * new selection or `redecorate()` never call `render` again, so app UI
+ * mounted into the element (a React portal) stays. The editor calls `render`
+ * again for a block whose content changed, and for a new block. It calls the
+ * function `render` returned when it lets the element go: the block was
+ * removed or changed, `editor.refreshViews()` ran, or the editor was
+ * destroyed. `render` returns false to leave the block as the editor draws
+ * it. While editing, the block shows as the editor draws it, editable, when
+ * the selection is in it, as a rendered formula shows its source; read-only
+ * always shows the view.
+ */
+export interface BlockView {
+  readonly match: (block: Block) => boolean;
+  readonly render: (block: Block, element: HTMLElement, ctx: ExtensionContext) => void | false | (() => void);
+}
 
 /** A code block's code, for decorations such as syntax highlighting. */
 export interface CodeDecorationContext {
@@ -89,6 +109,12 @@ export interface Extension {
    * same. Read-only always shows the rendered view.
    */
   readonly views?: Readonly<Record<string, SyntaxView>>;
+  /**
+   * Draws the blocks `match` picks with `render`, in place of the editor's
+   * own rendering; see `BlockView`. `editor.refreshViews(name)`, with this
+   * extension's name, draws them again.
+   */
+  readonly blockView?: BlockView;
   /**
    * Theme classes for the elements this extension cares about, such as
    * `token.math`. The editor's `theme` wins for the same key, and an earlier

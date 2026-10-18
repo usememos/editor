@@ -407,6 +407,91 @@ test('a view gets the editor; refreshViews renders views again, one syntax or al
   expect(await md(page)).toBe('text\n\n```a\none\n```\n\n```b\ntwo\n```\n\n```b\nfail\n```');
 });
 
+test('a block view draws matching blocks into an element kept while the block is unchanged, and lets it go when it changes', async ({ page }) => {
+  await page.goto('/?empty');
+  await page.evaluate(() => {
+    const { Editor, inlineText } = (window as any).core;
+    const w = window as any;
+    w.log = [] as string[];
+    w.editor.destroy();
+    w.editor = new Editor({
+      element: document.getElementById('editor'),
+      content: 'intro\n\ncard one\n\ncard decline\n\nend',
+      extensions: [
+        {
+          name: 'cards',
+          blockView: {
+            match: (block: any) => block.type === 'paragraph' && inlineText(block.content).startsWith('card '),
+            render: (block: any, el: HTMLElement, ctx: { editor: { root: Element } }) => {
+              const text = inlineText(block.content) as string;
+              // The first render runs inside the constructor, before `w.editor` is assigned.
+              w.log.push(`render ${text} ${ctx.editor.root === document.getElementById('editor')}`);
+              if (text.endsWith('decline')) return false;
+              el.className = 'card';
+              el.textContent = `card: ${text}`;
+              return () => w.log.push(`dispose ${text}`);
+            },
+          },
+        },
+      ],
+    });
+  });
+  const log = () => page.evaluate(() => (window as any).log);
+  const cards = page.locator('#editor .mbe-block-view .card');
+  await expect(cards).toHaveText(['card: card one']);
+  // The declined one stays a paragraph.
+  await expect(page.locator('#editor > p')).toHaveText(['intro', 'card decline', 'end']);
+  expect(await log()).toEqual(['render card one true', 'render card decline true']);
+
+  // Typing elsewhere, read-only, redecorate and a selection change keep the element: render runs again for nothing.
+  const card = await cards.elementHandle();
+  await page.locator('#editor > p').first().click();
+  await page.keyboard.type('!');
+  await page.evaluate(() => {
+    (window as any).editor.redecorate();
+    (window as any).editor.setOptions({ editable: false });
+    (window as any).editor.setOptions({ editable: true });
+  });
+  await expect(cards).toHaveText(['card: card one']);
+  expect(await card!.evaluate((el) => el.isConnected)).toBe(true);
+  expect(await log()).toHaveLength(2);
+
+  // Clicking the card shows the paragraph to edit; leaving it shows the same card again.
+  await cards.click();
+  await expect(page.locator('#editor > p')).toHaveText(['intro!', 'card one', 'card decline', 'end']);
+  await page.keyboard.press('ArrowUp');
+  await expect(cards).toHaveText(['card: card one']);
+  expect(await card!.evaluate((el) => el.isConnected)).toBe(true);
+  expect(await log()).toHaveLength(2);
+
+  // Editing the text lets the old element go and draws the new block; a block that no longer matches goes back to a paragraph.
+  await cards.click();
+  await page.keyboard.type(' two');
+  await page.keyboard.press('ArrowUp');
+  await expect(cards).toHaveText(['card: card one two']);
+  expect(await log()).toEqual(['render card one true', 'render card decline true', 'dispose card one', 'render card one two true']);
+  await cards.click();
+  await page.keyboard.press('Home');
+  await page.keyboard.type('x');
+  await page.keyboard.press('ArrowUp');
+  await expect(cards).toHaveCount(0);
+  expect((await log()).slice(4)).toEqual(['dispose card one two']);
+  expect(await md(page)).toBe('intro!\n\nxcard one two\n\ncard decline\n\nend');
+
+  // A declined block that changes is asked again. refreshViews draws every block view again, by the extension's name too, and destroy lets them go.
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('End');
+  await page.keyboard.type('d');
+  await page.keyboard.press('ArrowDown');
+  await expect(cards).toHaveText(['card: card declined']);
+  await page.evaluate(() => (window as any).editor.refreshViews('cards'));
+  await expect(cards).toHaveText(['card: card declined']);
+  expect((await log()).slice(-3)).toEqual(['render card declined true', 'dispose card declined', 'render card declined true']);
+  await page.evaluate(() => (window as any).editor.destroy());
+  expect((await log()).slice(-1)).toEqual(['dispose card declined']);
+});
+
 test('a font token change renders views again; a color change does not', async ({ page }) => {
   await page.goto('/?empty');
   await page.evaluate(() => {

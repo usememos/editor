@@ -272,6 +272,15 @@ export interface EditorCommands {
   updateImage(attrs: cmd.ImageChange): boolean;
   /** Inserts plain text at the selection, or in place of `range` (for example a suggestion's range). */
   insertText(text: string, options?: { range?: { from: Position; to: Position } }): boolean;
+  /**
+   * Inserts a token such as `#tag` at the caret as a word of its own: with a
+   * space before it unless the caret is at the start of the text or after
+   * whitespace, and a space after it, reusing one that is already there; the
+   * caret ends after that space. Selected text is kept. The token is plain
+   * text in a code block or source mode, as typed text is. Does nothing, and
+   * returns false, while an input method is composing.
+   */
+  insertToken(text: string): boolean;
   insertMarkdown(markdown: string, options?: InsertMarkdownOptions): boolean;
   insertTable(attrs?: { rows?: number; cols?: number }): boolean;
   insertDivider(): boolean;
@@ -490,6 +499,7 @@ export class Editor {
     // Raw Markdown blocks are rendered by the editor itself (see MARKDOWN_VIEW).
     this.renderer.views = new Map([['markdown', MARKDOWN_VIEW], ...this.extensions.flatMap((e) => Object.entries(e.views ?? {}))]);
     this.renderer.viewContext = { editor: this };
+    this.renderer.blockViews = this.extensions.flatMap((e) => (e.blockView ? [{ name: e.name, view: e.blockView }] : []));
     this.renderer.markdown = this.markdown;
     this.renderer.onViewSettled = (ids) => this.viewsSettled(ids);
     const codeDecorators = this.extensions.flatMap((e) => (e.codeDecorations ? [e.codeDecorations] : []));
@@ -1086,6 +1096,7 @@ export class Editor {
           const selection = clampSelection(s.doc, { anchor: range.from, focus: range.to });
           return cmd.insertText({ ...s, selection, storedMarks: null }, text);
         }),
+      insertToken: (text) => !this.composing && run((s) => cmd.insertToken(s, text)),
       insertMarkdown: (markdown, options = {}) => {
         const fragment = parseMarkdown(markdown, this.markdown).blocks;
         const at = options.at;
@@ -1300,6 +1311,7 @@ export class Editor {
     this.blockHandle.destroy();
     this.linkCard?.destroy();
     this.resizeHandles.destroy();
+    this.renderer.destroy();
     setPopupContainer(this.root, undefined);
     for (const name of Object.keys(this.runtime.attributes ?? {})) this.root.removeAttribute(name);
     for (const name of this.tokenNames) this.root.style.removeProperty(name);
@@ -1578,7 +1590,7 @@ export class Editor {
    */
   private paint(force = false, lazy = false, hadFocus = this.hasFocus()): void {
     const views = this.renderer.views;
-    if (views && !this.pointerDown && !this.composing) this.renderer.revealed = revealedViews(this.state, views, !this.readOnly && hadFocus);
+    if (views && !this.pointerDown && !this.composing) this.renderer.revealed = revealedViews(this.state, views, !this.readOnly && hadFocus, this.hosted);
     this.renderer.render(this.state.doc, force, lazy);
     this.applyHeadingIds();
     this.applyReadOnly();
@@ -1670,9 +1682,9 @@ export class Editor {
     });
   }
 
-  /** A block rendered by a view (a formula block, a diagram), or null. */
-  private viewBlock(block: Block | undefined): RawBlock | CodeBlock | null {
-    if (!block || (block.type !== 'raw' && block.type !== 'code')) return null;
+  /** A block rendered by a view (a formula block, a diagram, a block an extension's block view draws), or null. */
+  private viewBlock(block: Block | undefined): Block | null {
+    if (!block) return null;
     return this.renderer.elementFor(block.id)?.classList.contains('mbe-view-block') ? block : null;
   }
 
@@ -1680,9 +1692,12 @@ export class Editor {
   private refreshRevealed(): void {
     const views = this.renderer.views;
     if (!views || this.pointerDown) return;
-    const next = revealedViews(this.state, views, !this.readOnly && this.hasFocus());
+    const next = revealedViews(this.state, views, !this.readOnly && this.hasFocus(), this.hosted);
     if (!sameRevealed(next, this.renderer.revealed)) this.paint();
   }
+
+  /** Whether an extension's block view draws `block` (see `BlockView`). */
+  private readonly hosted = (block: Block): boolean => this.renderer.isHosted(block);
 
   private onMouseUp(): void {
     if (!this.pointerDown) return;
@@ -1716,11 +1731,8 @@ export class Editor {
       const content = contentElement(this.renderer.elementFor(current.id)!);
       if (content && !this.onEdgeLine(content, forward)) return null;
     }
-    if (next.type === 'table') {
-      const row = forward ? 0 : next.rows.length - 1;
-      return { blockId: next.id, offset: forward ? 0 : inlineLength(next.rows[row]![0]!), cell: { row, col: 0 } };
-    }
-    return viewEntry(view!, forward);
+    // A table is entered in its first column, like a view's source at its start or end.
+    return viewEntry(next, forward);
   }
 
   /**
@@ -1821,11 +1833,7 @@ export class Editor {
   /** A click on a rendered view puts the caret in its source: at the end of a token, or of a block's formula. */
   private revealView(view: HTMLElement): void {
     const block = view.hasAttribute(BLOCK_ATTR) ? getBlock(this.state.doc, view.getAttribute(BLOCK_ATTR)!) : null;
-    const pos = block
-      ? block.type === 'raw' || block.type === 'code'
-        ? viewEntry(block, false)
-        : null
-      : domToPosition(this.root, view.parentNode!, childIndex(view) + 1);
+    const pos = block ? viewEntry(block, false) : domToPosition(this.root, view.parentNode!, childIndex(view) + 1);
     if (!pos) return;
     this.root.focus({ preventScroll: true });
     this.setSelection({ anchor: pos, focus: pos });

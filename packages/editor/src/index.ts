@@ -26,7 +26,7 @@ export type { EditorMode } from './sourceMode';
 export type { MarkdownOptions } from './markdown/options';
 export { docToHtml } from './clipboard/toHtml';
 export { htmlToDoc } from './clipboard/fromHtml';
-export type { CodeDecorationContext, Extension, ExtensionContext, KeyHandler, SyntaxView } from './extension';
+export type { BlockView, CodeDecorationContext, Extension, ExtensionContext, KeyHandler, SyntaxView } from './extension';
 export type { ColorScheme, Theme, ThemeClasses, ThemeColors, ThemeTokens } from './theme';
 export { defaultKeymap } from './extensions/keymap';
 export { math, type MathOptions } from './extensions/math';

@@ -453,6 +453,7 @@ const extensions = [
 | `class` | The class on each match, instead of `mbe-tag` or `mbe-mention`. |
 | `attributes` | Attributes added to each match. |
 | `scan` | Replaces the default grammar. See [Custom grammar](#custom-grammar). |
+| `onClick` | Called with `{ editor, match, event }` when a match is clicked to be followed: a plain click while read-only, Mod+click while editing. `match` is the text as written. Return `true` to handle it. Read-only matches then show a pointer cursor, and mentions underline on hover. |
 
 ### Tag grammar
 

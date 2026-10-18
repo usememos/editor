@@ -80,6 +80,52 @@ test('insertMarkdown inserts at the caret, as its own block, or at the end', asy
   expect(selected).toEqual({ anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 5 } });
 });
 
+test('insertMarkdown as a block replaces an empty paragraph at the target, at the caret and at a position', async ({ page }) => {
+  await open(page, 'first\n\n&nbsp;\n\nlast');
+  await page.evaluate(() => {
+    const editor = (window as any).editor;
+    editor.setSelection({ anchor: { block: 1, offset: 0 }, focus: { block: 1, offset: 0 } });
+    editor.commands.insertMarkdown('- item', { block: true });
+  });
+  expect(await blocks(page)).toEqual(['p:first', 'ul0:item', 'p:last']);
+  await open(page, 'first\n\n&nbsp;\n\nlast');
+  await page.evaluate(() => {
+    const editor = (window as any).editor;
+    // A position: nothing selected is replaced, and the empty paragraph still is.
+    editor.setSelection({ anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 5 } });
+    editor.commands.insertMarkdown('> quote', { at: { blockId: editor.state.doc.blocks[1].id, offset: 0 }, block: true, select: 'keep' });
+  });
+  expect(await blocks(page)).toEqual(['p:first', 'quote:quote', 'p:last']);
+  expect(await page.evaluate(() => (window as any).editor.selectionToJSON())).toEqual({ anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 5 } });
+});
+
+test('insertToken inserts a tag as a word of its own, keeps selected text, and waits for composition', async ({ page, browserName }) => {
+  await open(page, 'note here');
+  const result = await page.evaluate(() => {
+    const editor = (window as any).editor;
+    editor.setSelection({ anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 4 } });
+    const first = editor.commands.insertToken('#work');
+    const afterFirst = editor.selectionToJSON();
+    const second = editor.commands.insertToken('#a');
+    return { first, second, afterFirst, md: editor.getMarkdown(), selection: editor.selectionToJSON() };
+  });
+  // "note| here" -> "note #work |here" -> "note #work #a |here": the existing space is reused.
+  expect(result.md).toBe('note #work #a here');
+  expect(result).toMatchObject({ first: true, second: true, afterFirst: { focus: { block: 0, offset: 11 } }, selection: { focus: { block: 0, offset: 14 } } });
+  await page.locator('#editor').click();
+  await page.keyboard.press('End');
+  expect(await page.evaluate(() => (window as any).editor.commands.insertToken('#end'))).toBe(true);
+  // The trailing space is not saved: Markdown strips it.
+  expect(await md(page)).toBe('note #work #a here #end');
+
+  test.skip(browserName !== 'chromium', 'IME is simulated through the Chrome DevTools Protocol');
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.imeSetComposition', { text: 'に', selectionStart: 1, selectionEnd: 1 });
+  expect(await page.evaluate(() => (window as any).editor.commands.insertToken('#no'))).toBe(false);
+  await cdp.send('Input.insertText', { text: 'に' });
+  expect(await md(page)).toBe('note #work #a here #end に');
+});
+
 test('events: change once per frame, selectionChange, submit on Ctrl+Enter, unsubscribe', async ({ page }) => {
   await open(page, '');
   await page.evaluate(() => {

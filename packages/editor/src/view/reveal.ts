@@ -3,14 +3,19 @@
 // included, and a raw block that holds either end.
 
 import type { SyntaxView } from '../extension';
-import { type CodeBlock, type EditorState, type Position, type RawBlock, containerContent, getBlock, inlineText, tokensAt } from '../model';
+import { type Block, type EditorState, type Position, containerContent, endOf, getBlock, inlineLength, inlineText, startOf, tokensAt } from '../model';
 import { type BlockReveal, REVEAL_BLOCK, codeViewName, htmlRuns, sameReveal, tokenKey } from './dom';
 
-/** Per block, the views that show their source. Empty when `active` is false (read-only or unfocused). */
+/**
+ * Per block, the views that show their source. Empty when `active` is false
+ * (read-only or unfocused). `hosted` says whether an extension's block view
+ * draws a block, which then shows its editable form instead.
+ */
 export function revealedViews(
   state: EditorState,
   views: ReadonlyMap<string, SyntaxView>,
   active: boolean,
+  hosted?: (block: Block) => boolean,
 ): Map<string, BlockReveal> {
   const out = new Map<string, Set<string>>();
   if (!active) return out;
@@ -22,6 +27,7 @@ export function revealedViews(
     [anchor, anchorBlock],
   ] as const) {
     const keys = out.get(block.id) ?? new Set<string>();
+    if (hosted?.(block)) keys.add(REVEAL_BLOCK);
     if (block.type === 'raw') {
       if (views.has(block.syntax)) keys.add(REVEAL_BLOCK);
     } else if (block.type === 'code') {
@@ -49,9 +55,15 @@ export function sameRevealed(a: ReadonlyMap<string, BlockReveal>, b: ReadonlyMap
  * Where the caret goes in a rendered block's source. A raw block: past its
  * opening line going forward (such as a `$$` fence), at the end of its
  * next-to-last line going back or on a click. A code block holds only the
- * code, and raw Markdown has no fence: their start or their end.
+ * code, and raw Markdown has no fence: their start or their end. So does any
+ * other block drawn by a block view; a table, its first or last cell.
  */
-export function viewEntry(block: RawBlock | CodeBlock, forward: boolean): Position {
+export function viewEntry(block: Block, forward: boolean): Position {
+  if (block.type === 'table') {
+    const row = forward ? 0 : block.rows.length - 1;
+    return { blockId: block.id, offset: forward ? 0 : inlineLength(block.rows[row]![0]!), cell: { row, col: 0 } };
+  }
+  if (block.type !== 'raw' && block.type !== 'code') return forward ? startOf(block) : endOf(block);
   const text = inlineText(block.content);
   if (block.type === 'code' || block.syntax === 'markdown') return { blockId: block.id, offset: forward ? 0 : text.length };
   if (forward) {

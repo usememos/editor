@@ -11,8 +11,10 @@
 // inline code, links, images, raw HTML or tokens.
 
 import { type Decoration, type DecorationContext, type TextRange, isExcluded } from '../decorations';
+import type { Editor } from '../editor';
 import type { Extension } from '../extension';
 import type { InlineSyntax } from '../markdown/options';
+import { isMac } from '../ui/popup';
 
 /** Finds tags or mentions in `text[from, to)`. `text` is the whole container, so a scanner can look before `from`. */
 export type TagScanner = (text: string, from: number, to: number) => Iterable<TextRange>;
@@ -28,6 +30,16 @@ export interface TagsOptions {
   readonly attributes?: Readonly<Record<string, string>> | ((match: string) => Readonly<Record<string, string>> | undefined);
   /** Finds matches in a run of text. Default `scanTags` or `scanMentions`. */
   readonly scan?: TagScanner;
+  /**
+   * Called when a match is clicked to be followed, as `onLinkClick` is for a
+   * link: a plain click while read-only, Mod+click while editing. `match` is
+   * the text as written (`#work/planning`). Return true to handle it: the
+   * click then goes no further, neither to the browser nor to the page's
+   * own listeners. With this option, read-only matches show a pointer
+   * cursor, and mentions underline on hover; the editor marks each match with
+   * `data-mbe-tag` or `data-mbe-mention`.
+   */
+  readonly onClick?: (ctx: { readonly editor: Editor; readonly match: string; readonly event: MouseEvent }) => boolean | void;
 }
 
 // The grammar is memos' (usememos/memos markdown/parser/tag.go and
@@ -196,8 +208,8 @@ export function* scanMentions(text: string, from = 0, to = text.length): Generat
   }
 }
 
-/** Runs the scanner over each run of text with one format, skipping excluded spans. */
-function decorate(scan: TagScanner, cls: NonNullable<TagsOptions['class']>, attributes: TagsOptions['attributes']) {
+/** Runs the scanner over each run of text with one format, skipping excluded spans. `mark` is an attribute set to each match, for clicks. */
+function decorate(scan: TagScanner, cls: NonNullable<TagsOptions['class']>, attributes: TagsOptions['attributes'], mark?: string) {
   return ({ text, content }: DecorationContext): Decoration[] => {
     const out: Decoration[] = [];
     let pos = 0;
@@ -210,7 +222,8 @@ function decorate(scan: TagScanner, cls: NonNullable<TagsOptions['class']>, attr
           if (to <= from) continue;
           const match = text.slice(from, to);
           const className = typeof cls === 'function' ? cls(match) : cls;
-          const attrs = typeof attributes === 'function' ? attributes(match) : attributes;
+          const given = typeof attributes === 'function' ? attributes(match) : attributes;
+          const attrs = mark ? { ...given, [mark]: match } : given;
           out.push(attrs ? { from, to, class: className, attributes: attrs } : { from, to, class: className });
         }
       }
@@ -225,20 +238,38 @@ function escapeSyntax(ch: string): InlineSyntax {
   return { name: 'escape', triggers: '\\', match: (text, pos) => (text[pos + 1] === ch ? pos + 2 : -1) };
 }
 
-function build(name: string, char: string, scan: TagScanner, defaultClass: string, options: TagsOptions): Extension {
-  return {
+function build(name: string, char: string, scan: TagScanner, defaultClass: string, mark: string, options: TagsOptions): Extension {
+  const onClick = options.onClick;
+  const extension: Extension = {
     name,
     markdown: { inline: [escapeSyntax(char)] },
-    decorations: decorate(options.scan ?? scan, options.class ?? defaultClass, options.attributes),
+    decorations: decorate(options.scan ?? scan, options.class ?? defaultClass, options.attributes, onClick ? mark : undefined),
+  };
+  if (!onClick) return extension;
+  return {
+    ...extension,
+    // A click on a match follows it as a click on a link does (see Editor.onClick): read-only, or Mod+click while editing.
+    onCreate: ({ editor }) => {
+      const handle = (e: MouseEvent) => {
+        const el = (e.target as HTMLElement).closest?.<HTMLElement>(`[${mark}]`);
+        if (!el || !editor.root.contains(el) || (editor.isEditable && !(isMac ? e.metaKey : e.ctrlKey))) return;
+        if (onClick({ editor, match: el.getAttribute(mark)!, event: e })) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      };
+      editor.root.addEventListener('click', handle);
+      return () => editor.root.removeEventListener('click', handle);
+    },
   };
 }
 
 /** `#tag` highlighting and `\#` escapes. */
 export function tags(options: TagsOptions = {}): Extension {
-  return build('tags', '#', scanTags, 'mbe-tag', options);
+  return build('tags', '#', scanTags, 'mbe-tag', 'data-mbe-tag', options);
 }
 
 /** `@name` highlighting and `\@` escapes. */
 export function mentions(options: TagsOptions = {}): Extension {
-  return build('mentions', '@', scanMentions, 'mbe-mention', options);
+  return build('mentions', '@', scanMentions, 'mbe-mention', 'data-mbe-mention', options);
 }

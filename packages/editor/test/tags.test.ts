@@ -154,6 +154,17 @@ describe('tag decorations', () => {
       { from: 17, to: 21, class: 'mbe-mention' },
     ]);
   });
+
+  it('marks each match with its text for clicks only when onClick is given', () => {
+    const block = parseMarkdown('#work and @alice', TAGS).blocks[0]!;
+    const ctx = decorationContext(block, 'content' in block ? block.content : []);
+    expect(tags().onCreate).toBeUndefined();
+    const tag = tags({ attributes: { 'data-x': '1' }, onClick: () => true });
+    const mention = mentions({ onClick: () => true });
+    expect(tag.onCreate).toBeTypeOf('function');
+    expect(tag.decorations!(ctx)).toEqual([{ from: 0, to: 5, class: 'mbe-tag', attributes: { 'data-x': '1', 'data-mbe-tag': '#work' } }]);
+    expect(mention.decorations!(ctx)).toEqual([{ from: 10, to: 16, class: 'mbe-mention', attributes: { 'data-mbe-mention': '@alice' } }]);
+  });
 });
 
 describe('tag escapes', () => {
