@@ -28,6 +28,7 @@ import {
   sameQuote,
   sliceInline,
   sameLink,
+  normalizeInline,
 } from '../model';
 import type { BlockView, ExtensionContext, SyntaxView } from '../extension';
 import type { Labels } from '../labels';
@@ -611,6 +612,34 @@ function fill(doc: Document): HTMLElement {
 
 const VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
 
+/** A tag or comment of inline raw HTML; what lies between is other HTML text. */
+const HTML_PIECE = /<!--[\s\S]*?-->|<[^<>]*>/g;
+
+/**
+ * Inline content with each tag or comment of raw HTML as its own span.
+ * Adjacent `html` spans are joined first, so several tags that
+ * `normalizeInline` merged (`</rt></ruby><ruby>`) come apart, and a tag an
+ * edit left in two spans is whole again. Everything else is unchanged.
+ */
+export function splitHtmlSpans(inline: Inline): Inline {
+  if (!inline.some((s) => s.marks.includes('html'))) return inline;
+  const out: Span[] = [];
+  for (const span of normalizeInline(inline)) {
+    if (!span.marks.includes('html')) {
+      out.push(span);
+      continue;
+    }
+    let last = 0;
+    for (const m of span.text.matchAll(HTML_PIECE)) {
+      if (m.index > last) out.push({ ...span, text: span.text.slice(last, m.index) });
+      out.push({ ...span, text: m[0] });
+      last = m.index + m[0].length;
+    }
+    if (last < span.text.length) out.push({ ...span, text: span.text.slice(last) });
+  }
+  return out;
+}
+
 /**
  * Runs of inline raw HTML that render as one piece: an opening tag through
  * its closing tag, with the text between (`<kbd>Ctrl</kbd>`), or a single tag
@@ -620,7 +649,7 @@ const VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'i
 export function htmlRuns(inline: Inline): { from: number; to: number }[] {
   const spans: { span: Span; from: number; to: number }[] = [];
   let pos = 0;
-  for (const span of inline) {
+  for (const span of splitHtmlSpans(inline)) {
     spans.push({ span, from: pos, to: pos + span.text.length });
     pos += span.text.length;
   }
@@ -669,7 +698,9 @@ function renderInline(
   const viewed = views
     ? (span: Span, from: number) => !!span.token && views.has(span.token) && !reveal?.has(tokenKey(cell, from))
     : undefined;
-  // Inline raw HTML renders through the `html` view, one run at a time, unless revealed.
+  // Inline raw HTML renders through the `html` view, one run at a time, unless
+  // revealed. Each tag is its own span, so a run starts and ends on a span.
+  if (views?.has('html')) inline = splitHtmlSpans(inline);
   const runs = views?.has('html') && inline.some((s) => s.marks.includes('html'))
     ? htmlRuns(inline).filter((run) => !reveal?.has(tokenKey(cell, run.from)))
     : [];
