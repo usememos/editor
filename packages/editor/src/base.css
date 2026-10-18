@@ -236,7 +236,8 @@
   padding: 0;
   width: 12em;
 }
-:is(.mbe-root, .mbe-flow) > .mbe-code pre,
+/* Code keeps its lines and scrolls sideways, as GitHub shows it; raw source wraps. */
+:is(.mbe-root, .mbe-flow) > .mbe-code pre { white-space: pre; overflow-x: auto; tab-size: 2; }
 :is(.mbe-root, .mbe-flow) > pre.mbe-raw { white-space: pre-wrap; tab-size: 2; }
 /* Source mode: the document as plain text in the editor's font. */
 .mbe-root > .mbe-source { white-space: pre-wrap; tab-size: 4; overflow-wrap: anywhere; }
@@ -276,16 +277,19 @@
 
 /* Table */
 :is(.mbe-root, .mbe-flow) > .mbe-table { overflow-x: auto; }
-/* Columns fit their content and wrap at the editor's width; wider tables scroll. */
+/* Columns fit their content and wrap at the editor's width, as GitHub lays
+   tables out; wider tables scroll. No column has a minimum width, so a long
+   column is not squeezed into wrapping by short ones. */
 :is(.mbe-root, .mbe-flow) > .mbe-table table { border-collapse: separate; border-spacing: 0; }
 :is(.mbe-root, .mbe-flow) > .mbe-table th,
 :is(.mbe-root, .mbe-flow) > .mbe-table td {
   padding: 4px 8px;
-  min-width: 4em;
   vertical-align: top;
   text-align: start;
   outline: none;
 }
+/* An empty cell keeps room to click into while editing. */
+.mbe-root:not(.mbe-readonly) > .mbe-table :is(th, td).mbe-empty-content { min-width: 4em; }
 
 /* Blocks inside collapsible sections, after the block rules so it wins over their margins. */
 :is(.mbe-root, .mbe-flow) > [data-in-section] { margin-inline-start: calc(var(--mbe-section-depth, 0) * var(--mbe-indent-size)); }

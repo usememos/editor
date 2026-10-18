@@ -231,7 +231,6 @@
   border: 1px solid var(--mbe-border);
   border-radius: var(--mbe-radius);
 }
-:is(.mbe-root, .mbe-flow) > .mbe-table :is(th, td) { padding: 6px 10px; min-width: 8em; }
 :is(.mbe-root, .mbe-flow) > .mbe-table :is(th, td):not(:first-child) { border-inline-start: 1px solid var(--mbe-border); }
 :is(.mbe-root, .mbe-flow) > .mbe-table tr:not(:first-child) > * { border-top: 1px solid var(--mbe-border); }
 :is(.mbe-root, .mbe-flow) > .mbe-table th { font-weight: 500; background: var(--mbe-block-code-bg); }

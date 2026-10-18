@@ -148,7 +148,7 @@ test('extensions add theme classes; the editor theme wins per key; setOptions re
 });
 
 test('with only base.css, layout and spacing work and the editor sets no colors or fonts', async ({ page }) => {
-  const markdown = '## Title\n\none\n\n- a\n- b\n\n1. c\n\n> d\n>\n> e\n\n- [x] done\n\ntwo\n\n---\n\n| a | b |\n| - | - |\n| c | d |';
+  const markdown = '## Title\n\none\n\n- a\n- b\n\n1. c\n\n> d\n>\n> e\n\n- [x] done\n\ntwo\n\n---\n\n| a | b |\n| - | - |\n| c |  |';
   const gaps = () =>
     page.evaluate(() => {
       const els = Array.from(document.querySelectorAll<HTMLElement>('#editor > .mbe-block'));
@@ -185,11 +185,13 @@ test('with only base.css, layout and spacing work and the editor sets no colors 
       marker: marker.getBoundingClientRect().width,
       item: css(marker.parentElement!).display,
       checkbox: [box.offsetWidth, box.offsetHeight],
-      cell: parseFloat(css(root.querySelector('td')!).minWidth),
+      // Only the empty cell keeps a minimum width, so a short column never squeezes a long one.
+      cells: Array.from(root.querySelectorAll('td')).map((td) => parseFloat(css(td).minWidth)),
     };
   });
   expect(facts).toMatchObject({ text: '', font: true, color: true, bullet: '"•"', marker: 24, item: 'flex', checkbox: [16, 16] });
-  expect(facts.cell).toBeGreaterThan(0);
+  expect(facts.cells[0]).toBe(0);
+  expect(facts.cells[1]).toBeGreaterThan(0);
 
   // The placeholder and the slash menu still work.
   await page.evaluate(() => (window as any).editor.setMarkdown(''));
