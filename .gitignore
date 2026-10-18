@@ -5,3 +5,4 @@ playwright-report
 # Copied from the repo root by the build.
 packages/editor/README.md
 packages/editor/LICENSE
+.claude/settings.local.json

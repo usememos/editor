@@ -20,7 +20,7 @@ npm run size       # what each published entry adds to an app, minified and gzip
 
 Versions follow the same CalVer as memos ([discussion](https://github.com/orgs/usememos/discussions/6351)): `year.month.n`, where `n` counts the releases that month from 0. The release workflow picks the version from today's date (UTC) and the versions already on npm. The first release in October 2026 is `26.10.0`, the second `26.10.1`, and the first in April 2027 is `27.4.0`. `version` in `packages/editor/package.json` stays `0.0.0` in the repo.
 
-To release, open Actions, pick "Release" and choose "Run workflow" on main. The workflow (`.github/workflows/release.yml`) works out the version, runs the typecheck and tests, and publishes to npm under the `latest` tag. There are no release candidates, git tags, GitHub releases or release notes. The version does not signal breaking changes, so apps should pin an exact version, and commits marked with `!` show what breaks.
+To release, run `/release` in Claude Code (the skill in `.agents/skills/release/` checks CI and what will ship, then starts the workflow and reports the version), or open Actions, pick "Release" and choose "Run workflow" on main. The workflow (`.github/workflows/release.yml`) works out the version, runs the typecheck and tests, and publishes to npm under the `latest` tag. There are no release candidates, git tags, GitHub releases or release notes. The version does not signal breaking changes, so apps should pin an exact version, and commits marked with `!` show what breaks.
 
 Publishing uses npm trusted publishing, as `usememos/mui` does, so there is no npm token. On npmjs.com, the `@usememos/editor` package settings list `usememos/editor` and `release.yml` under "Trusted Publisher".
 
