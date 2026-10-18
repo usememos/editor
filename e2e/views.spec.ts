@@ -492,6 +492,111 @@ test('a block view draws matching blocks into an element kept while the block is
   expect((await log()).slice(-1)).toEqual(['dispose card declined']);
 });
 
+test('a block view placed after its block keeps the block editable and follows it, hidden while the selection is in it', async ({ page }) => {
+  await page.goto('/?empty');
+  await page.evaluate(() => {
+    const { Editor, inlineLines, inlineText } = (window as any).core;
+    const w = window as any;
+    w.log = [] as string[];
+    w.editor.destroy();
+    // A line that is one bare link, with the `breaks` dialect: what memos previews as a card.
+    const linksOf = (block: any): string[] =>
+      block.type === 'paragraph'
+        ? inlineLines(block.content)
+            .filter((line: any[]) => line.length > 0 && line.every((s) => s.link === line[0].link) && inlineText(line) === line[0].link)
+            .map((line: any[]) => line[0].link)
+        : [];
+    w.editor = new Editor({
+      element: document.getElementById('editor'),
+      content: 'intro\n\ntest\nhttps://example.com\nmore\n\nend',
+      markdown: { breaks: true },
+      extensions: [
+        {
+          name: 'cards',
+          blockView: {
+            placement: 'after',
+            match: (block: any) => linksOf(block).length > 0,
+            render: (block: any, el: HTMLElement) => {
+              const links = linksOf(block).join(' ');
+              w.log.push(`render ${links}`);
+              el.className = 'card';
+              el.textContent = `card: ${links}`;
+              return () => w.log.push(`dispose ${links}`);
+            },
+          },
+        },
+      ],
+    });
+  });
+  const log = () => page.evaluate(() => (window as any).log);
+  const classes = () => page.locator('#editor > *').evaluateAll((els) => els.map((el) => el.className.split(' ')[0]));
+  const cards = page.locator('#editor .mbe-block-after .card');
+  // The paragraph is drawn as usual, with the card's wrapper right after it, and the view ran once.
+  await expect(cards).toHaveText(['card: https://example.com']);
+  await expect(page.locator('#editor > p')).toHaveCount(3);
+  await expect(page.locator('#editor > p + .mbe-block-after .card')).toHaveCount(1);
+  expect(await classes()).toEqual(['mbe-block', 'mbe-block', 'mbe-block-view', 'mbe-block']);
+  expect(await page.locator('#editor .mbe-block-after').getAttribute('contenteditable')).toBe('false');
+  expect(await log()).toEqual(['render https://example.com']);
+
+  // Typing elsewhere, read-only and a selection change keep the element.
+  const card = await cards.elementHandle();
+  await page.locator('#editor > p').first().click();
+  await page.keyboard.type('!');
+  await page.evaluate(() => {
+    (window as any).editor.setOptions({ editable: false });
+    (window as any).editor.setOptions({ editable: true });
+  });
+  await expect(cards).toHaveText(['card: https://example.com']);
+  expect(await card!.evaluate((el) => el.isConnected)).toBe(true);
+  expect(await log()).toHaveLength(1);
+
+  // The selection in the paragraph withholds the card; leaving shows the same element again.
+  await page.locator('#editor > p').nth(1).click({ position: { x: 4, y: 4 } });
+  await expect(cards).toHaveCount(0);
+  await expect(page.locator('#editor > p')).toHaveCount(3);
+  await page.keyboard.press('ArrowUp');
+  await expect(cards).toHaveText(['card: https://example.com']);
+  expect(await card!.evaluate((el) => el.isConnected)).toBe(true);
+  expect(await log()).toHaveLength(1);
+
+  // Editing the paragraph lets the element go, and the view draws the changed block once the selection leaves.
+  await page.locator('#editor > p').nth(1).click({ position: { x: 4, y: 4 } });
+  await page.keyboard.press('Home');
+  await page.keyboard.type('x');
+  await page.keyboard.press('ArrowUp');
+  await expect(cards).toHaveText(['card: https://example.com']);
+  expect(await card!.evaluate((el) => el.isConnected)).toBe(false);
+  expect(await log()).toEqual(['render https://example.com', 'dispose https://example.com', 'render https://example.com']);
+  expect(await md(page)).toBe('intro!\n\nxtest\nhttps://example.com\nmore\n\nend');
+
+  // A click on the card is app UI, not a click into the text: the card stays.
+  await cards.click();
+  await expect(cards).toHaveText(['card: https://example.com']);
+
+  // A paragraph with no link line gets no card; refreshViews draws the card again; destroy lets it go.
+  await page.locator('#editor > p').nth(1).click({ position: { x: 4, y: 4 } });
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('End');
+  await page.keyboard.type(' tail');
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('ArrowUp');
+  await expect(cards).toHaveCount(0);
+  expect((await log()).slice(-1)).toEqual(['dispose https://example.com']);
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('End');
+  for (let i = 0; i < ' tail'.length; i++) await page.keyboard.press('Backspace');
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('ArrowUp');
+  await expect(cards).toHaveText(['card: https://example.com']);
+  await page.evaluate(() => (window as any).editor.refreshViews('cards'));
+  await expect(cards).toHaveText(['card: https://example.com']);
+  expect((await log()).slice(-3)).toEqual(['render https://example.com', 'dispose https://example.com', 'render https://example.com']);
+  await page.evaluate(() => (window as any).editor.destroy());
+  expect((await log()).slice(-1)).toEqual(['dispose https://example.com']);
+});
+
 test('a font token change renders views again; a color change does not', async ({ page }) => {
   await page.goto('/?empty');
   await page.evaluate(() => {

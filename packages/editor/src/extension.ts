@@ -53,10 +53,18 @@ export type SyntaxView = (source: string, element: HTMLElement, kind: 'inline' |
  * it. While editing, the block shows as the editor draws it, editable, when
  * the selection is in it, as a rendered formula shows its source; read-only
  * always shows the view.
+ *
+ * `placement` says where the element goes. `replace` (the default) draws it
+ * in place of the block. `after` keeps the block as the editor draws it and
+ * places the element after it, like a widget, for UI that adds to the text
+ * instead of standing in for it: a preview card for a link that sits on its
+ * own line of a paragraph. The element is still withheld while the selection
+ * is in the block, so a link being typed is not previewed on every keystroke.
  */
 export interface BlockView {
   readonly match: (block: Block) => boolean;
   readonly render: (block: Block, element: HTMLElement, ctx: ExtensionContext) => void | false | (() => void);
+  readonly placement?: 'replace' | 'after';
 }
 
 /** A code block's code, for decorations such as syntax highlighting. */

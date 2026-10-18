@@ -251,6 +251,8 @@ math({ render: (tex, element, options) => katex.render(tex, element, { ...option
 
 `blockView` draws whole blocks the app wants to show its own way, such as a paragraph that is one bare link shown as a preview card with data from the app's server. `match(block)` picks the blocks, and `render(block, element, { editor })` draws one into `element`, a div the editor owns and keeps while the block is unchanged: typing elsewhere, a new selection, `redecorate()` and a switch to read-only never call `render` again, so app UI mounted into the element, such as a React portal, stays. `render` runs again for a block whose content changed and for a new block, and may return a function, which the editor calls when it lets the element go: the block was removed or changed, `refreshViews()` ran, or the editor was destroyed. Returning `false` leaves the block as the editor draws it. While editing, the block shows as the editor draws it, editable, when the selection is in it, and a click on the view puts the caret there, as for a formula; read-only always shows the view. `refreshViews(name)` with the extension's name draws its blocks again.
 
+`placement: 'after'` keeps the block as the editor draws it, editable, and places the element after it instead, like a widget: for UI that adds to the text rather than standing in for it, such as a card for a link that sits on its own line of a paragraph. `inlineLines(content)` gives a block's lines, the spans between its line breaks, so `match` can look at one line. The element is still withheld while the selection is in the block, so a link being typed is not previewed on every keystroke, and clicks on it are the app's, not the editor's.
+
 ```tsx
 const linkCards: Extension = {
   name: 'linkCards',
@@ -259,6 +261,22 @@ const linkCards: Extension = {
     render: (block, element) => {
       const root = createRoot(element);
       root.render(<LinkCard href={block.content[0].link} />);
+      return () => root.unmount();
+    },
+  },
+};
+
+// A card below a paragraph for each line of it that is one bare link (with `markdown: { breaks: true }`).
+const bareLink = (line: Inline) => (line.length === 1 && line[0].link === line[0].text ? line[0].link : undefined);
+const linkLines = (block: Block) => (block.type === 'paragraph' ? inlineLines(block.content).map(bareLink).filter((href) => href !== undefined) : []);
+const linkCardsBelow: Extension = {
+  name: 'linkCardsBelow',
+  blockView: {
+    placement: 'after',
+    match: (block) => linkLines(block).length > 0,
+    render: (block, element) => {
+      const root = createRoot(element);
+      root.render(linkLines(block).map((href) => <LinkCard key={href} href={href} />));
       return () => root.unmount();
     },
   },

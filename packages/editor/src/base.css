@@ -253,6 +253,8 @@
 :is(.mbe-root, .mbe-flow) > .mbe-view-block > * { margin-block: 0; }
 /* A block an extension's block view draws (see Extension.blockView): the app owns what is inside, so nothing is clipped. */
 .mbe-root > .mbe-block-view { overflow: visible; }
+/* A block view placed after its block, which stays editable text: not text itself, like a widget. */
+.mbe-root > .mbe-block-after { cursor: default; white-space: normal; }
 /* Tags and mentions with an onClick, read-only: clickable, as links are. */
 .mbe-root.mbe-readonly :is([data-mbe-tag], [data-mbe-mention]) { cursor: pointer; }
 /* Rendered HTML: line breaks between its tags are not text. The Markdown

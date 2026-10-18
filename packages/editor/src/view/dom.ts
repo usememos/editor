@@ -136,7 +136,12 @@ export interface RenderContext {
   readonly views?: ReadonlyMap<string, SyntaxView>;
   /** A token or raw block of an extension syntax, rendered; null shows its source. */
   readonly view?: (syntax: string, source: string, kind: 'inline' | 'block') => HTMLElement | null;
-  /** The element an extension's block view draws a block of the document into, or null for none (see `BlockView`). */
+  /**
+   * The element an extension's block view draws a block of the document
+   * into, in place of the block, or null for none (see `BlockView`). A view
+   * placed after its block draws the block as usual: the renderer places
+   * its element itself.
+   */
   readonly blockView?: (block: Block) => HTMLElement | null;
   /** The document's Markdown options, for the Markdown inside an HTML section. */
   readonly markdown?: MarkdownOptions;
@@ -920,9 +925,11 @@ export class BlockRenderer {
   /**
    * Per block drawn by a block view, the element the view drew into (null
    * when every matching view declined), kept while the block object is the
-   * same, and the function to call when the element is let go.
+   * same, and the function to call when the element is let go. A view placed
+   * after its block has `after`: the editor's wrapper around that element,
+   * placed after the block's element.
    */
-  private readonly hosted = new Map<string, { block: Block; name: string; el: HTMLElement | null; dispose?: () => void }>();
+  private readonly hosted = new Map<string, { block: Block; name: string; el: HTMLElement | null; after?: HTMLElement; dispose?: () => void }>();
   /** The document's Markdown options, for the Markdown inside an HTML section. */
   markdown?: MarkdownOptions;
   /** Theme classes for rendered elements. Set before a full render. */
@@ -1024,13 +1031,15 @@ export class BlockRenderer {
   }
 
   /**
-   * The element a block view drew `block` into: the one from the last render
-   * while the block object is the same, else a fresh one from the first
-   * matching view that does not decline. Null when none draws it.
+   * The element a block view drew `block` into, to show in place of the
+   * block: the one from the last render while the block object is the same,
+   * else a fresh one from the first matching view that does not decline.
+   * Null when none draws it, and for a view placed after the block, whose
+   * element `afterView` gives.
    */
   private renderBlockView(block: Block): HTMLElement | null {
     const prev = this.hosted.get(block.id);
-    if (prev && prev.block === block) return prev.el;
+    if (prev && prev.block === block) return prev.after ? null : prev.el;
     if (prev) this.disposeHosted(block.id);
     const ctx = this.viewContext;
     if (!ctx) return null;
@@ -1046,12 +1055,29 @@ export class BlockRenderer {
         result = false;
       }
       if (result === false) continue;
-      this.hosted.set(block.id, { block, name, el, dispose: typeof result === 'function' ? result : undefined });
-      return el;
+      const dispose = typeof result === 'function' ? result : undefined;
+      if (view.placement !== 'after') {
+        this.hosted.set(block.id, { block, name, el, dispose });
+        return el;
+      }
+      // The block stays as the editor draws it; the element follows it, like a widget.
+      const after = this.root.ownerDocument.createElement('div');
+      after.className = 'mbe-block-view mbe-block-after';
+      after.contentEditable = 'false';
+      after.appendChild(el);
+      this.hosted.set(block.id, { block, name, el, after, dispose });
+      return null;
     }
     // Every matching view declined: remembered, so the views do not run again until the block changes.
     if (matched !== null) this.hosted.set(block.id, { block, name: matched, el: null });
     return null;
+  }
+
+  /** The element of a block view placed after `block`, while the block shows the view (not its editable form). */
+  private afterView(block: Block, reveal: BlockReveal | undefined): HTMLElement | undefined {
+    if (reveal?.has(REVEAL_BLOCK) || this.source) return undefined;
+    const entry = this.hosted.get(block.id);
+    return entry?.block === block ? entry.after : undefined;
   }
 
   private disposeHosted(id: string): void {
@@ -1170,10 +1196,12 @@ export class BlockRenderer {
     // A block view's element goes when its block is gone, or changed while the block showed its editable form.
     for (const [id, entry] of [...this.hosted]) if (next.get(id)?.block !== entry.block) this.disposeHosted(id);
 
-    // Block elements in order, each followed by its widgets.
+    // Block elements in order, each followed by the block view placed after it, then its widgets.
     const nodes: HTMLElement[] = [];
-    for (const [id, { el }] of next) {
+    for (const [id, { block, el, reveal }] of next) {
       nodes.push(el);
+      const after = this.afterView(block, reveal);
+      if (after) nodes.push(after);
       const widgets = this.widgetsAfter?.(id);
       if (widgets) nodes.push(...widgets);
     }

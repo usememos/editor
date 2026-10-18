@@ -358,6 +358,9 @@ const ALIGN_CHOICES = [
 
 const SLASH_CHARS = ['/', '／'];
 
+/** App UI inside the root that is not editor text: widgets, and block views placed after their block. Events from it are not editor input. */
+const APP_UI = '.mbe-widget, .mbe-block-after';
+
 /** Keys that move the caret, which the browser handles unless the editor does. */
 const CARET_KEY = /^(Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown)$/;
 
@@ -793,7 +796,7 @@ export class Editor {
 
   hasFocus(): boolean {
     const active = this.root.ownerDocument.activeElement;
-    return !!active && this.root.contains(active) && !(active instanceof HTMLInputElement) && !active.closest('.mbe-widget');
+    return !!active && this.root.contains(active) && !(active instanceof HTMLInputElement) && !active.closest(APP_UI);
   }
 
   // -------------------------------------------------------------------------
@@ -1861,7 +1864,7 @@ export class Editor {
 
   /** Events from the code-language input and other form controls inside the root are not editor input. */
   private fromControl(e: Event): boolean {
-    return e.target instanceof HTMLInputElement || !!(e.target as Element | null)?.closest?.('.mbe-widget');
+    return e.target instanceof HTMLInputElement || !!(e.target as Element | null)?.closest?.(APP_UI);
   }
 
   private onBeforeInput(e: InputEvent): void {

@@ -463,6 +463,25 @@ export function inlineLength(inline: Inline): number {
   return n;
 }
 
+/**
+ * The lines of inline content: the spans between its line breaks (`"\n"`),
+ * without the breaks, each line keeping its spans' format. Content with no
+ * break is one line; an empty line is an empty array. With the `breaks`
+ * Markdown option a line is what the user wrote on one line.
+ */
+export function inlineLines(inline: Inline): Inline[] {
+  const lines: Span[][] = [[]];
+  for (const span of inline) {
+    const parts = span.text.split('\n');
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) lines.push([]);
+      const text = parts[i]!;
+      if (text) lines[lines.length - 1]!.push(text === span.text ? span : { ...span, text });
+    }
+  }
+  return lines;
+}
+
 export function normalizeInline(inline: Inline): Span[] {
   const out: Span[] = [];
   for (const span of inline) {
