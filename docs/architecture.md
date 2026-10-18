@@ -124,10 +124,12 @@ How it works:
 
 **One editor, one pipeline.** Source mode is not a `<textarea>` or a second editor. The state holds one code block with the fixed ID `mbe-source` (`sourceMode.ts`) whose text is the Markdown, so typing, deleting, input methods, the selection, the clipboard and undo go through the same code as a code block. The renderer draws that block as `div.mbe-source` with no language bar or copy button, and no decorations or views. The editor checks `mode` where a code block would behave differently in rich mode:
 
-- It is plain text editing: there is no autocomplete and there are no formatting keys. The suggestion controller never opens a session in source mode, so no `suggestion()` popup, slash menu or Ctrl+Space opens. Markdown shortcuts and autolinks do not run after typing.
-- Enter inserts a line break instead of leaving the block after two empty lines. Backspace at the start of the text and Delete at its end do nothing. ArrowDown on the last line and a click below the text add nothing.
-- `indent` and `outdent` run `indentCode`, as Tab does in a code block. The mark, block type, link, image, table, divider, callout, section and `selectBlocks` commands return `false`, so their keys do nothing. `isActive()` is `false` for every name.
+- It is plain text editing that knows Markdown lists: there is no autocomplete and there are no formatting keys. The suggestion controller never opens a session in source mode, so no `suggestion()` popup, slash menu or Ctrl+Space opens. Markdown shortcuts and autolinks do not run after typing.
+- Enter runs `sourceEnter` instead of leaving the block after two empty lines, and Shift+Enter inserts a line break. Backspace at the start of the text and Delete at its end do nothing. ArrowDown on the last line and a click below the text add nothing.
+- `indent` and `outdent` run `sourceIndentList`, or `indentCode`, as Tab does in a code block, when the selection is not on list items. The mark, block type, link, image, table, divider, callout, section and `selectBlocks` commands return `false`, so their keys do nothing. `isActive()` is `false` for every name.
 - `insertText` and `insertMarkdown` insert text as written (`insertSourceText`, `insertSourceAt`). Paste inserts the clipboard's `text/plain`. Copy writes the selected text. There is no block selection, block handle, block menu, toolbar or link card.
+
+**Lists** (`sourceEnter`, `sourceIndentList`). With `smartLists` (the default), Enter and Tab read the lines around the selection as list items and make ordinary text edits, recorded in history like any other edit, so the source text stays the only state. A line is an item when, after any quote markers (`>`) and indentation, it starts with `-`, `*`, `+`, or a number and `.` or `)`, followed by a space or the end of the line; a thematic break such as `* * *` and every line of fenced code are not. Enter continues an item only when a space follows the marker, so a line such as `2023.` or a lone `-` stays text. Nesting follows CommonMark: Tab moves an item to the text column of the item before it at the same indentation, Shift+Tab to its parent's indentation, and the lines indented under the item move by the same amount. After a change, each ordered list it touched is numbered from its first number, or from 1 when an item has just started it; a list numbered `1.`, `1.`, `1.` keeps that style. Enter on an empty item matches rich mode's Enter in an empty list item: it outdents a nested item and removes a top-level item's marker. Not done: continuing a quote line that is not a list item, and removing a marker with Backspace.
 
 **Switching.** Rich to source: `getMarkdown()` becomes the text. Source to rich: the text is loaded with `loadMarkdown`, as `setMarkdown` does, so it saves byte for byte. Neither records history or emits `change`. Collapsed sections, the block selection and open popups are cleared. A switch during a composition is applied when it settles.
 
@@ -148,8 +150,17 @@ How it works:
 7. Every row of README's source mode table works in Chromium, Firefox and WebKit.
 8. Composed text (IME) in source mode is inserted once; a switch during composition waits for it to end.
 9. With `mode` unset, every existing test passes unchanged.
+10. Enter and Tab on list items edit only the lines described under "Lists", and `smartLists: false` restores a plain line break and code block indenting.
 
-Non-goals: autocomplete, formatting keys, list continuation, syntax highlighting or decorations in source mode, a split view, line numbers, search and replace.
+**Scope.** Anything added to source mode must keep requirements 3 and 4. So it is either a decoration, which styles the text and never changes it, or an ordinary text edit recorded in history, as the list keys are.
+
+Planned, in this order:
+
+- Autocomplete for tags and mentions: `suggestion()` popups open in source mode for the tokens their extension owns, and accepting an item inserts its text. The slash menu stays off, because its items create blocks.
+- Highlighting in the body font: marker characters dimmed, emphasis italic and strong text bold, headings heavier, code and link URLs tinted. Nothing changes size and nothing is hidden. The classes are the app's to restyle or turn off.
+- Formatting keys as text edits: Mod+B, Mod+I, Mod+E and Mod+Shift+X wrap the selection in `**`, `*`, `` ` `` or `~~`, or unwrap it. A URL pasted over a selection becomes a Markdown link. Mod+K stays with the app.
+
+Non-goals: a split or side preview, line numbers, search and replace, hiding or collapsing markup (rich mode does that), auto-pairing of brackets and emphasis markers, smart punctuation or any other rewriting of the text, and a code editor dependency such as CodeMirror.
 
 ## Undo and redo
 

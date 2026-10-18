@@ -11,6 +11,7 @@ type EditorProps = Pick<
   | 'extensions'
   | 'placeholder'
   | 'mode'
+  | 'smartLists'
   | 'editable'
   | 'taskToggle'
   | 'autofocus'

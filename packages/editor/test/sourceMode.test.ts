@@ -102,3 +102,103 @@ describe('caret mapping', () => {
     });
   });
 });
+
+describe('lists', () => {
+  const enter = (marked: string) => show(src.sourceEnter(state(marked)));
+  const tab = (marked: string, delta: 1 | -1 = 1) => {
+    const out = src.sourceIndentList(state(marked), delta);
+    return out ? show(out) : null;
+  };
+
+  it('continues bullet, ordered and task items', () => {
+    expect(enter('- a|')).toBe('- a\n- |');
+    expect(enter('* a|\n')).toBe('* a\n* |\n');
+    expect(enter('+ a|')).toBe('+ a\n+ |');
+    expect(enter('1. a|')).toBe('1. a\n2. |');
+    expect(enter('7) a|')).toBe('7) a\n8) |');
+    expect(enter('- [x] done|')).toBe('- [x] done\n- [ ] |');
+    expect(enter('- [ ] todo|')).toBe('- [ ] todo\n- [ ] |');
+    expect(enter('  - nested|')).toBe('  - nested\n  - |');
+    expect(enter('> - quoted|')).toBe('> - quoted\n> - |');
+    expect(enter('-   wide|')).toBe('-   wide\n-   |');
+  });
+
+  it('splits an item at the caret and replaces a selection', () => {
+    expect(enter('- ab|cd')).toBe('- ab\n- |cd');
+    expect(enter('- ab| cd')).toBe('- ab\n- |cd');
+    expect(enter('- a[bc]d')).toBe('- a\n- |d');
+    expect(enter('- [ ] ab|cd')).toBe('- [ ] ab\n- [ ] |cd');
+  });
+
+  it('numbers the items after a new ordered item', () => {
+    expect(enter('1. a|\n2. b\n3. c')).toBe('1. a\n2. |\n3. b\n4. c');
+    expect(enter('1. a\n2. b|\n3. c')).toBe('1. a\n2. b\n3. |\n4. c');
+    // A list numbered 1., 1., 1. keeps that style.
+    expect(enter('1. a|\n1. b\n1. c')).toBe('1. a\n1. |\n1. b\n1. c');
+    // A nested list is numbered on its own.
+    expect(enter('1. a\n   1. x|\n2. b')).toBe('1. a\n   1. x\n   2. |\n2. b');
+  });
+
+  it('ends the list on an empty item, and outdents an empty nested item', () => {
+    expect(enter('- a\n- |')).toBe('- a\n|');
+    expect(enter('- a\n- [ ] |')).toBe('- a\n|');
+    // A marker with no space after it is not continued or removed: `2023.` or a lone `-` may be text.
+    expect(enter('- a\n-|')).toBe('- a\n-\n|');
+    expect(enter('> - a\n> - |')).toBe('> - a\n> |');
+    expect(enter('- a\n  - |')).toBe('- a\n- |');
+    expect(enter('1. a\n   1. |\n2. b')).toBe('1. a\n2. |\n3. b');
+  });
+
+  it('inserts a plain line break outside lists, before a marker and in fenced code', () => {
+    expect(enter('text|')).toBe('text\n|');
+    expect(enter('|- a')).toBe('\n|- a');
+    expect(enter('-| a')).toBe('-\n| a');
+    expect(enter('```\n- a|\n```')).toBe('```\n- a\n|\n```');
+    expect(enter('> ```\n> - a|')).toBe('> ```\n> - a\n|');
+    expect(enter('* * *|')).toBe('* * *\n|');
+    expect(enter('2023.|')).toBe('2023.\n|');
+    expect(enter('#tag|')).toBe('#tag\n|');
+  });
+
+  it('nests an item under the one before it, at that item\'s text column', () => {
+    expect(tab('- a\n- b|')).toBe('- a\n  - b|');
+    expect(tab('- a\n- |b')).toBe('- a\n  - |b');
+    expect(tab('1. a\n2. b|')).toBe('1. a\n   1. b|');
+    expect(tab('10. a\n11. b|')).toBe('10. a\n    1. b|');
+    expect(tab('- [ ] a\n- [ ] b|')).toBe('- [ ] a\n  - [ ] b|');
+    expect(tab('> - a\n> - b|')).toBe('> - a\n>   - b|');
+    // Under the previous item's last nested item, numbered after it.
+    expect(tab('1. a\n   1. x\n2. b|')).toBe('1. a\n   1. x\n   2. b|');
+  });
+
+  it('numbers the list an item left and the one it joined', () => {
+    expect(tab('1. a\n2. b|\n3. c')).toBe('1. a\n   1. b|\n2. c');
+    expect(tab('1. a\n   1. b|\n2. c', -1)).toBe('1. a\n2. b|\n3. c');
+    // Items after an outdented item become its nested items.
+    expect(tab('1. a\n   1. b|\n   2. c', -1)).toBe('1. a\n2. b|\n   1. c');
+  });
+
+  it('moves the lines nested under an item with it', () => {
+    expect(tab('- a\n- b|\n  - c\n- d')).toBe('- a\n  - b|\n    - c\n- d');
+    expect(tab('- a\n  - b|\n    - c', -1)).toBe('- a\n- b|\n  - c');
+    // Blank lines inside stay empty.
+    expect(tab('- a\n- b|\n\n  more\n- c')).toBe('- a\n  - b|\n\n    more\n- c');
+  });
+
+  it('moves every selected item', () => {
+    expect(tab('- a\n[- b\n- c]')).toBe('- a\n  [- b\n  - c]');
+    expect(tab('- a\n  [- b\n  - c]', -1)).toBe('- a\n[- b\n- c]');
+    // A selection ending at the start of a line leaves that line.
+    expect(tab('- a\n[- b\n]- c')).toBe('- a\n  [- b\n]- c');
+  });
+
+  it('keeps an item that cannot move, and leaves other lines to code indenting', () => {
+    expect(tab('- a|')).toBe('- a|');
+    expect(tab('- a|', -1)).toBe('- a|');
+    expect(tab('para\n- a|')).toBe('para\n- a|');
+    expect(tab('  - a|', -1)).toBe('- a|');
+    expect(tab('text|')).toBeNull();
+    expect(tab('```\n- a|\n```')).toBeNull();
+    expect(tab('- a\n[- b\ntext]')).toBeNull();
+  });
+});

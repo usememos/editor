@@ -94,6 +94,12 @@ export interface EditorOptions {
   taskToggle?: boolean;
   /** `'source'` shows the whole document as its Markdown text. Default `'rich'`. */
   mode?: EditorMode;
+  /**
+   * In source mode, Enter continues a list or task item and Tab and
+   * Shift+Tab nest list items. `false` makes Enter insert a line break and
+   * Tab indent as in a code block. Default true. Fixed for the editor's lifetime.
+   */
+  smartLists?: boolean;
   /** Focus on creation: `true` or `'start'` puts the caret at the start, `'end'` at the end. */
   autofocus?: boolean | 'start' | 'end';
   /** Attributes for the editable root, such as `autocorrect` or `aria-label`. */
@@ -413,6 +419,7 @@ export class Editor {
   private wasReadOnly = false;
   /** Task checkboxes stay usable while read-only. */
   private taskToggle: boolean;
+  private readonly smartLists: boolean;
   private readonly options: EditorOptions;
   /** The extensions in priority order, ending with the default keymap unless one was given. */
   private readonly extensions: readonly Extension[];
@@ -481,6 +488,7 @@ export class Editor {
     this.labels = { ...DEFAULT_LABELS, ...options.labels };
     this.readOnly = options.editable === false;
     this.taskToggle = options.taskToggle === true;
+    this.smartLists = options.smartLists !== false;
     const given = options.extensions ?? [];
     this.extensions = given.some((e) => e.name === 'defaultKeymap') ? given : [...given, defaultKeymap()];
     this.bindings = this.extensions.flatMap((ext) =>
@@ -1159,8 +1167,9 @@ export class Editor {
       (commands as unknown as Record<string, (...args: A) => boolean>)[name] = (...args: A) =>
         this.modeValue === 'source' ? (fn ? fn(...args) : false) : richFn(...args);
     };
-    inSource('indent', () => run((s) => cmd.indentCode(s, 1)));
-    inSource('outdent', () => run((s) => cmd.indentCode(s, -1)));
+    const indentSource = (delta: 1 | -1) => run((s) => (this.smartLists ? src.sourceIndentList(s, delta) : null) ?? cmd.indentCode(s, delta));
+    inSource('indent', () => indentSource(1));
+    inSource('outdent', () => indentSource(-1));
     inSource('insertMarkdown', (markdown: string, options: InsertMarkdownOptions = {}) => this.insertSourceMarkdown(markdown, options));
     for (const name of [
       'toggleBold',
@@ -1976,6 +1985,8 @@ export class Editor {
   private onSourceInput(type: string): boolean {
     switch (type) {
       case 'insertParagraph':
+        this.run((s) => (this.smartLists ? src.sourceEnter(s) : src.insertSourceText(s, '\n')));
+        return true;
       case 'insertLineBreak':
         this.run((s) => src.insertSourceText(s, '\n'));
         return true;
