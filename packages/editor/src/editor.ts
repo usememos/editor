@@ -2640,8 +2640,15 @@ export class Editor {
     this.refreshSelection();
     if (isCollapsed(this.state.selection) || !e.clipboardData) return;
     e.preventDefault();
-    const doc: Doc = { blocks: cmd.closeSections(cmd.selectedBlocks(this.state)) };
-    writeClipboard(e.clipboardData, doc, serializeMarkdown(doc, this.markdown).replace(/\n$/, ''));
+    const selected = cmd.selectedBlocks(this.state);
+    const doc: Doc = { blocks: cmd.closeSections(selected) };
+    const markdown = serializeMarkdown(doc, this.markdown).replace(/\n$/, '');
+    // Text selected inside one code or raw block is copied as written, so it
+    // pastes into a terminal or another code block as code; the Markdown,
+    // with its escapes, travels with the HTML for a paste into a paragraph.
+    const only = selected.length === 1 && selected[0]!.type === 'paragraph' ? selected[0] : null;
+    const code = only && isPlainTextBlock(getBlock(this.state.doc, this.state.selection.focus.blockId));
+    writeClipboard(e.clipboardData, doc, markdown, code ? inlineText(only.content) : markdown);
     if (cut && !this.readOnly) this.run(cmd.deleteSelection);
   }
 
@@ -3528,10 +3535,14 @@ function blockName(block: Block): ActiveName {
   }
 }
 
-/** Writes blocks to the clipboard as Markdown and as HTML that carries the Markdown, so pasting into an editor is lossless. */
-function writeClipboard(data: DataTransfer, doc: Doc, text: string): void {
-  data.setData('text/plain', text);
-  data.setData('text/html', `<meta charset="utf-8"><div data-mbe-markdown="${encodeURIComponent(text)}">${docToHtml(doc)}</div>`);
+/**
+ * Writes blocks to the clipboard as Markdown and as HTML that carries the
+ * Markdown, so pasting into an editor is lossless. `plain` is the `text/plain`
+ * flavour when it should differ from the Markdown, as for code.
+ */
+function writeClipboard(data: DataTransfer, doc: Doc, markdown: string, plain = markdown): void {
+  data.setData('text/plain', plain);
+  data.setData('text/html', `<meta charset="utf-8"><div data-mbe-markdown="${encodeURIComponent(markdown)}">${docToHtml(doc)}</div>`);
 }
 
 function sameBlocks(a: Doc, b: Doc): boolean {

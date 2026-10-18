@@ -90,3 +90,42 @@ test('undo after paste removes the whole paste', async ({ page }) => {
   await page.keyboard.press('Control+z');
   expect(await blocks(page)).toEqual(['p:x']);
 });
+
+test('text selected inside a code block copies as code, and pastes as text into a paragraph', async ({ page }) => {
+  await page.keyboard.type('```sh ');
+  await page.keyboard.type('echo *hi*');
+  for (let i = 0; i < 'echo *hi*'.length; i++) await page.keyboard.press('Shift+ArrowLeft');
+  const data = await page.evaluate(() => {
+    const dt = new DataTransfer();
+    document.getElementById('editor')!.dispatchEvent((window as any).clipboardEvent('copy', dt));
+    return { 'text/plain': dt.getData('text/plain'), 'text/html': dt.getData('text/html') };
+  });
+  // Raw text for a terminal; the escaped Markdown rides with the HTML for the editor.
+  expect(data['text/plain']).toBe('echo *hi*');
+  expect(data['text/html']).toContain(`data-mbe-markdown="${encodeURIComponent('echo \\*hi\\*')}"`);
+  await page.keyboard.press('End');
+  await page.keyboard.press('ArrowDown'); // adds a paragraph below the code block that ends the document
+  await paste(page, data);
+  expect(await blocks(page)).toEqual(['code(sh):echo *hi*', 'p:echo *hi*']);
+  // Into a code block it goes as code.
+  await page.locator('#editor .mbe-code pre').click();
+  await page.keyboard.press('End');
+  await paste(page, data);
+  expect(await blocks(page)).toEqual(['code(sh):echo *hi*echo *hi*', 'p:echo *hi*']);
+});
+
+test('a word selected in a heading copies as text, not as a heading', async ({ page }) => {
+  await page.keyboard.type('## Big title');
+  await page.keyboard.press('Shift+ArrowLeft');
+  await page.keyboard.press('Shift+ArrowLeft');
+  const data = await page.evaluate(() => {
+    const dt = new DataTransfer();
+    document.getElementById('editor')!.dispatchEvent((window as any).clipboardEvent('copy', dt));
+    return { 'text/plain': dt.getData('text/plain'), 'text/html': dt.getData('text/html') };
+  });
+  expect(data['text/plain']).toBe('le');
+  await page.keyboard.press('End');
+  await page.keyboard.press('Enter');
+  await paste(page, data);
+  expect(await blocks(page)).toEqual(['h2:Big title', 'p:le']);
+});

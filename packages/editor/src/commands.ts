@@ -1533,14 +1533,19 @@ export function selectedBlocks(state: EditorState): Block[] {
   const { from, to } = orderedRange(state.doc, state.selection);
   const start = blockIndex(state.doc, from.blockId);
   const end = blockIndex(state.doc, to.blockId);
-  return state.doc.blocks.slice(start, end + 1).map((block) => {
-    if (!isTextBlock(block)) {
-      // Within one table cell: copy the selected text as a paragraph.
-      if (block.type === 'table' && start === end && from.cell && sameCell(from.cell, to.cell)) {
-        return paragraph(sliceInline(contentOf(block, from.cell), from.offset, to.offset));
-      }
-      return cloneBlock(block);
+  // Inside one block, or one table cell, the selected text is copied as a
+  // paragraph, so it pastes as text: a word of a heading is not a heading,
+  // and code copied from a code block is code. Whole blocks are copied
+  // through the block selection.
+  if (start === end) {
+    const block = state.doc.blocks[start]!;
+    if (isTextBlock(block)) return [paragraph(sliceInline(block.content, from.offset, to.offset))];
+    if (block.type === 'table' && from.cell && sameCell(from.cell, to.cell)) {
+      return [paragraph(sliceInline(contentOf(block, from.cell), from.offset, to.offset))];
     }
+  }
+  return state.doc.blocks.slice(start, end + 1).map((block) => {
+    if (!isTextBlock(block)) return cloneBlock(block);
     const a = block.id === from.blockId ? from.offset : 0;
     const b = block.id === to.blockId ? to.offset : Infinity;
     return cloneBlock(withContent(block, sliceInline(block.content, a, b)));

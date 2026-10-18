@@ -116,6 +116,8 @@ How it works:
 - Delete, duplicate and paste are pure commands on a block range: `deleteBlocks`, `duplicateBlocks` and `replaceBlocks`. Each re-nests list items that would end up deeper than the item above allows, for example the nested items of a deleted parent.
 - Copying whole blocks uses `serializeBlocks`, so a selected empty line is copied as `&nbsp;` rather than dropped as trailing whitespace.
 
+**Copying text.** A text selection is copied as Markdown (`text/plain`) and as HTML that carries the same Markdown (`data-mbe-markdown`), so a paste into the editor is lossless and a paste elsewhere gets Markdown. A selection inside one block is copied as its inline content, as a paragraph: a word of a heading pastes as a word, not as a heading, as in Notion and ProseMirror, and a selection inside one table cell does the same. Inside one code or raw block, `text/plain` is the text as written, so it pastes into a terminal or another code block as code, while the HTML carries the escaped Markdown for a paste into a paragraph. A selection across blocks copies the blocks, cut at its ends. Whole blocks, with their type, are copied through the block selection (Escape, then Mod+C).
+
 ## Source mode
 
 `mode: 'source'` shows the whole document as its Markdown text (see README "Source mode" for what the user sees). It exists because Markdown is the stored format: every editor we compared that stores Markdown (GitHub, GitLab, Discourse, Reddit, Joplin, Obsidian, Typora, MDXEditor) lets people see and edit the text itself, and memos users edited it as text in CodeMirror before this editor.
