@@ -375,6 +375,14 @@ test('the source mode option works on creation, and the URL toggle button switch
   expect(await mode(page)).toBe('source');
   await expect(page.locator('#editor .mbe-source')).toHaveCount(1);
   expect(await shown(page)).toBe('**bold**\n');
+  // The text is in the mono font, at the body's size and line height.
+  const font = (selector: string) =>
+    page.locator(selector).evaluate((el) => [getComputedStyle(el).fontFamily, getComputedStyle(el).fontSize, getComputedStyle(el).lineHeight]);
+  const [sourceFont, size, lineHeight] = await font('#editor .mbe-source');
+  const [bodyFont, bodySize, bodyLineHeight] = await font('#editor');
+  expect(sourceFont).toMatch(/monospace/);
+  expect(sourceFont).not.toBe(bodyFont);
+  expect([size, lineHeight]).toEqual([bodySize, bodyLineHeight]);
   await page.locator('#toggle-source').click();
   expect(await mode(page)).toBe('rich');
   await expect(page.locator('#editor strong')).toHaveText('bold');

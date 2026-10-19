@@ -241,7 +241,7 @@
 /* Code keeps its lines and scrolls sideways, as GitHub shows it; raw source wraps. */
 :is(.mbe-root, .mbe-flow) > .mbe-code pre { white-space: pre; overflow-x: auto; tab-size: 2; }
 :is(.mbe-root, .mbe-flow) > pre.mbe-raw { white-space: pre-wrap; tab-size: 2; }
-/* Source mode: the document as plain text in the editor's font. */
+/* Source mode: the document as plain text; theme.css sets its mono font. */
 .mbe-root > .mbe-source { white-space: pre-wrap; tab-size: 4; overflow-wrap: anywhere; }
 :is(.mbe-root, .mbe-flow) > .mbe-code pre { margin: 0; }
 :is(.mbe-root, .mbe-flow) > .mbe-code pre code { display: block; }
