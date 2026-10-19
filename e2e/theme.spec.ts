@@ -286,12 +286,60 @@ test('theme tokens and colorScheme restyle the editor and its menus without re-r
   expect(await first.evaluate((el) => el.isConnected)).toBe(true);
 });
 
+const size = (page: Page, selector: string) =>
+  page.locator(selector).evaluate((el) => [getComputedStyle(el).fontSize, getComputedStyle(el).lineHeight]);
+
 test('a font token of inherit keeps the sizes of the code language label and raw blocks', async ({ page }) => {
   await page.goto(`/?md=${encodeURIComponent('```js\nlet a = 1;\n```\n\n> quote\n> > nested')}`);
   await page.evaluate(() => (window as any).editor.setOptions({ theme: { tokens: { font: 'inherit', mono: 'inherit', fontSize: 20 } } }));
-  const size = (selector: string) => page.locator(selector).evaluate((el) => [getComputedStyle(el).fontSize, getComputedStyle(el).lineHeight]);
-  expect(await size('#editor .mbe-code-lang')).toEqual(['12px', '16px']);
+  // Scaled from the 20px body, with the 4px of leading its default 24px lines leave.
+  expect(await size(page, '#editor .mbe-code-lang')).toEqual(['15px', '17px']);
   // A raw block shows its source when clicked.
   await page.locator('#editor > .mbe-raw').click();
-  expect(await size('#editor pre.mbe-raw')).toEqual(['14px', '22px']);
+  expect(await size(page, '#editor pre.mbe-raw')).toEqual(['17.5px', '21.5px']);
+});
+
+test('headings, code, tables and the language label scale with fontSize and lineHeight', async ({ page }) => {
+  const doc = ['# h1', '## h2', '### h3', '#### h4', 'text', '```js\nlet a = 1;\n```', '| a | b |\n| - | - |\n| 1 | 2 |'].join('\n\n');
+  await page.goto(`/?md=${encodeURIComponent(doc)}`);
+  const sizes = async () => ({
+    h1: await size(page, '#editor > h1'),
+    h2: await size(page, '#editor > h2'),
+    h3: await size(page, '#editor > h3'),
+    h4: await size(page, '#editor > h4'),
+    body: await size(page, '#editor > p'),
+    code: await size(page, '#editor > .mbe-code pre'),
+    lang: await size(page, '#editor .mbe-code-lang'),
+    table: await size(page, '#editor > .mbe-table table'),
+  });
+  // The default look: a 16px body on 24px lines, and the sizes it always had.
+  expect(await sizes()).toEqual({
+    h1: ['24px', '32px'],
+    h2: ['20px', '28px'],
+    h3: ['18px', '26px'],
+    h4: ['16px', '24px'],
+    body: ['16px', '24px'],
+    code: ['14px', '22px'],
+    lang: ['12px', '16px'],
+    table: ['14px', '20px'],
+  });
+  // A 20px body on 30px lines: the same ratios, and each line keeps the body's 10px of leading
+  // (the table and the label a part of it).
+  const setTokens = (tokens: unknown) => page.evaluate((t) => (window as any).editor.setOptions({ theme: { tokens: t } }), tokens);
+  await setTokens({ fontSize: 20, lineHeight: 30 });
+  expect(await sizes()).toEqual({
+    h1: ['30px', '40px'],
+    h2: ['25px', '35px'],
+    h3: ['22.5px', '32.5px'],
+    h4: ['20px', '30px'],
+    body: ['20px', '30px'],
+    code: ['17.5px', '27.5px'],
+    lang: ['15px', '20px'],
+    table: ['17.5px', '25px'],
+  });
+  // A smaller body keeps code smaller than the text, and lineHeight alone changes only the leading.
+  await setTokens({ fontSize: 14, lineHeight: 20 });
+  expect(await sizes()).toMatchObject({ h1: ['21px', '27px'], body: ['14px', '20px'], code: ['12.25px', '18.25px'] });
+  await setTokens({ lineHeight: 28 });
+  expect(await sizes()).toMatchObject({ h1: ['24px', '36px'], body: ['16px', '28px'], code: ['14px', '26px'], table: ['14px', '23px'] });
 });

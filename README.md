@@ -307,6 +307,8 @@ new Editor({
 
 Colors are `text`, `muted`, `background`, `accent`, `link`, `codeBackground`, `border`, `popupBackground`, `popupBorder`, `hover`, `danger`, `highlight` (behind `<mark>` in rendered HTML), and `calloutNote`, `calloutTip`, `calloutImportant`, `calloutWarning` and `calloutCaution` (each callout type's icon, and a light tint of it behind the text); the other tokens are `font`, `mono`, `fontSize`, `lineHeight`, `radius` and `blockGap` (numbers are pixels). Values can be any CSS, such as `var(--primary)`, so the editor can follow your app's own variables; `colors` sets such a value for both schemes at once, and `light` and `dark` override it per scheme. Menus, the toolbar and the link popover take the same tokens.
 
+`fontSize` and `lineHeight` size the whole document, not only its paragraphs: headings are 1.5, 1.25 and 1.125 times `fontSize` (h4 to h6 the body size), code blocks, raw blocks and tables 0.875 times it, and the code block's language label 0.75. Each keeps the body's leading, the room `lineHeight` leaves around `fontSize`, so `fontSize: 14` with `lineHeight: 20` gives a 21px h1 on 27px lines, and code at 12.25px on 18.25px lines.
+
 For an app styled with [shadcn/ui](https://ui.shadcn.com), `shadcnTheme` maps the tokens to shadcn's variables (`--foreground`, `--primary`, `--muted`, `--border`, `--popover`, `--radius`, …), so the editor follows the app's theme, light and dark included:
 
 ```ts
