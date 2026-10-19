@@ -3,10 +3,13 @@
  * so a document looks the same while editing and when read-only.
  * Needs base.css, which holds the layout and all spacing between blocks.
  * Every color, font and size is a custom property; the theme option's
- * tokens set them (see theme.ts), or set them on the root in CSS.
- * Light and dark follow prefers-color-scheme; set data-theme="light" or
- * data-theme="dark" on the root or an ancestor, or the theme option's
- * colorScheme, to force one.
+ * tokens set them (see theme.ts). In CSS, set --mbe-<name>-light and
+ * --mbe-<name>-dark on the root or any ancestor (:root works): the rules
+ * below read them with the default palette as fallback.
+ * Light and dark follow prefers-color-scheme; data-theme="light" or
+ * data-theme="dark", or a `light` or `dark` class (the Tailwind and shadcn
+ * convention), on the root or an ancestor forces one, as does the theme
+ * option's colorScheme.
  */
 .mbe-root,
 .mbe-ui {
@@ -36,6 +39,8 @@
   );
   --mbe-hover: light-dark(var(--mbe-hover-light, oklch(0.9245 0.0138 92.9892)), var(--mbe-hover-dark, oklch(0.39 0.018 250)));
   --mbe-danger: light-dark(var(--mbe-danger-light, oklch(0.5 0.12 25)), var(--mbe-danger-dark, oklch(0.64 0.18 24)));
+  /* Behind <mark> in rendered HTML, as a tint. */
+  --mbe-highlight: light-dark(var(--mbe-highlight-light, #facc15), var(--mbe-highlight-dark, #facc15));
   /* Two soft shadows in light, one darker and wider in dark. */
   --mbe-popup-shadow: 0 4px 12px light-dark(transparent, rgb(0 0 0 / 0.35)), 0 4px 6px -1px light-dark(rgb(0 0 0 / 0.1), transparent),
     0 2px 4px -2px light-dark(rgb(0 0 0 / 0.1), transparent);
@@ -48,14 +53,12 @@
   --mbe-callout-warning: light-dark(var(--mbe-callout-warning-light, oklch(0.55 0.12 75)), var(--mbe-callout-warning-dark, oklch(0.74 0.14 80)));
   --mbe-callout-caution: light-dark(var(--mbe-callout-caution-light, oklch(0.55 0.2 25)), var(--mbe-callout-caution-dark, oklch(0.68 0.19 25)));
 }
-:where([data-theme='light']) :is(.mbe-root, .mbe-ui),
-.mbe-root[data-theme='light'],
-.mbe-ui[data-theme='light'] {
+:where([data-theme='light'], .light) :is(.mbe-root, .mbe-ui),
+:is(.mbe-root, .mbe-ui):is([data-theme='light'], .light) {
   color-scheme: light;
 }
-:where([data-theme='dark']) :is(.mbe-root, .mbe-ui),
-.mbe-root[data-theme='dark'],
-.mbe-ui[data-theme='dark'] {
+:where([data-theme='dark'], .dark) :is(.mbe-root, .mbe-ui),
+:is(.mbe-root, .mbe-ui):is([data-theme='dark'], .dark) {
   color-scheme: dark;
 }
 
@@ -218,7 +221,7 @@
   border-radius: 4px;
   background: var(--mbe-block-code-bg);
 }
-.mbe-root .mbe-view-html mark { background: color-mix(in oklab, #facc15 40%, transparent); color: inherit; }
+.mbe-root .mbe-view-html mark { background: color-mix(in oklab, var(--mbe-highlight) 40%, transparent); color: inherit; }
 
 /* Divider */
 :is(.mbe-root, .mbe-flow) > .mbe-divider hr { border: none; border-top: 1px solid var(--mbe-border); }

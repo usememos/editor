@@ -60,6 +60,8 @@ export interface ThemeColors {
   /** Highlighted menu items and toolbar buttons. */
   readonly hover?: string;
   readonly danger?: string;
+  /** Behind `<mark>` in rendered HTML, as a tint. */
+  readonly highlight?: string;
   /** The icon of each callout type, and a light tint of it behind the text. */
   readonly calloutNote?: string;
   readonly calloutTip?: string;
@@ -70,9 +72,14 @@ export interface ThemeColors {
 
 /** Values written as --mbe-* custom properties on the root and on popups. Numbers are pixels. */
 export interface ThemeTokens {
-  /** Colors in the light scheme. Missing values keep the default. */
+  /**
+   * Colors in both schemes, for values that pick their own, such as
+   * `var(--primary)`. `light` and `dark` override them per scheme.
+   */
+  readonly colors?: ThemeColors;
+  /** Colors in the light scheme. Missing values keep `colors`, then the default. */
   readonly light?: ThemeColors;
-  /** Colors in the dark scheme. Missing values keep the default dark palette. */
+  /** Colors in the dark scheme. Missing values keep `colors`, then the default dark palette. */
   readonly dark?: ThemeColors;
   readonly font?: string;
   readonly mono?: string;
@@ -84,8 +91,9 @@ export interface ThemeTokens {
 
 /**
  * `auto` follows `prefers-color-scheme`, or `data-theme="light"` or
- * `data-theme="dark"` on the root or an ancestor. `inherit` follows the
- * page's `color-scheme`, for apps that switch it themselves.
+ * `data-theme="dark"`, or a `light` or `dark` class, on the root or an
+ * ancestor. `inherit` follows the page's `color-scheme`, for apps that
+ * switch it themselves.
  */
 export type ColorScheme = 'auto' | 'light' | 'dark' | 'inherit';
 
@@ -95,6 +103,30 @@ export interface Theme {
   /** Default `auto`. */
   readonly colorScheme?: ColorScheme;
 }
+
+/**
+ * The editor in an app styled with shadcn/ui: colors, font and radius from
+ * shadcn's CSS variables (`--foreground`, `--primary`, `--radius`, …), so the
+ * editor follows the app's theme, and light or dark from the `dark` class.
+ * Spread it to change a part: `{ tokens: { ...shadcnTheme.tokens, radius: 4 } }`.
+ */
+export const shadcnTheme: Theme = {
+  tokens: {
+    colors: {
+      text: 'var(--foreground)',
+      muted: 'var(--muted-foreground)',
+      accent: 'var(--primary)',
+      codeBackground: 'var(--muted)',
+      border: 'var(--border)',
+      popupBackground: 'var(--popover)',
+      hover: 'var(--accent)',
+      danger: 'var(--destructive)',
+    },
+    font: 'inherit',
+    mono: 'var(--font-mono, ui-monospace, monospace)',
+    radius: 'calc(var(--radius) - 2px)',
+  },
+};
 
 /** Merges class maps; a later map wins for the same key, and `heading` and `token` merge per entry. */
 export function mergeClasses(maps: readonly (ThemeClasses | undefined)[]): ThemeClasses {
@@ -120,6 +152,7 @@ const COLOR_VARS: Record<keyof ThemeColors, string> = {
   popupBorder: '--mbe-popup-border',
   hover: '--mbe-hover',
   danger: '--mbe-danger',
+  highlight: '--mbe-highlight',
   calloutNote: '--mbe-callout-note',
   calloutTip: '--mbe-callout-tip',
   calloutImportant: '--mbe-callout-important',
@@ -141,15 +174,16 @@ export const FONT_PROPERTIES: readonly string[] = [SIZE_VARS.font, SIZE_VARS.mon
 
 /**
  * The custom properties for `tokens`. Colors go in `--mbe-<name>-light` and
- * `--mbe-<name>-dark`, which the stylesheet picks between with `light-dark()`.
+ * `--mbe-<name>-dark`, which the stylesheet picks between with `light-dark()`;
+ * `colors` fills both, and `light` and `dark` win per scheme.
  */
 export function tokenProperties(tokens: ThemeTokens | undefined): Map<string, string> {
   const props = new Map<string, string>();
   if (!tokens) return props;
   for (const scheme of ['light', 'dark'] as const) {
-    for (const [name, value] of Object.entries(tokens[scheme] ?? {})) {
-      const prop = COLOR_VARS[name as keyof ThemeColors];
-      if (prop && value) props.set(`${prop}-${scheme}`, value);
+    for (const [name, prop] of Object.entries(COLOR_VARS) as [keyof ThemeColors, string][]) {
+      const value = tokens[scheme]?.[name] ?? tokens.colors?.[name];
+      if (value) props.set(`${prop}-${scheme}`, value);
     }
   }
   for (const [name, prop] of Object.entries(SIZE_VARS)) {

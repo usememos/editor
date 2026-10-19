@@ -305,9 +305,28 @@ new Editor({
 });
 ```
 
-Colors are `text`, `muted`, `background`, `accent`, `link`, `codeBackground`, `border`, `popupBackground`, `popupBorder`, `hover`, `danger`, and `calloutNote`, `calloutTip`, `calloutImportant`, `calloutWarning` and `calloutCaution` (each callout type's icon, and a light tint of it behind the text); the other tokens are `font`, `mono`, `fontSize`, `lineHeight`, `radius` and `blockGap` (numbers are pixels). Values can be any CSS, such as `var(--primary)`, so the editor can follow your app's own variables. Menus, the toolbar and the link popover take the same tokens.
+Colors are `text`, `muted`, `background`, `accent`, `link`, `codeBackground`, `border`, `popupBackground`, `popupBorder`, `hover`, `danger`, `highlight` (behind `<mark>` in rendered HTML), and `calloutNote`, `calloutTip`, `calloutImportant`, `calloutWarning` and `calloutCaution` (each callout type's icon, and a light tint of it behind the text); the other tokens are `font`, `mono`, `fontSize`, `lineHeight`, `radius` and `blockGap` (numbers are pixels). Values can be any CSS, such as `var(--primary)`, so the editor can follow your app's own variables; `colors` sets such a value for both schemes at once, and `light` and `dark` override it per scheme. Menus, the toolbar and the link popover take the same tokens.
 
-`colorScheme` picks light or dark: `auto` (the default) follows `prefers-color-scheme`, or `data-theme="light"` or `data-theme="dark"` on the editor or an ancestor; `light` and `dark` force one; `inherit` follows the page's `color-scheme`, for apps that switch it themselves. Switching tokens or the scheme with `setOptions({ theme })` re-renders nothing.
+For an app styled with [shadcn/ui](https://ui.shadcn.com), `shadcnTheme` maps the tokens to shadcn's variables (`--foreground`, `--primary`, `--muted`, `--border`, `--popover`, `--radius`, …), so the editor follows the app's theme, light and dark included:
+
+```ts
+import { Editor, shadcnTheme } from '@usememos/editor';
+
+new Editor({ element, theme: shadcnTheme });
+// or, with a change: { tokens: { ...shadcnTheme.tokens, radius: 4 } }
+```
+
+The same tokens can be set in CSS, with no JavaScript, as `--mbe-<name>-light` and `--mbe-<name>-dark` (`--mbe-accent-light`, `--mbe-code-bg-dark`; the names are in `theme.css`). They inherit, so set them on `:root` for every editor on the page, or on a container for the editors in it. `theme.css` reads them with the default palette as fallback; a value you leave out keeps the default:
+
+```css
+:root {
+  --mbe-accent-light: #0969da;
+  --mbe-accent-dark: #58a6ff;
+  --mbe-font: Inter, sans-serif;
+}
+```
+
+`colorScheme` picks light or dark: `auto` (the default) follows `prefers-color-scheme`, or `data-theme="light"` or `data-theme="dark"`, or a `light` or `dark` class (as Tailwind and shadcn/ui toggle it), on the editor or an ancestor; `light` and `dark` force one; `inherit` follows the page's `color-scheme`, for apps that switch it themselves. Switching tokens or the scheme with `setOptions({ theme })` re-renders nothing.
 
 The `theme` option's `classes` add your own classes to rendered elements, next to the editor's `mbe-*` classes, so the editor can share classes with the rest of your app:
 

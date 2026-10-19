@@ -256,9 +256,30 @@ test('theme tokens and colorScheme restyle the editor and its menus without re-r
   expect((await look()).color).toBe('rgb(4, 5, 6)');
   await page.evaluate(() => (document.body.dataset.theme = 'light'));
   expect((await look()).color).toBe('rgb(1, 2, 3)');
+  await page.evaluate(() => delete document.body.dataset.theme);
+
+  // And a `dark` or `light` class on an ancestor, as Tailwind and shadcn toggle it.
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.evaluate(() => document.documentElement.classList.add('dark'));
+  expect((await look()).color).toBe('rgb(4, 5, 6)');
+  await page.evaluate(() => document.documentElement.classList.replace('dark', 'light'));
+  await page.emulateMedia({ colorScheme: 'dark' });
+  expect((await look()).color).toBe('rgb(1, 2, 3)');
+  await page.evaluate(() => document.documentElement.classList.remove('light'));
+
+  // `colors` sets both schemes; `dark` wins in its scheme.
+  await setTheme({ tokens: { colors: { text: 'rgb(7, 8, 9)' }, dark: { text: 'rgb(4, 5, 6)' } } });
+  expect((await look()).color).toBe('rgb(4, 5, 6)');
+  await page.emulateMedia({ colorScheme: 'light' });
+  expect((await look()).color).toBe('rgb(7, 8, 9)');
+
+  // The same variables set in CSS on an ancestor, with no theme option.
+  await setTheme(undefined);
+  await page.evaluate(() => document.documentElement.style.setProperty('--mbe-text-light', 'rgb(10, 11, 12)'));
+  expect((await look()).color).toBe('rgb(10, 11, 12)');
+  await page.evaluate(() => document.documentElement.style.removeProperty('--mbe-text-light'));
 
   // Removing the theme restores the defaults. None of this re-rendered a block.
-  await page.evaluate(() => delete document.body.dataset.theme);
   await page.emulateMedia({ colorScheme: 'light' });
   await setTheme(undefined);
   expect(await look()).toEqual(before);
