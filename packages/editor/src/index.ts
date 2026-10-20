@@ -27,7 +27,7 @@ export type { MarkdownOptions } from './markdown/options';
 export { docToHtml } from './clipboard/toHtml';
 export { htmlToDoc } from './clipboard/fromHtml';
 export type { BlockView, CodeDecorationContext, Extension, ExtensionContext, KeyHandler, SyntaxView } from './extension';
-export { shadcnTheme, type ColorScheme, type Theme, type ThemeClasses, type ThemeColors, type ThemeTokens } from './theme';
+export { type ColorScheme, type Theme, type ThemeClasses, type ThemeColors, type ThemeTokens } from './theme';
 export { defaultKeymap } from './extensions/keymap';
 export { math, type MathOptions } from './extensions/math';
 export { footnotes, type FootnotesOptions } from './extensions/footnotes';

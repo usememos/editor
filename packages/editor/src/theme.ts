@@ -104,30 +104,6 @@ export interface Theme {
   readonly colorScheme?: ColorScheme;
 }
 
-/**
- * The editor in an app styled with shadcn/ui: colors, font and radius from
- * shadcn's CSS variables (`--foreground`, `--primary`, `--radius`, …), so the
- * editor follows the app's theme, and light or dark from the `dark` class.
- * Spread it to change a part: `{ tokens: { ...shadcnTheme.tokens, radius: 4 } }`.
- */
-export const shadcnTheme: Theme = {
-  tokens: {
-    colors: {
-      text: 'var(--foreground)',
-      muted: 'var(--muted-foreground)',
-      accent: 'var(--primary)',
-      codeBackground: 'var(--muted)',
-      border: 'var(--border)',
-      popupBackground: 'var(--popover)',
-      hover: 'var(--accent)',
-      danger: 'var(--destructive)',
-    },
-    font: 'inherit',
-    mono: 'var(--font-mono, ui-monospace, monospace)',
-    radius: 'calc(var(--radius) - 2px)',
-  },
-};
-
 /** Merges class maps; a later map wins for the same key, and `heading` and `token` merge per entry. */
 export function mergeClasses(maps: readonly (ThemeClasses | undefined)[]): ThemeClasses {
   const out: Record<string, unknown> = {};

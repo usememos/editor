@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeClasses, shadcnTheme, tokenProperties } from '../src/theme';
+import { mergeClasses, tokenProperties } from '../src/theme';
 
 describe('mergeClasses', () => {
   it('lets a later map win per key, and merges heading and token per entry', () => {
@@ -52,14 +52,5 @@ describe('tokenProperties', () => {
       '--mbe-accent-dark': 'white',
       '--mbe-highlight-dark': 'var(--mark)',
     });
-  });
-
-  it('shadcnTheme reads every color from a shadcn variable, in both schemes', () => {
-    const props = tokenProperties(shadcnTheme.tokens);
-    const colors = [...props].filter(([name]) => /-(light|dark)$/.test(name));
-    expect(colors.length).toBe(16);
-    for (const [, value] of colors) expect(value).toMatch(/^var\(--[a-z-]+\)$/);
-    expect(props.get('--mbe-radius')).toBe('calc(var(--radius) - 2px)');
-    expect(shadcnTheme.colorScheme).toBeUndefined();
   });
 });

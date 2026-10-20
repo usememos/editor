@@ -309,13 +309,28 @@ Colors are `text`, `muted`, `background`, `accent`, `link`, `codeBackground`, `b
 
 `fontSize` and `lineHeight` size the whole document, not only its paragraphs: headings are 1.5, 1.25 and 1.125 times `fontSize` (h4 to h6 the body size), code blocks, raw blocks and tables 0.875 times it, and the code block's language label 0.75. Each keeps the body's leading, the room `lineHeight` leaves around `fontSize`, so `fontSize: 14` with `lineHeight: 20` gives a 21px h1 on 27px lines, and code at 12.25px on 18.25px lines.
 
-For an app styled with [shadcn/ui](https://ui.shadcn.com), `shadcnTheme` maps the tokens to shadcn's variables (`--foreground`, `--primary`, `--muted`, `--border`, `--popover`, `--radius`, …), so the editor follows the app's theme, light and dark included:
+An app that keeps its palette in CSS variables passes them as the values, and the editor follows the app's theme, light and dark included, since the variables change with it. With the names most Tailwind-based component kits use:
 
 ```ts
-import { Editor, shadcnTheme } from '@usememos/editor';
-
-new Editor({ element, theme: shadcnTheme });
-// or, with a change: { tokens: { ...shadcnTheme.tokens, radius: 4 } }
+new Editor({
+  element,
+  theme: {
+    tokens: {
+      colors: {
+        text: 'var(--foreground)',
+        muted: 'var(--muted-foreground)',
+        accent: 'var(--primary)',
+        codeBackground: 'var(--muted)',
+        border: 'var(--border)',
+        popupBackground: 'var(--popover)',
+        hover: 'var(--accent)',
+        danger: 'var(--destructive)',
+      },
+      font: 'inherit',
+      radius: 'calc(var(--radius) - 2px)',
+    },
+  },
+});
 ```
 
 The same tokens can be set in CSS, with no JavaScript, as `--mbe-<name>-light` and `--mbe-<name>-dark` (`--mbe-accent-light`, `--mbe-code-bg-dark`; the names are in `theme.css`). They inherit, so set them on `:root` for every editor on the page, or on a container for the editors in it. `theme.css` reads them with the default palette as fallback; a value you leave out keeps the default:
@@ -328,7 +343,7 @@ The same tokens can be set in CSS, with no JavaScript, as `--mbe-<name>-light` a
 }
 ```
 
-`colorScheme` picks light or dark: `auto` (the default) follows `prefers-color-scheme`, or `data-theme="light"` or `data-theme="dark"`, or a `light` or `dark` class (as Tailwind and shadcn/ui toggle it), on the editor or an ancestor; `light` and `dark` force one; `inherit` follows the page's `color-scheme`, for apps that switch it themselves. Switching tokens or the scheme with `setOptions({ theme })` re-renders nothing.
+`colorScheme` picks light or dark: `auto` (the default) follows `prefers-color-scheme`, or `data-theme="light"` or `data-theme="dark"`, or a `light` or `dark` class (as Tailwind-style theming toggles it), on the editor or an ancestor; `light` and `dark` force one; `inherit` follows the page's `color-scheme`, for apps that switch it themselves. Switching tokens or the scheme with `setOptions({ theme })` re-renders nothing.
 
 The `theme` option's `classes` add your own classes to rendered elements, next to the editor's `mbe-*` classes, so the editor can share classes with the rest of your app:
 

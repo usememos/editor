@@ -258,7 +258,7 @@ test('theme tokens and colorScheme restyle the editor and its menus without re-r
   expect((await look()).color).toBe('rgb(1, 2, 3)');
   await page.evaluate(() => delete document.body.dataset.theme);
 
-  // And a `dark` or `light` class on an ancestor, as Tailwind and shadcn toggle it.
+  // And a `dark` or `light` class on an ancestor, as Tailwind-style theming toggles it.
   await page.emulateMedia({ colorScheme: 'light' });
   await page.evaluate(() => document.documentElement.classList.add('dark'));
   expect((await look()).color).toBe('rgb(4, 5, 6)');

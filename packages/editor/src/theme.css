@@ -7,9 +7,9 @@
  * --mbe-<name>-dark on the root or any ancestor (:root works): the rules
  * below read them with the default palette as fallback.
  * Light and dark follow prefers-color-scheme; data-theme="light" or
- * data-theme="dark", or a `light` or `dark` class (the Tailwind and shadcn
- * convention), on the root or an ancestor forces one, as does the theme
- * option's colorScheme.
+ * data-theme="dark", or a `light` or `dark` class (as Tailwind-style
+ * theming toggles it), on the root or an ancestor forces one, as does the
+ * theme option's colorScheme.
  */
 .mbe-root,
 .mbe-ui {
