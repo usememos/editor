@@ -292,8 +292,11 @@ const size = (page: Page, selector: string) =>
 test('a font token of inherit keeps the sizes of the code language label and raw blocks', async ({ page }) => {
   await page.goto(`/?md=${encodeURIComponent('```js\nlet a = 1;\n```\n\n> quote\n> > nested')}`);
   await page.evaluate(() => (window as any).editor.setOptions({ theme: { tokens: { font: 'inherit', mono: 'inherit', fontSize: 20 } } }));
-  // Scaled from the 20px body, with the 4px of leading its default 24px lines leave.
-  expect(await size(page, '#editor .mbe-code-lang')).toEqual(['15px', '17px']);
+  // Scaled from the 20px body, with the 4px of leading its default 24px lines leave. The label is a
+  // text input, whose line height Firefox floors at the font's `normal` (about 18px here).
+  const [langSize, langLineHeight] = await size(page, '#editor .mbe-code-lang');
+  expect(langSize).toBe('15px');
+  expect(parseFloat(langLineHeight)).toBeGreaterThanOrEqual(17);
   // A raw block shows its source when clicked.
   await page.locator('#editor > .mbe-raw').click();
   expect(await size(page, '#editor pre.mbe-raw')).toEqual(['17.5px', '21.5px']);
