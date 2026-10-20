@@ -648,8 +648,9 @@ export function splitHtmlSpans(inline: Inline): Inline {
 /**
  * Runs of inline raw HTML that render as one piece: an opening tag through
  * its closing tag, with the text between (`<kbd>Ctrl</kbd>`), or a single tag
- * (`<br>`, an unmatched tag, a comment). Runs that would cross a link are
- * left out. Offsets are into the container's text.
+ * (`<br>`, an unmatched tag, a comment). A run may cross a link, as the tags
+ * pass through other renderers verbatim and the browser pairs them. Offsets
+ * are into the container's text.
  */
 export function htmlRuns(inline: Inline): { from: number; to: number }[] {
   const spans: { span: Span; from: number; to: number }[] = [];
@@ -670,7 +671,6 @@ export function htmlRuns(inline: Inline): { from: number; to: number }[] {
       let depth = 0;
       for (let j = i + 1; j < spans.length; j++) {
         const t = spans[j]!.span;
-        if (t.link) break;
         if (!isHtml(t)) continue;
         const tag = /^<(\/?)([A-Za-z][A-Za-z0-9-]*)\b[^>]*?(\/?)>$/.exec(t.text);
         if (!tag || tag[2]!.toLowerCase() !== name || tag[3]) continue;
@@ -682,7 +682,6 @@ export function htmlRuns(inline: Inline): { from: number; to: number }[] {
         }
       }
     }
-    if (spans.slice(i, end + 1).some((s) => s.span.link)) continue;
     runs.push({ from, to: end === i ? to : spans[end]!.to });
     i = end;
   }
@@ -722,63 +721,104 @@ function renderInline(
     offsets.set(piece, offset);
     offset += piece.span.text.length;
   }
-  // Consecutive spans with the same link share one <a>.
-  let i = 0;
-  while (i < pieces.length) {
+  const linkElement = (span: Span): HTMLAnchorElement => {
+    const a = doc.createElement('a');
+    const href = ctx.resolveUrl(span.link!, 'link');
+    if (href !== null) a.setAttribute('href', href);
+    a.dataset.href = span.link!;
+    if (span.linkTitle) a.title = span.linkTitle;
+    a.className = classes('mbe-link', ctx.classes.link);
+    return a;
+  };
+  const runAt = (i: number) => runs.find((r) => r.from === offsets.get(pieces[i]!));
+  const runEnd = (i: number, run: { to: number }) => {
+    let end = i;
+    while (end < pieces.length && offsets.get(pieces[end]!)! < run.to) end++;
+    return end;
+  };
+  // Whether every piece of the run shares the link of its first piece.
+  const linkedRun = (i: number, run: { to: number }): boolean => {
     const span = pieces[i]!.span;
-    const run = runs.find((r) => r.from === offsets.get(pieces[i]!));
-    if (run) {
-      // The run's tags go to the view; the text between them, with its
-      // formatting, tags and tokens, renders here and fills its slots.
-      const html: string[] = [];
-      const slots: Node[][] = [];
-      let slot: Node[] | null = null;
-      let end = i;
-      for (; end < pieces.length && offsets.get(pieces[end]!)! < run.to; end++) {
-        const piece = pieces[end]!;
-        if (isHtml(piece.span)) {
-          html.push(piece.span.text);
-          slot = null;
-          continue;
-        }
-        if (!slot) {
-          slot = [];
-          slots.push(slot);
-          html.push(slotMarker(slots.length - 1));
-        }
-        slot.push(render(piece));
-      }
-      const view = ctx.view?.('html', html.join(''), 'inline');
-      if (view) {
-        fillSlots(view, slots.length, (n) => {
-          const fragment = doc.createDocumentFragment();
-          fragment.append(...slots[n]!);
-          return fragment;
-        }, doc);
-        // One atom as long as the run's text, so DOM-to-model mapping still sees it.
-        const text = inlineText(sliceInline(inline, run.from, run.to));
-        parent.appendChild(atom(view, classes('mbe-view', 'mbe-view-html', ctx.classes.token?.html), text));
-        i = end;
+    if (!span.link) return false;
+    for (let j = i + 1, end = runEnd(i, run); j < end; j++) if (!sameLink(pieces[j]!.span, span)) return false;
+    return true;
+  };
+  // Renders the run that starts at piece `i` into `into`, which is the <a>
+  // of the run's link when `linked`; returns the index of the next piece, or
+  // null when there is no view for it.
+  const renderRun = (i: number, run: { from: number; to: number }, into: Node, linked: boolean): number | null => {
+    // The run's tags go to the view; the text between them, with its
+    // formatting, tags, tokens and links, renders here and fills its slots.
+    const html: string[] = [];
+    const slots: Node[] = [];
+    const end = runEnd(i, run);
+    for (let j = i; j < end; ) {
+      const piece = pieces[j]!;
+      if (isHtml(piece.span)) {
+        html.push(piece.span.text);
+        j++;
         continue;
       }
+      const slot = doc.createDocumentFragment();
+      const stop = (k: number) => k >= end || isHtml(pieces[k]!.span);
+      if (linked) for (; !stop(j); j++) slot.appendChild(render(pieces[j]!));
+      else j = renderPieces(j, stop, slot);
+      slots.push(slot);
+      html.push(slotMarker(slots.length - 1));
     }
-    if (span.link) {
-      const a = doc.createElement('a');
-      const href = ctx.resolveUrl(span.link, 'link');
-      if (href !== null) a.setAttribute('href', href);
-      a.dataset.href = span.link;
-      if (span.linkTitle) a.title = span.linkTitle;
-      a.className = classes('mbe-link', ctx.classes.link);
-      while (i < pieces.length && sameLink(pieces[i]!.span, span)) {
+    const view = ctx.view?.('html', html.join(''), 'inline');
+    if (!view) return null;
+    fillSlots(view, slots.length, (n) => slots[n]!, doc);
+    // One atom as long as the run's text, so DOM-to-model mapping still sees it.
+    const text = inlineText(sliceInline(inline, run.from, run.to));
+    into.appendChild(atom(view, classes('mbe-view', 'mbe-view-html', ctx.classes.token?.html), text));
+    return end;
+  };
+  // Renders the pieces from `i` while `stop` is false into `into`; returns
+  // the index of the next piece. Consecutive spans with the same link share
+  // one <a>. A run inside a link renders into that <a>; a run that crosses a
+  // link's edge renders outside links, with the linked text between its tags
+  // in <a> elements of its own, as a browser pairs the tags other renderers
+  // pass through.
+  const renderPieces = (i: number, stop: (i: number) => boolean, into: Node): number => {
+    while (i < pieces.length && !stop(i)) {
+      const span = pieces[i]!.span;
+      const run = runAt(i);
+      if (run && !linkedRun(i, run)) {
+        const next = renderRun(i, run, into, false);
+        if (next !== null) {
+          i = next;
+          continue;
+        }
+      }
+      if (!span.link) {
+        into.appendChild(render(pieces[i]!));
+        i++;
+        continue;
+      }
+      const a = linkElement(span);
+      const start = i;
+      while (i < pieces.length && !stop(i) && sameLink(pieces[i]!.span, span)) {
+        const inner = runAt(i);
+        if (inner) {
+          const whole = linkedRun(i, inner);
+          // A crossing run renders outside this <a>, unless it has no view
+          // (then it was tried above, and its pieces render as usual).
+          if (!whole && i > start) break;
+          const next = whole ? renderRun(i, inner, a, true) : null;
+          if (next !== null) {
+            i = next;
+            continue;
+          }
+        }
         a.appendChild(render(pieces[i]!));
         i++;
       }
-      parent.appendChild(a);
-    } else {
-      parent.appendChild(render(pieces[i]!));
-      i++;
+      into.appendChild(a);
     }
-  }
+    return i;
+  };
+  renderPieces(0, () => false, parent);
 }
 
 /** Wraps a rendered span in one element per decoration. */

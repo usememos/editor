@@ -8,7 +8,6 @@
   "realistic#24": "accepted: a GFM edge case where CommonMark 0.31.2 renderers differ from GitHub; the editor follows GitHub (decision D7)"
  },
  "rendered": {
-  "cmark-gfm-extensions#25": "accepted: inline HTML inside link text shows as source (link text carries no markup)",
   "cmark-regression#15": "accepted: where an unclosed <script> ends inside a list (script text is never shown)",
   "commonmark#148": "accepted: inside a raw `<pre>`, the blank line before Markdown content and the line ending after it show; other renderers drop them (Markdown inside `<pre>` is rare)",
   "commonmark#200": "accepted: a link with an empty destination shows as plain text (it goes nowhere)",
