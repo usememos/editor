@@ -286,7 +286,7 @@ const linkCardsBelow: Extension = {
 
 ### Theming
 
-`style.css` is two stylesheets: `base.css` holds the layout the editor needs and all spacing between blocks, and `theme.css` the default look. The default look is quiet and compact, like a rendered Markdown view: a 16px body with 24px lines, 8px between blocks, headings close to the body size, muted quotes and list markers, code blocks on a light panel with no border whose long lines scroll sideways rather than wrap, and tables as a light grid with a shaded header row and columns sized to their content. Editing and read-only look the same; only the cursor on links and checkboxes changes. It has no border or background of its own, so it fits inside your own card, comment box or chat input.
+`style.css` is two stylesheets: `base.css` holds the layout the editor needs and all spacing between blocks, and `theme.css` the default look. The default look is quiet and compact, like a rendered Markdown view: a 16px body with 24px lines, 8px between blocks, headings close to the body size, muted quotes and list markers, code blocks on a light panel with no border whose long lines scroll sideways rather than wrap, and tables that fill the width inside a round frame, with a tinted header row, a line between rows and no vertical lines, as claude.ai renders them. Editing and read-only look the same; only the cursor on links and checkboxes changes. It has no border or background of its own, so it fits inside your own card, comment box or chat input.
 
 Every color, font and size in `theme.css` is a CSS custom property (`--mbe-text`, `--mbe-accent`, `--mbe-font`, …). Set them with the `theme` option's tokens, with a color set for light and one for dark; colors you leave out keep the defaults:
 

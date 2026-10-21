@@ -281,15 +281,19 @@
 
 /* Table */
 :is(.mbe-root, .mbe-flow) > .mbe-table { overflow-x: auto; }
-/* Columns fit their content and wrap at the editor's width, as GitHub lays
-   tables out; wider tables scroll. No column has a minimum width, so a long
-   column is not squeezed into wrapping by short ones. */
-:is(.mbe-root, .mbe-flow) > .mbe-table table { border-collapse: separate; border-spacing: 0; }
+/* The table fills the editor's width and its columns share it by their
+   content, as claude.ai lays tables out; one whose longest words do not
+   fit scrolls. Cells wrap at words: the root's overflow-wrap: anywhere
+   would let the layout shrink any column to one character and break words
+   to make the table fit, break-word keeps every column as wide as its
+   longest word. */
+:is(.mbe-root, .mbe-flow) > .mbe-table table { width: 100%; border-collapse: separate; border-spacing: 0; }
 :is(.mbe-root, .mbe-flow) > .mbe-table th,
 :is(.mbe-root, .mbe-flow) > .mbe-table td {
-  padding: 4px 8px;
+  padding: 0.4375em 0.75em;
   vertical-align: top;
   text-align: start;
+  overflow-wrap: break-word;
   outline: none;
 }
 /* An empty cell keeps room to click into while editing. */
