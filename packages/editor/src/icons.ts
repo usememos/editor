@@ -83,6 +83,8 @@ const ICONS = {
   delete: TRASH,
   /** `arrow-up` */
   addRowAbove: ['m5 12 7-7 7 7', 'M12 19V5'],
+  /** `arrow-up`: a footnote's backlink to its reference. */
+  backToReference: ['m5 12 7-7 7 7', 'M12 19V5'],
   /** `arrow-down` */
   addRowBelow: ['M12 5v14', 'm19 12-7 7-7-7'],
   /** `arrow-left` */

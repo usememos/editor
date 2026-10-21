@@ -889,7 +889,9 @@ export class Editor {
     if (toggle) this.taskToggle = options.taskToggle === true;
     if (options.editable !== undefined && options.editable === this.readOnly) {
       this.readOnly = !options.editable;
-      this.refreshRevealed();
+      // Footnote definitions are collected at the end only when read-only, so the change renders.
+      if (this.renderer.views?.has('footnote')) this.paint();
+      else this.refreshRevealed();
       this.applyReadOnly();
       this.hideUi();
     } else if (toggle) {
@@ -1603,6 +1605,7 @@ export class Editor {
   private paint(force = false, lazy = false, hadFocus = this.hasFocus()): void {
     const views = this.renderer.views;
     if (views && !this.pointerDown && !this.composing) this.renderer.revealed = revealedViews(this.state, views, !this.readOnly && hadFocus, this.hosted);
+    this.renderer.collectFootnotes = this.readOnly;
     this.renderer.render(this.state.doc, force, lazy);
     this.applyHeadingIds();
     this.applyReadOnly();

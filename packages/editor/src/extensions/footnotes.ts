@@ -3,9 +3,14 @@
 // another definition, or at a line that starts another block.
 //
 // References render as superscript labels and definitions as a small note
-// with the label, like a footnote, unless `render: false`. While editing,
-// either shows its source at the caret. When read-only, clicking a reference
-// scrolls to its definition.
+// with the label, like a footnote, unless `render: false`. The renderer
+// draws a definition's text as Markdown into the note (see `renderFootnote`
+// in view/dom.ts). While editing, either shows its source at the caret, and a
+// definition shows where it is written. Read-only, as on GitHub, the
+// definitions hide where they are written and the referenced ones are
+// collected in a section at the end, in order of first reference, each with
+// a backlink per reference; clicking a reference scrolls to its note and a
+// backlink to its reference.
 
 import type { Extension, SyntaxView } from '../extension';
 import type { BlockSyntax, InlineSyntax } from '../markdown/options';
@@ -55,6 +60,7 @@ const renderReference: SyntaxView = (source, element) => {
 };
 
 const renderDefinition: SyntaxView = (source, element) => {
+  // The renderer passes the label part with a slot marker for the text and renders the text into the slot.
   const label = labelOf(source);
   const doc = element.ownerDocument;
   element.classList.add('mbe-footnote');
@@ -80,14 +86,25 @@ export function footnotes(options: FootnotesOptions = {}): Extension {
     markdown: { inline: [inline], block: [block] },
     views: { footnote: (source, element, kind, ctx) => (kind === 'inline' ? renderReference : renderDefinition)(source, element, kind, ctx) },
     onCreate: ({ editor }) => {
-      // Read-only, a reference leads to its definition in the same document.
+      // Read-only, a reference leads to its note in the collected section, and a backlink to its reference.
       const onClick = (e: MouseEvent) => {
-        const ref = (e.target as HTMLElement).closest?.<HTMLElement>('.mbe-footnote-ref');
-        if (!ref || editor.isEditable) return;
-        const definition = [...editor.root.querySelectorAll<HTMLElement>('.mbe-footnote')].find((d) => d.dataset.label === ref.dataset.label);
-        if (!definition) return;
+        if (editor.isEditable) return;
+        const target = e.target as HTMLElement;
+        const ref = target.closest?.<HTMLElement>('.mbe-footnote-ref');
+        const back = ref ? null : target.closest?.<HTMLElement>('.mbe-footnote-backref');
+        if (!ref && !back) return;
+        const inSection = (el: Element) => el.closest('.mbe-footnotes') !== null;
+        let to: HTMLElement | undefined;
+        if (ref) {
+          const notes = [...editor.root.querySelectorAll<HTMLElement>('.mbe-footnote')].filter((d) => d.dataset.label === ref.dataset.label);
+          to = notes.find(inSection) ?? notes[0];
+        } else if (back) {
+          const refs = [...editor.root.querySelectorAll<HTMLElement>('.mbe-footnote-ref')].filter((r) => r.dataset.label === back.dataset.label && !inSection(r));
+          to = refs[Number(back.dataset.ref) - 1];
+        }
+        if (!to) return;
         e.preventDefault();
-        definition.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        to.scrollIntoView({ block: 'center', behavior: 'smooth' });
       };
       editor.root.addEventListener('click', onClick);
       return () => editor.root.removeEventListener('click', onClick);

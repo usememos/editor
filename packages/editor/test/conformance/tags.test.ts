@@ -59,7 +59,8 @@ function highlighted(markdown: string): { tags: string[]; mentions: string[] } {
     extensions: [math(), footnotes(), tags(), mentions(), rawHtml],
     resolveUrl: (url) => url,
   });
-  const read = (selector: string) => Array.from(element.querySelectorAll(selector), (el) => el.textContent!);
+  // Read-only, a footnote definition hides where it is written and shows again in the collected section: count the one a reader sees.
+  const read = (selector: string) => Array.from(element.querySelectorAll(selector), (el) => (el.closest('.mbe-footnote-collected') ? null : el.textContent!)).filter((t): t is string => t !== null);
   const found = { tags: read('.mbe-tag'), mentions: read('.mbe-mention') };
   editor.destroy();
   element.remove();

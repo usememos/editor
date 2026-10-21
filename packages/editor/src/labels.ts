@@ -11,6 +11,9 @@ export const DEFAULT_LABELS = {
   todoList: 'To-do list',
   /** Accessible name of a task checkbox whose item has no text. */
   task: 'Task',
+  /** The footnotes collected at the end of a read-only document, and a note's backlink to its reference. */
+  footnotes: 'Footnotes',
+  backToReference: 'Back to reference',
   quote: 'Quote',
   /** The slash menu item, and the title of a callout's block menu section. */
   callout: 'Callout',

@@ -315,15 +315,19 @@ function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HT
     case 'raw': {
       // Rendered, for example math as a formula, unless the selection is in the block.
       // An HTML section renders its HTML through the view and the Markdown between its tags as blocks.
+      // A footnote definition renders its label through the view and its text as inline Markdown.
       const source = inlineText(block.content);
-      const section =
-        block.syntax === 'html' && !reveal?.has(REVEAL_BLOCK) && ctx.views?.has('html') ? splitHtmlSection(source, ctx.markdown) : null;
-      const nested = block.syntax === 'markdown' && !reveal?.has(REVEAL_BLOCK) && ctx.views?.get('markdown') === MARKDOWN_VIEW;
-      const view = reveal?.has(REVEAL_BLOCK)
+      const revealed = reveal?.has(REVEAL_BLOCK) === true;
+      const section = block.syntax === 'html' && !revealed && ctx.views?.has('html') ? splitHtmlSection(source, ctx.markdown) : null;
+      const footnote = block.syntax === 'footnote' && !revealed && ctx.views?.has('footnote') ? splitFootnote(source) : null;
+      const nested = block.syntax === 'markdown' && !revealed && ctx.views?.get('markdown') === MARKDOWN_VIEW;
+      const view = revealed
         ? null
         : nested
           ? renderMarkdown(source, ctx)
-          : ctx.view?.(block.syntax, section ? section.html : source, 'block');
+          : footnote
+            ? renderFootnote(footnote, ctx)
+            : ctx.view?.(block.syntax, section ? section.html : source, 'block');
       if (view) {
         root = view;
         root.classList.add('mbe-view-block');
@@ -506,6 +510,52 @@ function appendBlocks(flow: HTMLElement, blocks: readonly Block[], ctx: RenderCo
     flow.appendChild(el);
   }
   updateNeighborMarks({ blocks }, (id) => elements.get(id), new WeakMap(), new Set(), ctx.labels);
+}
+
+/** A footnote definition, `[^label]: text`, split for rendering. */
+interface FootnoteDefinition {
+  /** The label, with backslash escapes removed. */
+  readonly label: string;
+  /** `[^label]: `, as written, for the view. */
+  readonly head: string;
+  /** The text after the label: Markdown, possibly on several lines. */
+  readonly body: string;
+}
+
+const FOOTNOTE_DEFINITION = /^(\[\^((?:[^\]\s\\]|\\.)+)\]:)[ \t]*([\s\S]*)$/;
+/** References in the source of a footnote token: `[^1][^2]` is one token with two. */
+const FOOTNOTE_REFERENCE = /\[\^((?:[^\]\s\\]|\\.)+)\]/g;
+const unescapeLabel = (label: string): string => label.replace(/\\(.)/g, '$1');
+
+function splitFootnote(source: string): FootnoteDefinition | null {
+  const m = FOOTNOTE_DEFINITION.exec(source);
+  return m ? { label: unescapeLabel(m[2]!), head: `${m[1]} `, body: m[3]! } : null;
+}
+
+/**
+ * A footnote definition rendered through the `footnote` view: the view gets
+ * the label part and a slot marker in place of the text, and the text
+ * renders as inline Markdown into the slot, with its links, formatting, tags
+ * and tokens, as the Markdown of an HTML section does. Inert, like a section.
+ */
+function renderFootnote(definition: FootnoteDefinition, ctx: RenderContext): HTMLElement | null {
+  const el = ctx.view?.('footnote', definition.head + slotMarker(0), 'block') ?? null;
+  if (el) fillSlots(el, 1, () => renderInlineMarkdown(definition.body, ctx), ctx.doc);
+  return el;
+}
+
+/** Markdown rendered as inline content: one paragraph's content in a span; anything else as blocks. */
+function renderInlineMarkdown(source: string, ctx: RenderContext): HTMLElement {
+  const flow = renderNodes(parseAst(source, ctx.markdown).children, ctx);
+  const only = flow.childNodes.length === 1 ? flow.firstElementChild : null;
+  if (flow.childNodes.length === 0 || (only && only.tagName === 'P')) {
+    const span = ctx.doc.createElement('span');
+    if (only) span.append(...Array.from(only.childNodes));
+    makeInert(span);
+    return span;
+  }
+  makeInert(flow);
+  return flow;
 }
 
 /**
@@ -958,6 +1008,14 @@ export class BlockRenderer {
   widgetsAfter?: (blockId: string) => readonly HTMLElement[] | undefined;
   /** Views of extension syntaxes, by syntax name. */
   views?: ReadonlyMap<string, SyntaxView>;
+  /**
+   * Read-only: footnote definitions hide where they are written and the
+   * referenced ones show again, in order of first reference, in a section
+   * at the end of the document (see `footnoteSection`).
+   */
+  collectFootnotes = false;
+  /** The last footnote section, kept while what it shows is the same. */
+  private footnotes?: { key: string; el: HTMLElement };
   /** What a view gets besides its source: the editor. Set with `views`. */
   viewContext?: ExtensionContext;
   /** Block views of extensions, with the extension's name, in extension order. */
@@ -1236,7 +1294,14 @@ export class BlockRenderer {
     // A block view's element goes when its block is gone, or changed while the block showed its editable form.
     for (const [id, entry] of [...this.hosted]) if (next.get(id)?.block !== entry.block) this.disposeHosted(id);
 
-    // Block elements in order, each followed by the block view placed after it, then its widgets.
+    const collecting = this.collectFootnotes && this.views?.has('footnote') === true;
+    for (const { block, el } of next.values()) {
+      if (block.type === 'raw' && block.syntax === 'footnote') el.classList.toggle('mbe-footnote-collected', collecting);
+    }
+    const footnotes = collecting ? this.footnoteSection(doc, next, ctx, force) : null;
+    if (!collecting) this.footnotes = undefined;
+
+    // Block elements in order, each followed by the block view placed after it, then its widgets; then the footnotes.
     const nodes: HTMLElement[] = [];
     for (const [id, { block, el, reveal }] of next) {
       nodes.push(el);
@@ -1245,6 +1310,7 @@ export class BlockRenderer {
       const widgets = this.widgetsAfter?.(id);
       if (widgets) nodes.push(...widgets);
     }
+    if (footnotes) nodes.push(footnotes);
 
     if (force || this.rendered.size === 0) {
       // Full render: build off-document and insert once.
@@ -1279,6 +1345,71 @@ export class BlockRenderer {
     }
     this.rendered = next;
     updateNeighborMarks(doc, (id) => next.get(id)?.el, this.numbers, this.collapsed, this.labels);
+  }
+
+  /**
+   * The footnotes section, as GitHub renders one: every definition that is
+   * referenced, in order of first reference, each rendered as its block is
+   * (see `renderFootnote`) with a backlink per reference. Definitions nothing
+   * references are left out. Null when there is nothing to show. The element
+   * is kept while the definitions and references are the same.
+   */
+  private footnoteSection(doc: Doc, next: ReadonlyMap<string, { block: Block; el: HTMLElement }>, ctx: RenderContext, force: boolean): HTMLElement | null {
+    const definitions = new Map<string, FootnoteDefinition>();
+    for (const block of doc.blocks) {
+      if (block.type !== 'raw' || block.syntax !== 'footnote') continue;
+      const definition = splitFootnote(inlineText(block.content));
+      if (definition && !definitions.has(definition.label)) definitions.set(definition.label, definition);
+    }
+    if (definitions.size === 0) return null;
+    // From the rendered references, so those inside HTML sections and raw Markdown count too.
+    const order: string[] = [];
+    const counts = new Map<string, number>();
+    for (const block of doc.blocks) {
+      const el = next.get(block.id)?.el;
+      if (!el) continue;
+      for (const ref of Array.from(el.querySelectorAll<HTMLElement>('.mbe-view-footnote'))) {
+        for (const m of (ref.dataset.source ?? '').matchAll(FOOTNOTE_REFERENCE)) {
+          const label = unescapeLabel(m[1]!);
+          if (!definitions.has(label)) continue;
+          const count = (counts.get(label) ?? 0) + 1;
+          counts.set(label, count);
+          if (count === 1) order.push(label);
+        }
+      }
+    }
+    if (order.length === 0) return null;
+    const key = JSON.stringify(order.map((label) => [label, definitions.get(label)!.body, counts.get(label)]));
+    if (!force && this.footnotes?.key === key) return this.footnotes.el;
+    const section = ctx.doc.createElement('section');
+    section.className = 'mbe-footnotes';
+    section.contentEditable = 'false';
+    section.setAttribute('aria-label', this.labels.footnotes);
+    for (const label of order) {
+      const item = renderFootnote(definitions.get(label)!, ctx);
+      if (!item) continue;
+      for (let i = 1; i <= counts.get(label)!; i++) {
+        const back = ctx.doc.createElement('button');
+        back.type = 'button';
+        back.className = 'mbe-footnote-backref';
+        back.dataset.label = label;
+        back.dataset.ref = String(i);
+        back.setAttribute('aria-label', `${this.labels.backToReference} ${label}${i > 1 ? ` ${i}` : ''}`);
+        // A small arrow, quiet as Notion's and Linear's controls; text where the app draws no icons.
+        const icon = ctx.icon?.('backToReference');
+        if (icon) back.appendChild(icon);
+        else back.textContent = '\u2191';
+        if (i > 1) {
+          const sup = ctx.doc.createElement('sup');
+          sup.textContent = String(i);
+          back.appendChild(sup);
+        }
+        item.appendChild(back);
+      }
+      section.appendChild(item);
+    }
+    this.footnotes = { key, el: section };
+    return section;
   }
 
   /** Marks blocks again after `collapsed` changed, without rendering any. */

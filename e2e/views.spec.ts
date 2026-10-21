@@ -165,18 +165,32 @@ test('an html view renders inline raw HTML a run at a time, and its source shows
   await expect(views).toHaveCount(3);
 });
 
-test('footnotes render as a raised label and a note, and a reference leads to its note when read-only', async ({ page }) => {
-  await page.goto(`/?md=${encodeURIComponent('Fact[^1] and more[^note].\n\n[^1]: The source,\n  with a second line.\n\n[^note]: Another.')}`);
+test('footnotes render as a raised label and a note with Markdown, and read-only collects them at the end', async ({ page }) => {
+  const doc = 'Fact[^1] and more[^note], again[^1].\n\n[^1]: The source, see [site](https://example.org).\n\n[^note]: Another.\n\n[^lost]: Nobody.';
+  await page.goto(`/?md=${encodeURIComponent(doc)}`);
   const editor = page.locator('#editor');
-  await expect(editor.locator('.mbe-footnote-ref')).toHaveText(['1', 'note']);
-  await expect(editor.locator('.mbe-footnote')).toHaveText(['1The source, with a second line.', 'noteAnother.']);
+  await expect(editor.locator('.mbe-footnote-ref')).toHaveText(['1', 'note', '1']);
+  await expect(editor.locator('.mbe-footnote')).toHaveText(['1The source, see site.', 'noteAnother.', 'lostNobody.']);
+  await expect(editor.locator('.mbe-footnote a')).toHaveAttribute('href', 'https://example.org');
   await expect(editor.locator('.mbe-token-footnote')).toHaveCount(0);
+  await expect(editor.locator('.mbe-footnotes')).toHaveCount(0);
   // While editing, a reference shows its source at the caret.
   await editor.locator('.mbe-footnote-ref').first().click();
   await expect(editor.locator('.mbe-token-footnote')).toHaveText('[^1]');
+  // Read-only: the referenced definitions are collected at the end, in order of first reference, with a backlink per reference.
   await page.evaluate(() => (window as any).editor.setOptions({ editable: false }));
-  await expect(editor.locator('.mbe-footnote-ref')).toHaveCount(2);
-  expect(await md(page)).toBe('Fact[^1] and more[^note].\n\n[^1]: The source,\n  with a second line.\n\n[^note]: Another.');
+  await expect(editor.locator('.mbe-footnote-ref')).toHaveCount(3);
+  const section = editor.locator('.mbe-footnotes');
+  await expect(section.locator('.mbe-footnote')).toHaveText(['1The source, see site.2', 'noteAnother.']);
+  await expect(section.locator('.mbe-footnote-backref .mbe-icon')).toHaveCount(3);
+  await expect(section.locator('.mbe-footnote a').first()).toHaveAttribute('href', 'https://example.org');
+  await expect(editor.locator('.mbe-footnote-collected')).toHaveCount(3);
+  await expect(editor.locator('.mbe-footnote-collected').first()).toBeHidden();
+  await section.locator('.mbe-footnote-backref').first().click();
+  await page.evaluate(() => (window as any).editor.setOptions({ editable: true }));
+  await expect(section).toHaveCount(0);
+  await expect(editor.locator('.mbe-footnote-collected')).toHaveCount(0);
+  expect(await md(page)).toBe(doc);
 });
 
 test('math renders through a renderer that loads on demand', async ({ page }) => {
@@ -282,7 +296,7 @@ test('a reference inside a section leads to its note, and the section stays open
   await page.evaluate(() => (window as any).editor.redecorate());
   await expect(details).toHaveAttribute('open', '');
   await details.locator('.mbe-footnote-ref').click();
-  await expect(page.locator('#editor .mbe-footnote')).toBeInViewport();
+  await expect(page.locator('#editor .mbe-footnotes .mbe-footnote')).toBeInViewport();
 });
 
 test('a section reads the same through a view that renders Markdown, which wraps a slot in a paragraph', async ({ page }) => {

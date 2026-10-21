@@ -121,8 +121,24 @@
 .mbe-root.mbe-readonly .mbe-footnote-ref { cursor: pointer; }
 /* A mention with an onClick (tags.ts), read-only: underlined on hover, as a name that leads somewhere. */
 .mbe-root.mbe-readonly [data-mbe-mention]:hover { text-decoration: underline; }
-:is(.mbe-root, .mbe-flow) > .mbe-footnote { font-size: 0.875em; color: var(--mbe-muted); }
+:is(.mbe-root, .mbe-flow, .mbe-footnotes) > .mbe-footnote { font-size: 0.875em; color: var(--mbe-muted); }
 .mbe-root .mbe-footnote-label { margin-inline-end: 0.375em; color: var(--mbe-link); }
+/* The footnotes collected at the end, read-only: under a thin rule, in small
+   muted text. A backlink to each reference is a quiet arrow that takes the
+   link color on hover, not a boxed glyph. */
+.mbe-root > .mbe-footnotes { border-top: 1px solid var(--mbe-border); padding-top: 8px; }
+.mbe-root .mbe-footnote-backref {
+  margin-inline-start: 0.375em;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--mbe-muted);
+  opacity: 0.7;
+  cursor: pointer;
+}
+.mbe-root .mbe-footnote-backref:hover { color: var(--mbe-link); opacity: 1; }
+.mbe-root .mbe-footnote-backref sup { font-size: 0.75em; line-height: 0; }
 
 /* Quote */
 :is(.mbe-root, .mbe-flow) > blockquote {
