@@ -1,6 +1,8 @@
 // Footnotes (GFM): `[^label]` references and `[^label]: text` definitions.
-// Kept as source and saved verbatim. A definition ends at a blank line, at
-// another definition, or at a line that starts another block.
+// Kept as source and saved verbatim. A definition ends at another definition
+// or at a line that starts another block. After a blank line it goes on only
+// in lines indented four spaces (or a tab), as on GitHub, so a note can hold
+// several paragraphs and a code block.
 //
 // References render as superscript labels and definitions as a small note
 // with the label, like a footnote, unless `render: false`. The renderer
@@ -32,9 +34,18 @@ const block: BlockSyntax = {
   name: 'footnote',
   open(line) {
     if (!reDefinition.test(line)) return null;
+    let blank = false;
     return {
       next(l) {
-        if (/^[ \t]*$/.test(l)) return 'end';
+        if (/^[ \t]*$/.test(l)) {
+          // Kept for now: the parser drops it again unless the block goes on.
+          blank = true;
+          return 'continue';
+        }
+        if (blank) {
+          blank = false;
+          return /^(?: {4}|\t)/.test(l) ? 'continue' : 'end';
+        }
         const rest = l.replace(/^[ \t]+/, '');
         return reDefinition.test(rest) || reBlockStart.test(rest) ? 'end' : 'continue';
       },

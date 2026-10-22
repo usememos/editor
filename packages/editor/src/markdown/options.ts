@@ -76,7 +76,9 @@ export interface BlockSyntax {
 export interface BlockSyntaxMatcher {
   /**
    * For each following line: `continue` adds it, `close` adds it and ends
-   * the block, `end` ends the block before it.
+   * the block, `end` ends the block before it. Blank lines at the end of the
+   * block are dropped from it, so a matcher may continue through a blank
+   * line to see whether the block goes on after it.
    */
   next(line: string): 'continue' | 'close' | 'end';
 }

@@ -532,9 +532,16 @@ class BlockParser {
       case 'htmlBlock':
         block.content = block.content.replace(/(\n *)+$/, '');
         break;
-      case 'rawBlock':
-        block.content = block.content.replace(/\n$/, '');
+      case 'rawBlock': {
+        // Trailing blank lines a matcher continued through are not part of the
+        // block, as with an indented code block: a footnote definition keeps a
+        // blank line only before an indented continuation.
+        const lines = block.content.replace(/\n$/, '').split('\n');
+        while (lines.length > 1 && /^[ \t]*$/.test(lines[lines.length - 1]!)) lines.pop();
+        block.content = lines.join('\n');
+        block.endLine = block.startLine + lines.length - 1;
         break;
+      }
       case 'item':
         block.endLine = block.lastChild ? block.lastChild.endLine : block.startLine;
         break;

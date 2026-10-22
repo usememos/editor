@@ -23,6 +23,7 @@ describe('footnotes', () => {
   };
   const doc = 'Fact[^1] and more[^note], again[^1].\n\n[^1]: The source, see [site](https://example.org),\n  with a second line.\n\n[^note]: Another.\n\n[^lost]: Nobody.\n';
   const labels = (notes: Iterable<Element>) => Array.from(notes).map((n) => (n as HTMLElement).dataset.label);
+  const texts = (els: Iterable<Element>) => Array.from(els).map((el) => el.textContent);
 
   it('renders a definition where it is written, its text as Markdown, while editing', () => {
     const root = create(doc, true).root;
@@ -61,6 +62,25 @@ describe('footnotes', () => {
     expect(root.querySelectorAll('.mbe-footnote-collected').length).toBe(0);
     editor.setOptions({ editable: false });
     expect(root.querySelector('.mbe-footnotes')).toBe(root.lastElementChild);
+  });
+
+  it('renders a note of several paragraphs and a code block, the backlink in the last paragraph', () => {
+    const md = 'Fact[^1].\n\n[^1]: First paragraph.\n\n    Second paragraph.\n\n        code\n\nAfter.\n';
+    const editing = create(md, true);
+    const note = editing.root.querySelector('.mbe-footnote')!;
+    expect(texts(note.querySelectorAll('p'))).toEqual(['First paragraph.', 'Second paragraph.']);
+    expect(note.querySelector('pre code')!.textContent).toContain('code');
+    // The memo's own paragraphs are untouched, and the Markdown is kept.
+    expect(texts(editing.root.querySelectorAll(':scope > p'))).toEqual(['Fact1.', 'After.']);
+    expect(editing.getMarkdown()).toBe(md);
+    const reading = create(md, false).root;
+    const items = reading.querySelectorAll('.mbe-footnotes .mbe-footnote');
+    expect(items.length).toBe(1);
+    // The code block is last, so the backlink gets a paragraph of its own after it.
+    const paragraphs = items[0]!.querySelectorAll('p');
+    expect(texts(paragraphs)).toEqual(['First paragraph.', 'Second paragraph.', '']);
+    expect(paragraphs[2]!.querySelector('.mbe-footnote-backref')).not.toBeNull();
+    expect(items[0]!.querySelector('pre code')!.textContent).toContain('code');
   });
 
   it('shows no section without a referenced definition', () => {

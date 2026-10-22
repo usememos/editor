@@ -122,7 +122,7 @@
 /* A mention with an onClick (tags.ts), read-only: underlined on hover, as a name that leads somewhere. */
 .mbe-root.mbe-readonly [data-mbe-mention]:hover { text-decoration: underline; }
 :is(.mbe-root, .mbe-flow, .mbe-footnotes) > .mbe-footnote { font-size: 0.875em; color: var(--mbe-muted); }
-.mbe-root .mbe-footnote-label { margin-inline-end: 0.375em; color: var(--mbe-link); }
+.mbe-root .mbe-footnote-label { font-size: 0.75em; color: var(--mbe-link); }
 /* The footnotes collected at the end, read-only: under a thin rule, in small
    muted text. A backlink to each reference is a quiet arrow that takes the
    link color on hover, not a boxed glyph. */

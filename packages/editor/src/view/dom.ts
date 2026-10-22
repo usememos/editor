@@ -518,18 +518,22 @@ interface FootnoteDefinition {
   readonly label: string;
   /** `[^label]: `, as written, for the view. */
   readonly head: string;
-  /** The text after the label: Markdown, possibly on several lines. */
+  /** The text after the label: Markdown, possibly several blocks, with the continuation indent removed. */
   readonly body: string;
 }
 
-const FOOTNOTE_DEFINITION = /^(\[\^((?:[^\]\s\\]|\\.)+)\]:)[ \t]*([\s\S]*)$/;
+const FOOTNOTE_DEFINITION = /^(\[\^((?:[^\]\s\\]|\\.)+)\]:)[ \t]*(.*)$/;
 /** References in the source of a footnote token: `[^1][^2]` is one token with two. */
 const FOOTNOTE_REFERENCE = /\[\^((?:[^\]\s\\]|\\.)+)\]/g;
 const unescapeLabel = (label: string): string => label.replace(/\\(.)/g, '$1');
 
 function splitFootnote(source: string): FootnoteDefinition | null {
-  const m = FOOTNOTE_DEFINITION.exec(source);
-  return m ? { label: unescapeLabel(m[2]!), head: `${m[1]} `, body: m[3]! } : null;
+  const [first = '', ...rest] = source.split('\n');
+  const m = FOOTNOTE_DEFINITION.exec(first);
+  if (!m) return null;
+  // Lines after the first sit four columns in, as on GitHub; what is indented further is content such as a code block.
+  const body = [m[3]!, ...rest.map((line) => line.replace(/^(?: {1,4}|\t)/, ''))].join('\n');
+  return { label: unescapeLabel(m[2]!), head: `${m[1]} `, body };
 }
 
 /**
@@ -1388,6 +1392,21 @@ export class BlockRenderer {
     for (const label of order) {
       const item = renderFootnote(definitions.get(label)!, ctx);
       if (!item) continue;
+      // The backlinks end the note's text. When it has several blocks they go
+      // in its last paragraph, or in a new one after a last block that is not
+      // a paragraph, as GitHub places them.
+      let target: Element = item.lastElementChild ?? item;
+      const flow = target.querySelector(':scope > .mbe-flow');
+      if (flow) {
+        const last = flow.lastElementChild;
+        if (last?.tagName === 'P') {
+          target = last;
+        } else {
+          target = ctx.doc.createElement('p');
+          target.className = 'mbe-block mbe-paragraph';
+          flow.appendChild(target);
+        }
+      }
       for (let i = 1; i <= counts.get(label)!; i++) {
         const back = ctx.doc.createElement('button');
         back.type = 'button';
@@ -1404,7 +1423,7 @@ export class BlockRenderer {
           sup.textContent = String(i);
           back.appendChild(sup);
         }
-        item.appendChild(back);
+        target.appendChild(back);
       }
       section.appendChild(item);
     }

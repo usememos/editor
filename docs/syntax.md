@@ -418,7 +418,7 @@ A claim that needs a source[^1].
 ```
 
 - `[^label]` is an inline token.
-- `[^label]: text` starts a raw block that ends at a blank line, at another definition, or at a line that starts another block.
+- `[^label]: text` starts a raw block. The lines that follow continue it until another definition or a line that starts another block. After a blank line it goes on only in lines indented four spaces (or a tab), as on GitHub, so a note can hold several paragraphs and a code block; the four spaces are not part of the text.
 - A definition's text renders as Markdown: links, formatting, code, tags and mentions in it show as anywhere else.
 - While editing, a definition shows where it is written, as a small note. Read-only, as on GitHub, the definitions hide where they are written and the referenced ones are collected in a section at the end, in order of first reference, each with a backlink (a small arrow) per reference; a definition nothing references does not show. Labels show as written, not renumbered.
 - Without `footnotes()`, `[^1]` is plain text and an edited block saves it as `\[^1\]`.

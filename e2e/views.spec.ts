@@ -193,6 +193,18 @@ test('footnotes render as a raised label and a note with Markdown, and read-only
   expect(await md(page)).toBe(doc);
 });
 
+test('a footnote holds several paragraphs when the lines after a blank line are indented, as on GitHub', async ({ page }) => {
+  const doc = 'Fact[^1].\n\n[^1]: First paragraph.\n\n    Second paragraph.\n\nAfter.';
+  await page.goto(`/?md=${encodeURIComponent(doc)}`);
+  const editor = page.locator('#editor');
+  await expect(editor.locator('.mbe-footnote p')).toHaveText(['First paragraph.', 'Second paragraph.']);
+  await expect(page.locator('#editor > p')).toHaveText(['Fact1.', 'After.']);
+  await page.evaluate(() => (window as any).editor.setOptions({ editable: false }));
+  await expect(editor.locator('.mbe-footnotes .mbe-footnote p')).toHaveText(['First paragraph.', 'Second paragraph.']);
+  await expect(editor.locator('.mbe-footnotes p').last().locator('.mbe-footnote-backref')).toHaveCount(1);
+  expect(await md(page)).toBe(doc);
+});
+
 test('math renders through a renderer that loads on demand', async ({ page }) => {
   await page.goto('/?empty');
   await page.evaluate(() => {

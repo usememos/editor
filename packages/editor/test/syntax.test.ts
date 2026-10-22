@@ -420,6 +420,16 @@ describe('inline', () => {
     ["[^1]: one\n[^2]: two", ["raw(footnote) [^1]: one", "raw(footnote) [^2]: two"], "[^1]: one\n\n[^2]: two\n"],
     ["[^1]: note\n# heading", ["raw(footnote) [^1]: note", "h1 heading"], "[^1]: note\n\n# heading\n"],
     ["[^1]:no space", ["raw(footnote) [^1]:no space"], SAME],
+    // After a blank line, a definition goes on only in lines indented four spaces or a tab (GitHub); blank lines at its end are not part of it.
+    ["[^1]: a\n\n    b\n\nc", ["raw(footnote) [^1]: a⏎⏎    b", "p c"], SAME],
+    ["[^1]: a\n\n    b\n        code\n\nc", ["raw(footnote) [^1]: a⏎⏎    b⏎        code", "p c"], SAME],
+    ["[^1]: a\n\n    b\nlazy\n\n    [^2]: still one", ["raw(footnote) [^1]: a⏎⏎    b⏎lazy⏎⏎    [^2]: still one"], SAME],
+    ["[^1]: a\n\n\tb\n\nc", ["raw(footnote) [^1]: a⏎⏎\tb", "p c"], SAME],
+    ["[^1]: a\n\nb", ["raw(footnote) [^1]: a", "p b"], SAME],
+    ["[^1]: a\n\n\n\nb", ["raw(footnote) [^1]: a", "p b"], "[^1]: a\n\nb\n"],
+    ["[^1]: a\n\n  b", ["raw(footnote) [^1]: a", "p b"], "[^1]: a\n\nb\n"],
+    ["[^1]: a\n\n[^2]: b", ["raw(footnote) [^1]: a", "raw(footnote) [^2]: b"], SAME],
+    ["[^1]: a\n\n# h", ["raw(footnote) [^1]: a", "h1 h"], SAME],
     ["[^a b]", ["p [^a b]"], "\\[^a b\\]\n"],
   ]);
 
