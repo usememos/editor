@@ -61,7 +61,9 @@ export function emoji(options: EmojiOptions = {}): Extension {
       while (end < range.to.offset && NAME_CHAR.test(text[end]!)) end++;
       const to = { ...range.from, offset: end };
       const next = text[end];
-      const space = next !== undefined && NO_SPACE_BEFORE.test(next) ? '' : ' ';
+      // In source mode a line ending is the end of the block: the space is added, as at a block's end.
+      const atLineEnd = next === '\n' && editor.mode === 'source';
+      const space = next !== undefined && !atLineEnd && NO_SPACE_BEFORE.test(next) ? '' : ' ';
       editor.commands.insertText(item.value + space, { range: { from: range.from, to } });
     },
   });

@@ -9,6 +9,7 @@ import type { Editor } from '../editor';
 import type { Extension } from '../extension';
 import type { Icon } from '../icons';
 import type { Block, Cell, Inline, Position } from '../model';
+import type { EditorMode } from '../sourceMode';
 
 export interface SuggestionItem {
   /** Stable ID, for tests and keys. Defaults to the label. */
@@ -69,6 +70,8 @@ export interface SuggestionAllowContext {
   readonly excluded: boolean;
   /** True when the user asked for the popup (Ctrl+Space), rather than typing. */
   readonly explicit: boolean;
+  /** The editor's mode. In source mode `block` is the one block holding the Markdown text, and `excluded` covers its syntax, code and URLs too. */
+  readonly mode: EditorMode;
 }
 
 export interface SuggestionItemsContext {
@@ -133,6 +136,8 @@ export interface SuggestionConfig<T extends SuggestionItem = SuggestionItem> {
   readonly allowSpaces?: boolean;
   /** Default matcher only: the trigger may follow any character. Default false: only the start of a line or whitespace. */
   readonly allowAnywhere?: boolean;
+  /** Never opens in source mode: for a suggestion whose items create blocks, such as the slash menu. */
+  readonly richOnly?: boolean;
   /** Waits until the query has not changed for this many ms before calling `items`. Default 0. */
   readonly debounce?: number;
   /** Most items shown. Default 50. */

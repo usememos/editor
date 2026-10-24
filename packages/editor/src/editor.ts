@@ -36,6 +36,7 @@ import {
   type EditorState,
   type HeadingBlock,
   type CodeBlock,
+  type Inline,
   type HeadingLevel,
   type Mark,
   type ParagraphBlock,
@@ -1637,6 +1638,11 @@ export class Editor {
     if (!this.composing) this.syncDomSelection(hadFocus);
   }
 
+  /** @internal Source mode's text as spans split at its syntax, for the suggestion controller (see `sourceInline`). */
+  sourceSpans(block: CodeBlock): Inline {
+    return this.sourceHighlighter.spans(inlineText(block.content));
+  }
+
   /** Source mode's block with the exact markup, once it is read: only the lines whose highlighting changed are rendered again. */
   private refreshSource(): void {
     if (this.destroyed || this.modeValue !== 'source' || this.composing || this.composition) return;
@@ -2065,17 +2071,18 @@ export class Editor {
   /** Markdown shortcuts and suggestion menus that typing `text` triggers. */
   private afterTyping(text: string): void {
     if (this.modeValue === 'source') {
-      // Plain text: no Markdown shortcuts, autolinks or suggestions.
+      // The text is the Markdown: no shortcuts or autolinks.
       this.shortcut = null;
-      return;
+    } else {
+      // Shortcuts are separate undo steps, so undo restores the typed characters.
+      const typed = this.state;
+      if (text === ' ' || text === '-') this.run((s) => cmd.applyBlockInputRules(s, this.markdown));
+      if (text.length === 1 && '*_`~'.includes(text)) this.run((s) => cmd.applyInlineInputRules(s));
+      if (this.markdown.inline.length > 0) this.run((s) => cmd.applyTokenInputRules(s, this.markdown.inline) ?? s);
+      if (text === ' ' && this.markdown.autolinks) this.run((s) => cmd.applyAutolinkInputRule(s) ?? s);
+      this.shortcut = this.state.doc !== typed.doc ? { typed, applied: this.state } : null;
     }
-    // Shortcuts are separate undo steps, so undo restores the typed characters.
-    const typed = this.state;
-    if (text === ' ' || text === '-') this.run((s) => cmd.applyBlockInputRules(s, this.markdown));
-    if (text.length === 1 && '*_`~'.includes(text)) this.run((s) => cmd.applyInlineInputRules(s));
-    if (this.markdown.inline.length > 0) this.run((s) => cmd.applyTokenInputRules(s, this.markdown.inline) ?? s);
-    if (text === ' ' && this.markdown.autolinks) this.run((s) => cmd.applyAutolinkInputRule(s) ?? s);
-    this.shortcut = this.state.doc !== typed.doc ? { typed, applied: this.state } : null;
+    // A suggestion's token at the caret opens its popup, in both modes.
     if (!text.includes('\n')) this.typedForSuggestion();
   }
 
@@ -2820,6 +2827,8 @@ export class Editor {
       name: 'slash',
       trigger: SLASH_CHARS,
       allowSpaces: true,
+      // Its items create blocks, which source mode has none of.
+      richOnly: true,
       emptyLabel: this.labels.noResults,
       label: this.labels.commands,
       className: 'mbe-slash-menu',

@@ -86,6 +86,7 @@ export function sourceDecorations(block: CodeBlock, text: string, markup: Markup
 export class SourceHighlighter {
   private last: { text: string; decorations: Decoration[] } | null = null;
   private markupFor: { text: string; markup: Markup } | null = null;
+  private spansFor: { text: string; markup: Markup; spans: Inline } | null = null;
   private pending: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
@@ -98,6 +99,27 @@ export class SourceHighlighter {
   markup(text: string): Markup {
     if (this.markupFor?.text !== text) this.markupFor = { text, markup: markdownMarkup(text, this.options) };
     return this.markupFor.markup;
+  }
+
+  /**
+   * The text as spans split at its syntax (`sourceInline`), for the
+   * suggestion controller, once per text. In a long text being typed in, the
+   * last markup read is moved through the edit, as the decorations are, so
+   * the popup's check costs no parse on a keystroke.
+   */
+  spans(text: string): Inline {
+    const exact = this.markupFor?.text === text ? this.markupFor.markup : null;
+    // Spans built from moved markup are made again once the exact markup is read.
+    if (this.spansFor?.text === text && (!exact || this.spansFor.markup === exact)) return this.spansFor.spans;
+    let markup = exact;
+    if (!markup && this.markupFor && text.length > SYNC_LIMIT) {
+      const ranges = shiftRanges(this.markupFor.markup.ranges, this.markupFor.text, text);
+      if (ranges) markup = { ranges, code: this.markupFor.markup.code };
+    }
+    markup ??= this.markup(text);
+    const spans = sourceInline(text, markup);
+    this.spansFor = { text, markup, spans };
+    return spans;
   }
 
   decorations(block: CodeBlock): Decoration[] {

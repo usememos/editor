@@ -13,6 +13,7 @@
 import type { Editor } from '../editor';
 import type { SuggestionConfig, SuggestionItem, SuggestionMatch, SuggestionMatcher, SuggestionRange } from '../extensions/suggestion';
 import { type Cell, containerContent, inlineText, isCollapsed, isPlainTextBlock, sameCell } from '../model';
+import { type EditorMode, isSourceDoc } from '../sourceMode';
 import { Menu, type MenuSection, type Placement, isMac } from '../ui/popup';
 import { suggestionAnchor, visibleArea } from './anchor';
 import { defaultMatcher, excludedAt, longestAt } from './match';
@@ -70,6 +71,7 @@ interface Found extends SuggestionMatch {
   readonly cell?: Cell;
   /** The text of the block or cell. */
   readonly text: string;
+  readonly mode: EditorMode;
 }
 
 interface Session extends Found {
@@ -408,14 +410,22 @@ export class SuggestionController {
     if (!isCollapsed(selection)) return null;
     const pos = selection.focus;
     const block = doc.blocks.find((b) => b.id === pos.blockId);
-    // Code and raw blocks are plain text: never a popup there.
-    if (!block || isPlainTextBlock(block)) return null;
-    const content = containerContent(block, pos.cell);
+    if (!block) return null;
+    // Source mode's block is the Markdown text: its spans are split at the syntax, so a popup
+    // opens in prose and not in code, a URL or a token. Other code and raw blocks are plain
+    // text: never a popup there.
+    const sourceBlock = isSourceDoc(doc) && block.type === 'code' ? block : null;
+    const source = sourceBlock ? this.editor.sourceSpans(sourceBlock) : null;
+    if (!source && isPlainTextBlock(block)) return null;
+    const content = source ?? containerContent(block, pos.cell);
     if (!content) return null;
-    const text = inlineText(content);
+    // (The source block's text is its one span: no need to join the split spans again.)
+    const text = inlineText(sourceBlock ? sourceBlock.content : content);
     const caret = pos.offset;
+    const mode: EditorMode = source ? 'source' : 'rich';
     let best: Found | null = null;
     for (const entry of only ? [only] : this.entries) {
+      if (source && entry.config.richOnly) continue;
       const match = entry.matcher({ text, caret, content, triggers: entry.triggers });
       if (!match || (best && match.from <= best.from)) continue;
       if (match.from < 0 || match.from >= caret || match.to < caret || match.to > text.length) continue;
@@ -424,10 +434,10 @@ export class SuggestionController {
       const excluded = excludedAt(content, match.from);
       const allow = entry.config.allow;
       const allowed = allow
-        ? allow({ editor: this.editor, block, cell: pos.cell, from: match.from, query: match.query, textBefore: text.slice(0, match.from), excluded, explicit })
+        ? allow({ editor: this.editor, block, cell: pos.cell, from: match.from, query: match.query, textBefore: text.slice(0, match.from), excluded, explicit, mode })
         : !excluded;
       if (!allowed) continue;
-      best = { ...match, entry, blockId: block.id, cell: pos.cell, text };
+      best = { ...match, entry, blockId: block.id, cell: pos.cell, text, mode };
     }
     return best;
   }
@@ -536,7 +546,7 @@ export class SuggestionController {
     if (this.editor.isComposing) this.host.endComposition();
     const session = this.session;
     if (!session) return;
-    const { entry, blockId, cell, from, to, query, text } = session;
+    const { entry, blockId, cell, from, to, query, text, mode } = session;
     const at = (offset: number) => (cell ? { blockId, offset, cell } : { blockId, offset });
     const range: SuggestionRange = { from: at(from), to: at(to) };
     this.close();
@@ -544,8 +554,10 @@ export class SuggestionController {
       entry.config.command({ editor: this.editor, range, item, query });
       return;
     }
+    // In source mode a line ending is the end of the block, as in rich mode: the space is added.
     const next = text[to];
-    const space = next !== undefined && NO_SPACE_BEFORE.test(next) ? '' : ' ';
+    const atLineEnd = next === '\n' && mode === 'source';
+    const space = next !== undefined && !atLineEnd && NO_SPACE_BEFORE.test(next) ? '' : ' ';
     this.editor.commands.insertText(entry.triggers[0] + (item.value ?? item.id ?? item.label) + space, { range });
   }
 }

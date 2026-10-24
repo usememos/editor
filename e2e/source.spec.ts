@@ -272,16 +272,94 @@ test('formatting keys and commands do nothing', async ({ page }) => {
   await expect(page.locator('.mbe-toolbar:visible')).toHaveCount(0);
 });
 
-test('no autocomplete: no suggestion popup, slash menu or Ctrl+Space', async ({ page }) => {
+test('autocomplete: a tag popup opens while typing, a pick inserts the tag, and the slash menu stays off', async ({ page }) => {
   await open(page, 'x\n');
   await select(page, 1);
-  await page.keyboard.type(' #wo @al :smi');
-  await page.keyboard.press('Control+Space');
+  await page.keyboard.type(' #wo');
+  await expect(page.locator('.mbe-menu-item:visible').first()).toContainText('#work');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.mbe-menu-item:visible')).toHaveCount(0);
+  expect(await md(page)).toBe('x #work \n');
+  // One undo takes the pick back to what was typed; the mode stays.
+  await page.keyboard.press('ControlOrMeta+z');
+  expect(await md(page)).toBe('x #wo\n');
   await page.keyboard.type('\n/');
   await frame(page);
   await expect(page.locator('.mbe-menu-item:visible')).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).editor.suggestion.state)).toBeNull();
-  expect(await md(page)).toBe('x #wo @al :smi\n/\n');
+  // The shown text and the highlighting follow the text the pick wrote.
+  await page.keyboard.press('Backspace');
+  await page.keyboard.press('Backspace');
+  await page.keyboard.type(' **b**');
+  expect(await shown(page)).toBe(await md(page));
+  expect(await page.locator('#editor .mbe-source .mbe-src-strong').allTextContents()).toEqual(['b']);
+});
+
+test('autocomplete: no popup inside a code span, a fence or a URL; Ctrl+Space opens one; emoji works', async ({ page }) => {
+  await open(page, 'a `#wo` b\n\n```\n#wo\n```\n\n[x](https://y.z/#wo)\n');
+  const text = await md(page);
+  for (const at of [text.indexOf('#wo') + 3, text.indexOf('#wo', text.indexOf('```')) + 3, text.lastIndexOf('#wo') + 3]) {
+    await select(page, at);
+    await page.keyboard.type('r');
+    await frame(page);
+    await expect(page.locator('.mbe-menu-item:visible')).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).editor.suggestion.state)).toBeNull();
+    await page.keyboard.press('Backspace');
+  }
+  // In prose, Escape closes the popup and Ctrl+Space opens it again for the token at the caret, as in rich mode.
+  await select(page, text.indexOf(' b') + 2);
+  await page.keyboard.type(' #wo');
+  await expect(page.locator('.mbe-menu-item:visible').first()).toContainText('#work');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.mbe-menu-item:visible')).toHaveCount(0);
+  await page.keyboard.press('Control+Space');
+  await expect(page.locator('.mbe-menu-item:visible').first()).toContainText('#work');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.mbe-menu-item:visible')).toHaveCount(0);
+  // The emoji suggestion's own command writes the emoji in place of the token, with a space at the line's end.
+  await page.keyboard.type(' :tad');
+  await expect(page.locator('.mbe-emoji-menu .mbe-menu-item').first()).toContainText(':tada:');
+  await expect(page.locator('.mbe-emoji-menu .mbe-menu-item').first().locator('.mbe-menu-icon')).toHaveText('🎉');
+  // A popup that just appeared ignores keys for a moment, so a key pressed before it was seen does not pick.
+  await page.waitForTimeout(100);
+  await page.keyboard.press('Enter');
+  expect(await md(page)).toBe(text.replace(' b\n', ' b #wo 🎉 \n'));
+});
+
+test('autocomplete: the allow rule sees the mode and the source block', async ({ page }) => {
+  await page.goto('/?empty');
+  await page.evaluate(() => {
+    const { Editor, matchToken, scanTags, suggestion, tags } = (window as any).core;
+    (window as any).editor.destroy();
+    (window as any).seen = [];
+    (window as any).editor = new Editor({
+      element: document.getElementById('editor'),
+      mode: 'source',
+      content: 'see #a and\n',
+      extensions: [
+        tags(),
+        suggestion({
+          name: 'tags',
+          trigger: '#',
+          match: matchToken(scanTags),
+          allow: (ctx: any) => {
+            (window as any).seen.push([ctx.mode, ctx.block.type, ctx.excluded, ctx.textBefore]);
+            return ctx.mode === 'source';
+          },
+          items: ({ query }: { query: string }) => [{ id: query + '1', label: '#' + query + '1' }],
+        }),
+      ],
+    });
+  });
+  await page.locator('#editor').click();
+  await page.evaluate(() => {
+    const editor = (window as any).editor;
+    const id = editor.state.doc.blocks[0].id;
+    editor.setSelection({ anchor: { blockId: id, offset: 6 }, focus: { blockId: id, offset: 6 } });
+  });
+  await page.keyboard.type('b');
+  await expect(page.locator('.mbe-menu-item:visible').first()).toContainText('#ab1');
+  expect(await page.evaluate(() => (window as any).seen.at(-1))).toEqual(['source', 'code', false, 'see ']);
 });
 
 test('Escape leaves the editor', async ({ page }) => {

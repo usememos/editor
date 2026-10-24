@@ -88,6 +88,33 @@ test('finding the autocomplete token at the caret in a 2,000-block document', as
   expect(p95).toBeLessThan(1);
 });
 
+test('finding the autocomplete token at the caret in 100 KB of Markdown in source mode', async ({ page }) => {
+  await page.goto('/?source&empty');
+  let md = '';
+  for (let n = 0; md.length < 100_000; n += 100) md = bigDoc(n);
+  await page.evaluate((m) => (window as any).editor.setMarkdown(`${m}\nNotes on #work/planning with @ada see /path #a #b @c #wor`), md);
+  await page.locator('#editor').click();
+  const times = await page.evaluate(() => {
+    const editor = (window as any).editor;
+    const id = editor.state.doc.blocks[0].id;
+    const end = editor.getMarkdown().length;
+    editor.setSelection({ anchor: { blockId: id, offset: end }, focus: { blockId: id, offset: end } });
+    const controller = editor.suggestions;
+    controller.find(false);
+    const out: number[] = [];
+    for (let i = 0; i < 500; i++) {
+      const t0 = performance.now();
+      controller.find(false);
+      out.push(performance.now() - t0);
+    }
+    return out;
+  });
+  const sorted = times.slice().sort((a, b) => a - b);
+  const p95 = sorted[Math.floor(sorted.length * 0.95)]!;
+  console.log(`source find token p95: ${p95.toFixed(3)} ms, median: ${sorted[250]!.toFixed(3)} ms`);
+  expect(p95).toBeLessThan(1);
+});
+
 test('typing latency in source mode with 100 KB of Markdown', async ({ page }) => {
   // Source mode is one block: every keystroke rebuilds its text and highlighting.
   await page.goto('/?source&empty');

@@ -198,7 +198,8 @@ const extensions = [
 | `items({ query, signal, composing, explicit, editor })` | The items, as an array or a promise. Shown in the order given; the editor does not filter or sort. `signal` is aborted when the query changes or the popup closes. A rejection counts as no items. |
 | `command({ editor, range, item, query })` | Applies a pick. `range` covers the whole token, from the trigger to its end, even when the caret is in the middle. Default: writes the first trigger, the item's `value` (default `id`, then `label`) and a space, which is left out before whitespace or closing punctuation. |
 | `match` | Finds the token at the caret: `({ text, caret, content, triggers }) => ({ from, to, query }) \| null`. `matchToken(scan)` builds one from a scanner, such as the one given to `tags({ scan })`. Without `match`, the default matcher takes a trigger at the start of a line or after whitespace, followed by text with no whitespace. |
-| `allow({ block, cell, from, query, textBefore, excluded, explicit, editor })` | Whether the popup may open for a match. Default: not when the trigger is in inline code, a link, an image, raw HTML or a token (`excluded`). Code and raw blocks never open a popup. `explicit` is true for Ctrl+Space. |
+| `allow({ block, cell, from, query, textBefore, excluded, explicit, mode, editor })` | Whether the popup may open for a match. Default: not when the trigger is in inline code, a link, an image, raw HTML or a token (`excluded`). Code and raw blocks never open a popup. `explicit` is true for Ctrl+Space. In source mode (`mode`), `block` is the one block holding the Markdown text and `excluded` covers its syntax, code and URLs too. |
+| `richOnly` | Never opens in source mode: for items that create blocks, as the slash menu's do. |
 | `allowSpaces`, `allowAnywhere` | Default matcher only: the query may contain single spaces; the trigger may follow any character. |
 | `debounce` | Waits this many ms after the last change of the query before calling `items`. Default 0. |
 | `limit` | Most items shown. Default 50. |
@@ -449,7 +450,7 @@ With `mode: 'source'`, the editor shows the whole document as Markdown text, as 
 
 **Switching** is a change of view, not an edit. The text shown in source mode is exactly `getMarkdown()`. Going back to rich mode loads the text as `setMarkdown` does, so `getMarkdown()` returns it byte for byte, including lines edited in source mode. A switch emits no `change`, adds no undo step and does not move focus. Undo and redo work across it: undoing an edit made in the other mode restores it in the current mode. The caret stays in the same block, at the same place in its text, past any Markdown syntax before it: a caret on syntax goes to the text after it, one inside an image or an escape before it, and one in a table to the start of the table. A switch requested while an input method is composing waits for the composition to end.
 
-**What works in source mode.** Source mode is plain text editing, like a `<textarea>` or a code block, that knows Markdown lists. It has no autocomplete and no formatting keys.
+**What works in source mode.** Source mode is plain text editing, like a `<textarea>` or a code block, that knows Markdown lists and opens the extensions' autocomplete popups. It has no formatting keys.
 
 | | |
 | --- | --- |
@@ -463,14 +464,14 @@ With `mode: 'source'`, the editor shows the whole document as Markdown text, as 
 | Escape | Leaves the editor |
 | Formatting keys (Mod+B, Mod+I, Mod+E, Mod+Shift+X, Mod+Alt+0–4, Mod+Alt+C, Mod+Shift+6–9) | Do nothing. Mod+K is left to the app |
 | Markdown shortcuts, autolinks | Do not run: the text is the Markdown |
-| Autocomplete | Off. `suggestion()` popups, the slash menu and Ctrl+Space do not open |
+| Autocomplete | `suggestion()` popups open for the tokens their extension owns, in prose and not inside code, a URL, raw HTML or extension syntax, and a pick inserts its text; Ctrl+Space opens one explicitly. The slash menu stays off, as does a suggestion with `richOnly` |
 | `fileHandler`, `handlePaste`, `handleDrop`, extension key bindings | As in rich mode |
 | `commands.*` | `insertText` and `insertMarkdown` insert the text as written; `insertMarkdown` with `block: true` puts it on lines of its own. `indent` and `outdent` work as Tab and Shift+Tab. `undo`, `undo`, `redo`, `selectAll`, `focus`, `blur` and `scrollIntoView` work. The mark, block type, link, image, table, divider, callout, section and `selectBlocks` commands return `false` |
 | Placeholder | Shown when the text is empty |
 | `addWidget` | Shown below the text. A widget remembers its place in the text, which moves with edits before it, and `insertMarkdown(md, { at: widget })` inserts there |
 | `editable: false` | The text is read-only and can be selected and copied. `taskToggle` has no effect |
 
-The toolbar, slash menu, autocomplete popup, block handle, block menu, link card, rendered views and images do not show. `isActive()` returns `false` and `getAttributes()` returns `{}`.
+The toolbar, slash menu, block handle, block menu, link card, rendered views and images do not show. `isActive()` returns `false` and `getAttributes()` returns `{}`.
 
 **Positions.** In source mode the document is one block that holds all the text, so a `Position` names that block and its `offset` counts UTF-16 code units of the Markdown. `getSelection`, `setSelection`, `selectionToJSON` and `insertText({ range })` use that shape. A selection saved in the other mode is clamped.
 
