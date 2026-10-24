@@ -88,6 +88,35 @@ test('finding the autocomplete token at the caret in a 2,000-block document', as
   expect(p95).toBeLessThan(1);
 });
 
+test('typing latency in source mode with 100 KB of Markdown', async ({ page }) => {
+  // Source mode is one block: every keystroke rebuilds its text and highlighting.
+  await page.goto('/?source&empty');
+  let md = '';
+  for (let n = 0; md.length < 100_000; n += 100) md = bigDoc(n);
+  await page.evaluate((m) => (window as any).editor.setMarkdown(m), md);
+  const times = await page.evaluate(async () => {
+    const editor = (window as any).editor;
+    const root = document.getElementById('editor')!;
+    document.getElementById('output')!.style.display = 'none';
+    const id = editor.state.doc.blocks[0].id;
+    const mid = Math.floor(editor.getMarkdown().length / 2);
+    editor.focus();
+    editor.setSelection({ anchor: { blockId: id, offset: mid }, focus: { blockId: id, offset: mid } });
+    const out: number[] = [];
+    for (let i = 0; i < 200; i++) {
+      const t0 = performance.now();
+      root.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: 'x', bubbles: true, cancelable: true }));
+      out.push(performance.now() - t0);
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+    }
+    return out;
+  });
+  const sorted = times.slice().sort((a, b) => a - b);
+  const p95 = sorted[Math.floor(sorted.length * 0.95)]!;
+  console.log(`source keystroke p95: ${p95.toFixed(2)} ms, median: ${sorted[100]!.toFixed(2)} ms`);
+  expect(p95).toBeLessThan(16);
+});
+
 test('100 KB of Markdown parsed and rendered', async ({ page }) => {
   await page.goto('/?empty');
   let md = '';

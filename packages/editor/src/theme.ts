@@ -3,6 +3,7 @@
 // layout the editor needs, theme.css the default look.
 
 import type { HeadingLevel } from './model';
+import type { MarkupKind } from './markdown/markup';
 
 /**
  * Classes added to each rendered element of a type, next to the editor's own
@@ -41,6 +42,8 @@ export interface ThemeClasses {
   readonly link?: string;
   /** Inline tokens of an extension syntax, as source or rendered, by syntax name, such as `math`. */
   readonly token?: Readonly<Record<string, string>>;
+  /** Source mode's highlighting, by kind of markup (see `MarkupKind`): `marker`, `heading`, `strong`, `em`, `code`, `url` and the rest. */
+  readonly source?: Readonly<Partial<Record<MarkupKind, string>>>;
 }
 
 /** Colors for one color scheme. Any CSS color. */
@@ -83,6 +86,8 @@ export interface ThemeTokens {
   readonly dark?: ThemeColors;
   readonly font?: string;
   readonly mono?: string;
+  /** The font of source mode's text. Defaults to `font`; set it to `mono` for an all-monospace source view. */
+  readonly sourceFont?: string;
   readonly fontSize?: string | number;
   readonly lineHeight?: string | number;
   readonly radius?: string | number;
@@ -139,6 +144,7 @@ const COLOR_VARS: Record<keyof ThemeColors, string> = {
 const SIZE_VARS = {
   font: '--mbe-font',
   mono: '--mbe-mono',
+  sourceFont: '--mbe-source-font',
   fontSize: '--mbe-font-size',
   lineHeight: '--mbe-line-height',
   radius: '--mbe-radius',

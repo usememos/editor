@@ -165,7 +165,7 @@ export function imageSuffixText(s: { readonly align?: ImageNodeAlign; readonly w
 export type BlockNode =
   | ParagraphNode
   | HeadingNode
-  | { readonly type: 'thematicBreak' }
+  | { readonly type: 'thematicBreak'; readonly lines?: SourceLines }
   | BlockQuoteNode
   | ListNode
   | CodeBlockNode
@@ -236,6 +236,8 @@ export interface ListItemNode {
   readonly task: boolean;
   readonly checked: boolean;
   readonly children: BlockNode[];
+  /** The item's source lines, the first holding its marker. */
+  readonly lines?: SourceLines;
 }
 
 export interface CodeBlockNode {
@@ -246,6 +248,8 @@ export interface CodeBlockNode {
   /** Code text. Ends with "\n" unless empty. */
   readonly value: string;
   readonly source?: ContentSource;
+  /** The block's source lines: for a fenced block, from the opening fence to the closing one, or to the last line it has. */
+  readonly lines?: SourceLines;
 }
 
 export interface HtmlBlockNode {
@@ -270,6 +274,8 @@ export interface TableNode {
   readonly align: TableAlign[];
   /** `rows[0]` is the header row. Every row has `align.length` cells. */
   readonly rows: InlineNode[][][];
+  /** The table's source lines: the header row, the delimiter row and the body rows. */
+  readonly lines?: SourceLines;
 }
 
 /** Source lines of a top-level block, 1-based and inclusive. */

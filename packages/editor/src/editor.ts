@@ -74,6 +74,7 @@ import { BLOCK_ATTR, BlockRenderer, atomAt, calloutName, childIndex, contentElem
 import { revealedViews, sameRevealed, viewEntry } from './view/reveal';
 import { scrollRectIntoView } from './view/scroll';
 import { FONT_PROPERTIES, type Theme, mergeClasses, tokenProperties } from './theme';
+import { SourceHighlighter } from './sourceHighlight';
 import * as src from './sourceMode';
 import { type EditorMode, SOURCE_ID, isSourceDoc, sourceState, sourceText } from './sourceMode';
 
@@ -100,6 +101,14 @@ export interface EditorOptions {
    * Tab indent as in a code block. Default true. Fixed for the editor's lifetime.
    */
   smartLists?: boolean;
+  /**
+   * In source mode, the Markdown syntax is highlighted: markers dimmed,
+   * strong text bold, emphasis italic, headings heavier, code and URLs
+   * tinted (classes `mbe-src-*`). `false` leaves the text plain; the
+   * extensions' decorations show either way. Default true. Fixed for the
+   * editor's lifetime.
+   */
+  sourceHighlighting?: boolean;
   /** Focus on creation: `true` or `'start'` puts the caret at the start, `'end'` at the end. */
   autofocus?: boolean | 'start' | 'end';
   /** Attributes for the editable root, such as `autocorrect` or `aria-label`. */
@@ -420,6 +429,9 @@ export class Editor {
   /** Task checkboxes stay usable while read-only. */
   private taskToggle: boolean;
   private readonly smartLists: boolean;
+  private readonly sourceHighlighting: boolean;
+  /** Source mode's decorations, computed once per text; a long text gets them a moment after the keystroke (see `SourceHighlighter`). */
+  private readonly sourceHighlighter: SourceHighlighter;
   private readonly options: EditorOptions;
   /** The extensions in priority order, ending with the default keymap unless one was given. */
   private readonly extensions: readonly Extension[];
@@ -489,6 +501,7 @@ export class Editor {
     this.readOnly = options.editable === false;
     this.taskToggle = options.taskToggle === true;
     this.smartLists = options.smartLists !== false;
+    this.sourceHighlighting = options.sourceHighlighting !== false;
     const given = options.extensions ?? [];
     this.extensions = given.some((e) => e.name === 'defaultKeymap') ? given : [...given, defaultKeymap()];
     this.bindings = this.extensions.flatMap((ext) =>
@@ -527,6 +540,14 @@ export class Editor {
         return decorators.flatMap((fn) => fn(ctx));
       };
     }
+    // Source mode: the Markdown's own highlighting, the decorators over the text
+    // split at its syntax, and the code decorators over each code block in it.
+    this.sourceHighlighter = new SourceHighlighter(
+      this.markdown,
+      () => ({ highlight: this.sourceHighlighting, classes: this.renderer.classes.source, decorators, codeDecorators }),
+      () => this.refreshSource(),
+    );
+    this.renderer.decorateSource = (block) => this.sourceHighlighter.decorations(block);
     this.commands = this.createCommands();
 
     root.classList.add('mbe-root');
@@ -1315,6 +1336,7 @@ export class Editor {
     this.destroyed = true;
     if (this.changeFrame !== null) cancelAnimationFrame(this.changeFrame);
     if (this.settleFrame !== null) cancelAnimationFrame(this.settleFrame);
+    this.sourceHighlighter.destroy();
     for (const fn of this.cleanup) fn();
     this.suggestions.destroy();
     for (const widget of [...this.widgets]) widget.remove();
@@ -1475,7 +1497,7 @@ export class Editor {
     const parked = this.parkedCaret();
     const target = parked ? { anchor: parked, focus: parked } : this.state.selection;
     const anchor = this.toDom(target.anchor);
-    const focus = this.toDom(target.focus);
+    const focus = isCollapsed(target) ? anchor : this.toDom(target.focus);
     if (!anchor || !focus) return;
     if (
       sel.anchorNode === anchor.node &&
@@ -1505,7 +1527,8 @@ export class Editor {
     if (!sel || !sel.anchorNode || !sel.focusNode) return null;
     if (!this.root.contains(sel.anchorNode) || !this.root.contains(sel.focusNode)) return null;
     const anchor = domToPosition(this.root, sel.anchorNode, sel.anchorOffset);
-    const focus = domToPosition(this.root, sel.focusNode, sel.focusOffset);
+    const collapsed = sel.anchorNode === sel.focusNode && sel.anchorOffset === sel.focusOffset;
+    const focus = collapsed ? anchor : domToPosition(this.root, sel.focusNode, sel.focusOffset);
     if (!anchor || !focus) return null;
     return { anchor, focus };
   }
@@ -1614,6 +1637,16 @@ export class Editor {
     if (!this.composing) this.syncDomSelection(hadFocus);
   }
 
+  /** Source mode's block with the exact markup, once it is read: only the lines whose highlighting changed are rendered again. */
+  private refreshSource(): void {
+    if (this.destroyed || this.modeValue !== 'source' || this.composing || this.composition) return;
+    const block = this.current.doc.blocks[0];
+    if (block?.type !== 'code') return;
+    const hadFocus = this.hasFocus();
+    this.renderer.refreshSource(block);
+    if (!this.pointerDown) this.syncDomSelection(hadFocus);
+  }
+
   /** Heading ids from the `headingIds` option, computed again only when the document changes. */
   private applyHeadingIds(): void {
     const headingIds = this.options.headingIds;
@@ -1648,6 +1681,7 @@ export class Editor {
       return;
     }
     this.redecoratePending = false;
+    this.sourceHighlighter.reset();
     this.paint(true);
     this.afterRender();
   }

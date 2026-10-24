@@ -7,8 +7,8 @@ const open = (page: Page, markdown: string) => page.goto(`/?source&md=${encodeUR
 const frame = (page: Page) => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null)))));
 const mode = (page: Page) => page.evaluate(() => (window as any).editor.mode as string);
 const setMode = (page: Page, mode: 'rich' | 'source') => page.evaluate((mode) => (window as any).editor.setOptions({ mode }), mode);
-/** The text shown in source mode. */
-const shown = (page: Page) => page.locator('#editor .mbe-source-text').evaluate((el) => el.textContent);
+/** The text shown in source mode: one element per line, without the line endings. */
+const shown = (page: Page) => page.locator('#editor .mbe-source-text').evaluate((el) => Array.from(el.children, (line) => line.textContent).join('\n'));
 const offsets = (page: Page) =>
   page.evaluate(() => {
     const { anchor, focus } = (window as any).editor.state.selection;
@@ -41,7 +41,7 @@ test('rich → source → rich leaves every fixture byte for byte, and source sh
   const sample = await md(page);
   const failures = await page.evaluate((all) => {
     const editor = (window as any).editor;
-    const text = () => document.querySelector('#editor .mbe-source-text')!.textContent;
+    const text = () => Array.from(document.querySelector('#editor .mbe-source-text')!.children, (line) => line.textContent).join('\n');
     const out: string[] = [];
     for (const markdown of all) {
       editor.setMarkdown(markdown);
@@ -375,14 +375,16 @@ test('the source mode option works on creation, and the URL toggle button switch
   expect(await mode(page)).toBe('source');
   await expect(page.locator('#editor .mbe-source')).toHaveCount(1);
   expect(await shown(page)).toBe('**bold**\n');
-  // The text is in the mono font, at the body's size and line height.
+  // The text is in the body font, at the body's size and line height; the sourceFont token changes the font.
   const font = (selector: string) =>
     page.locator(selector).evaluate((el) => [getComputedStyle(el).fontFamily, getComputedStyle(el).fontSize, getComputedStyle(el).lineHeight]);
   const [sourceFont, size, lineHeight] = await font('#editor .mbe-source');
   const [bodyFont, bodySize, bodyLineHeight] = await font('#editor');
-  expect(sourceFont).toMatch(/monospace/);
-  expect(sourceFont).not.toBe(bodyFont);
+  expect(sourceFont).toBe(bodyFont);
   expect([size, lineHeight]).toEqual([bodySize, bodyLineHeight]);
+  await page.evaluate(() => (window as any).editor.setOptions({ theme: { tokens: { sourceFont: 'monospace' } } }));
+  expect((await font('#editor .mbe-source'))[0]).toBe('monospace');
+  await page.evaluate(() => (window as any).editor.setOptions({ theme: undefined }));
   await page.locator('#toggle-source').click();
   expect(await mode(page)).toBe('rich');
   await expect(page.locator('#editor strong')).toHaveText('bold');
@@ -423,4 +425,85 @@ test('IME text in source mode is inserted once; a switch during composition wait
   expect(await md(page)).toBe('日本');
   await expect(page.locator('#editor .mbe-source')).toHaveCount(0);
   await expect(page.locator('#editor p')).toHaveText('日本');
+});
+
+test('highlights the Markdown syntax without changing the text: markers dimmed, strong bold, code mono, URLs tinted', async ({ page }) => {
+  const text = '# Title\n\nsome **bold** and `code` and [a link](https://x.y)\n';
+  await open(page, text);
+  expect(await shown(page)).toBe(text);
+  const texts = (cls: string) => page.locator(`#editor .mbe-source .${cls}`).allTextContents();
+  expect(await texts('mbe-src-marker')).toEqual(['#', '**', '**', '`', '`', '[', ']', '(', ')']);
+  expect(await texts('mbe-src-heading')).toEqual(['Title']);
+  expect(await texts('mbe-src-strong')).toEqual(['bold']);
+  expect(await texts('mbe-src-code')).toEqual(['code']);
+  expect(await texts('mbe-src-link')).toEqual(['a link']);
+  expect(await texts('mbe-src-url')).toEqual(['https://x.y']);
+  const style = (cls: string, prop: string) => page.locator(`#editor .mbe-source .${cls}`).first().evaluate((el, p) => getComputedStyle(el).getPropertyValue(p), prop);
+  const body = await page.locator('#editor .mbe-source-text').evaluate((el) => [getComputedStyle(el).color, getComputedStyle(el).fontSize, getComputedStyle(el).fontFamily]);
+  expect(Number(await style('mbe-src-strong', 'font-weight'))).toBeGreaterThanOrEqual(600);
+  expect(Number(await style('mbe-src-heading', 'font-weight'))).toBeGreaterThanOrEqual(600);
+  expect(await style('mbe-src-marker', 'color')).not.toBe(body[0]);
+  expect(await style('mbe-src-url', 'color')).not.toBe(body[0]);
+  expect(await style('mbe-src-code', 'font-family')).not.toBe(body[2]);
+  // Nothing changes size: the heading and the code are at the body's size.
+  expect(await style('mbe-src-heading', 'font-size')).toBe(body[1]);
+  expect(await style('mbe-src-code', 'font-size')).toBe(body[1]);
+  // The text is in the body font, not mono.
+  expect(body[2]).not.toContain('mono');
+});
+
+test('a literal star and a hash in a fence are not markup, and tags are highlighted in prose only', async ({ page }) => {
+  await open(page, 'a * b #tag `#code` [#link](https://x.y/#url)\n\n```\n# not a heading\n```\n');
+  expect(await page.locator('#editor .mbe-source .mbe-src-marker').allTextContents()).toEqual(['`', '`', '[', ']', '(', ')', '```', '```']);
+  expect(await page.locator('#editor .mbe-source .mbe-src-heading').count()).toBe(0);
+  expect(await page.locator('#editor .mbe-source .mbe-src-code').allTextContents()).toEqual(['#code', '# not a heading']);
+  expect(await page.locator('#editor .mbe-source .tag').allTextContents()).toEqual(['#tag', '#link']);
+});
+
+test('sourceHighlighting: false leaves the text plain while the extensions still decorate it', async ({ page }) => {
+  await page.goto(`/?source&nohighlight&md=${encodeURIComponent('see #tag **bold**\n')}`);
+  expect(await shown(page)).toBe('see #tag **bold**\n');
+  expect(await page.locator('#editor .mbe-source [class*="mbe-src-"]').count()).toBe(0);
+  expect(await page.locator('#editor .mbe-source .tag').allTextContents()).toEqual(['#tag']);
+});
+
+test('codeDecorations run on the code of each fence in source mode', async ({ page }) => {
+  await page.goto('/?empty');
+  await page.evaluate(() => {
+    const { Editor } = (window as any).core;
+    (window as any).editor.destroy();
+    (window as any).editor = new Editor({
+      element: document.getElementById('editor'),
+      mode: 'source',
+      content: 'text\n\n```js\nlet x = 1;\n```\n\n~~~\nplain\n~~~\n',
+      extensions: [
+        {
+          name: 'highlighter',
+          codeDecorations: ({ text, language }: { text: string; language: string }) =>
+            language === 'js' ? [{ from: 0, to: 3, class: 'kw' }, { from: 0, to: text.length + 100, class: 'all' }] : [{ from: 0, to: 2, class: 'pl' }],
+        },
+      ],
+    });
+  });
+  expect(await page.locator('#editor .mbe-source .kw').allTextContents()).toEqual(['let']);
+  // A decoration past the code's end is clipped to it (in pieces, where another decoration splits it).
+  expect((await page.locator('#editor .mbe-source .all').allTextContents()).join('')).toBe('let x = 1;');
+  expect(await page.locator('#editor .mbe-source .pl').allTextContents()).toEqual(['pl']);
+  expect(await page.locator('#editor .mbe-source .mbe-src-lang').allTextContents()).toEqual(['js']);
+});
+
+test('typing keeps the highlighting current, and the shown text stays the Markdown', async ({ page }) => {
+  await open(page, 'one **two** three\n');
+  await select(page, 'one **two'.length);
+  await page.keyboard.type('x');
+  expect(await md(page)).toBe('one **twox** three\n');
+  expect(await shown(page)).toBe('one **twox** three\n');
+  expect(await page.locator('#editor .mbe-source .mbe-src-strong').allTextContents()).toEqual(['twox']);
+  // Closing the emphasis later highlights it.
+  await open(page, 'one **two three\n');
+  expect(await page.locator('#editor .mbe-source .mbe-src-strong').count()).toBe(0);
+  await select(page, 'one **two'.length);
+  await page.keyboard.type('**');
+  expect(await shown(page)).toBe('one **two** three\n');
+  expect(await page.locator('#editor .mbe-source .mbe-src-strong').allTextContents()).toEqual(['two']);
 });

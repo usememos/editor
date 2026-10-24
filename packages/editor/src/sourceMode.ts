@@ -479,19 +479,22 @@ export function sourceIndentList(state: EditorState, delta: 1 | -1): EditorState
 }
 
 /** Where an offset in `before` moves to in `after`, when the change between them is one replaced range. */
+/** The one range an edit replaced: `[from, toBefore)` of `before` became `[from, toAfter)` of `after`. */
+export function changedRange(before: string, after: string): { from: number; toBefore: number; toAfter: number } {
+  let from = 0;
+  const max = Math.min(before.length, after.length);
+  while (from < max && before.charCodeAt(from) === after.charCodeAt(from)) from++;
+  let suffix = 0;
+  while (suffix < max - from && before.charCodeAt(before.length - 1 - suffix) === after.charCodeAt(after.length - 1 - suffix)) suffix++;
+  return { from, toBefore: before.length - suffix, toAfter: after.length - suffix };
+}
+
 export function mapOffset(offset: number, before: string, after: string): number {
   if (before === after) return offset;
-  let start = 0;
-  while (start < before.length && start < after.length && before[start] === after[start]) start++;
-  let endBefore = before.length;
-  let endAfter = after.length;
-  while (endBefore > start && endAfter > start && before[endBefore - 1] === after[endAfter - 1]) {
-    endBefore--;
-    endAfter--;
-  }
-  if (offset <= start) return offset;
-  if (offset >= endBefore) return offset + (after.length - before.length);
-  return endAfter;
+  const { from, toBefore, toAfter } = changedRange(before, after);
+  if (offset <= from) return offset;
+  if (offset >= toBefore) return offset + (after.length - before.length);
+  return toAfter;
 }
 
 // ---------------------------------------------------------------------------

@@ -236,6 +236,7 @@ const editor = new Editor({
   content: params.has('empty') ? '' : (params.get('md') ?? read(DRAFT_KEY) ?? SAMPLE),
   placeholder: 'Write something, or type / for commands…',
   mode: params.has('source') ? 'source' : 'rich',
+  sourceHighlighting: !params.has('nohighlight'),
   autofocus: params.has('focus'),
   onChange: (markdown) => {
     output.textContent = markdown;

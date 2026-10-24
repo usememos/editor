@@ -34,7 +34,7 @@ import type { BlockView, ExtensionContext, SyntaxView } from '../extension';
 import type { Labels } from '../labels';
 import type { IconName } from '../icons';
 import type { ThemeClasses } from '../theme';
-import { type Decoration, decorationContext, splitByDecorations } from '../decorations';
+import { type Decoration, decorationContext, sameDecorations, splitByDecorations } from '../decorations';
 import { SLOT_MARKER, slotMarker, splitHtmlSection } from '../markdown/htmlSection';
 import type { BlockNode, BlockQuoteNode, ListItemNode, ListNode } from '../markdown/ast';
 import { parseAst } from '../markdown/blocks';
@@ -48,6 +48,9 @@ export function codeViewName(language: string): string {
   return `code:${language.trim().toLowerCase()}`;
 }
 const CONTENT_ATTR = 'data-content';
+/** Source mode's content element, and its line elements (see "Source mode's text" below). */
+const SOURCE_TEXT = 'mbe-source-text';
+const SOURCE_LINE = 'mbe-source-line';
 const FILL_ATTR = 'data-mbe-fill';
 const ATOM_ATTR = 'data-atom';
 const LIST_START_ATTR = 'data-list-start';
@@ -132,6 +135,8 @@ export interface RenderContext {
   readonly decorate?: (block: Block, content: Inline, cell?: Cell) => readonly Decoration[];
   /** Decorations for a code block's code, such as syntax highlighting. */
   readonly decorateCode?: (block: CodeBlock) => readonly Decoration[];
+  /** Decorations for source mode's one block: the Markdown's highlighting, and the extensions' decorations over its text. */
+  readonly decorateSource?: (block: CodeBlock) => readonly Decoration[];
   /** Syntaxes that have a view. */
   readonly views?: ReadonlyMap<string, SyntaxView>;
   /** A token or raw block of an extension syntax, rendered; null shows its source. */
@@ -275,12 +280,14 @@ function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HT
     }
     case 'code': {
       if (ctx.source) {
-        // Source mode: the whole document as text, with no bar, view or decorations.
+        // Source mode: the whole document as text, one element per line, with no bar or view; `decorateSource` highlights it.
+        // Each line sets its own direction: `dir="auto"` on the block would make Chrome resolve it again on every
+        // line inserted, which takes a second for a 100 KB document.
         root = el('div');
-        root.dir = 'auto';
         root.spellcheck = false;
-        const text = el('div', 'mbe-source-text');
-        fillContent(text, block.content, ctx, block, undefined, undefined, false);
+        const text = el('div', SOURCE_TEXT);
+        text.setAttribute(CONTENT_ATTR, '');
+        fillSource(text, block, ctx);
         root.appendChild(text);
         break;
       }
@@ -407,6 +414,135 @@ function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HT
   return root;
 }
 
+// Source mode's text is one block element per line, without the line
+// endings: the text's "\n" is the boundary between two lines. A keystroke
+// then replaces one line's element, and the browser lays out only that line,
+// not the whole document. An empty line holds a filler <br> for its height.
+
+/** Per source text element, the lines rendered in it, to find the ones that changed. */
+const sourceLines = new WeakMap<HTMLElement, readonly SourceLine[]>();
+
+interface SourceLine {
+  readonly text: string;
+  /** The decorations on the line, with offsets in the line's text. */
+  readonly decorations: readonly Decoration[];
+}
+
+const NO_DECORATIONS: readonly Decoration[] = [];
+
+/** The text's lines and the decorations that reach into each, in the order given. */
+function splitSourceLines(text: string, decorations: readonly Decoration[]): SourceLine[] {
+  const sorted = decorations.map((d, index) => ({ d, index })).filter((e) => e.d.to > e.d.from).sort((a, b) => a.d.from - b.d.from);
+  let next = 0;
+  let carry: { d: Decoration; index: number }[] = [];
+  const lines: SourceLine[] = [];
+  for (let start = 0; ; ) {
+    const nl = text.indexOf('\n', start);
+    const end = nl === -1 ? text.length : nl;
+    const here = carry.filter((e) => e.d.to > start);
+    while (next < sorted.length && sorted[next]!.d.from < end) {
+      const e = sorted[next++]!;
+      if (e.d.to > start) here.push(e);
+    }
+    carry = here.filter((e) => e.d.to > end);
+    if (here.length > 1) here.sort((a, b) => a.index - b.index);
+    const local = here.length === 0 ? NO_DECORATIONS : here.map(({ d }) => ({ ...d, from: Math.max(d.from, start) - start, to: Math.min(d.to, end) - start })).filter((d) => d.to > d.from);
+    lines.push({ text: text.slice(start, end), decorations: local });
+    if (nl === -1) return lines;
+    start = nl + 1;
+  }
+}
+
+function sameLine(a: SourceLine, b: SourceLine): boolean {
+  return a.text === b.text && sameDecorations(a.decorations, b.decorations);
+}
+
+function isSourceLine(n: Node): n is HTMLElement {
+  return n instanceof HTMLElement && n.classList.contains(SOURCE_LINE);
+}
+
+/** Source mode's line elements with their text lengths: from the lines as rendered, or from the elements when the browser changed them. */
+function* sourceLineLengths(contentEl: HTMLElement): Generator<[HTMLElement, number]> {
+  const rendered = sourceLines.get(contentEl);
+  const cached = rendered && rendered.length === contentEl.childElementCount ? rendered : null;
+  let i = 0;
+  for (let n = contentEl.firstChild; n; n = n.nextSibling) {
+    if (!isSourceLine(n)) continue;
+    yield [n, cached ? cached[i]!.text.length : n.textContent!.length];
+    i++;
+  }
+}
+
+/** Renders source mode's text into its content element, or brings it up to date. */
+function fillSource(content: HTMLElement, block: CodeBlock, ctx: RenderContext): void {
+  patchSourceText(content, inlineText(block.content), ctx.decorateSource?.(block) ?? [], ctx);
+}
+
+/** A line of source mode's text: plain text split at the decorations' edges, each piece wrapped in its decorations. */
+function renderSourceLine(line: SourceLine, ctx: RenderContext): HTMLElement {
+  const doc = ctx.doc;
+  const el = doc.createElement('div');
+  el.className = SOURCE_LINE;
+  el.dir = 'auto';
+  if (line.text.length === 0) el.appendChild(fill(doc));
+  else if (line.decorations.length === 0) el.appendChild(doc.createTextNode(line.text));
+  else {
+    for (const piece of splitByDecorations([{ text: line.text, marks: [] }], line.decorations)) {
+      el.appendChild(decorate(doc.createTextNode(piece.span.text), piece.decorations, doc));
+    }
+  }
+  return el;
+}
+
+/**
+ * Renders source mode's text into its content element, or brings it up to
+ * date: the lines whose text and decorations are the same keep their element,
+ * and the run of lines between the unchanged ones at the start and the end
+ * is rendered again.
+ */
+function patchSourceText(target: HTMLElement, text: string, decorations: readonly Decoration[], ctx: RenderContext): void {
+  const lines = splitSourceLines(text, decorations);
+  target.classList.toggle('mbe-empty-content', text.length === 0);
+  const old = Array.from(target.childNodes).filter(isSourceLine);
+  let prev = sourceLines.get(target) ?? [];
+  if (old.length !== prev.length) {
+    // The browser changed the structure: start over.
+    prev = [];
+    target.replaceChildren();
+  }
+  let a = 0;
+  while (a < prev.length && a < lines.length && sameLine(prev[a]!, lines[a]!)) a++;
+  let b = 0;
+  while (b < prev.length - a && b < lines.length - a && sameLine(prev[prev.length - 1 - b]!, lines[lines.length - 1 - b]!)) b++;
+  const fragment = ctx.doc.createDocumentFragment();
+  for (let i = a; i < lines.length - b; i++) fragment.appendChild(renderSourceLine(lines[i]!, ctx));
+  const ref = b > 0 ? old[prev.length - b]! : null;
+  for (let i = a; i < prev.length - b; i++) old[i]!.remove();
+  target.insertBefore(fragment, ref);
+  // Nothing but the lines: the browser may have inserted something of its own.
+  if (target.childNodes.length !== lines.length) {
+    for (const n of Array.from(target.childNodes)) if (!isSourceLine(n)) n.remove();
+  }
+  sourceLines.set(target, lines);
+}
+
+/** The text of source mode's content element as the browser has it: the lines joined by line endings. */
+function sourceDomText(contentEl: HTMLElement): string {
+  const parts: string[] = [];
+  let current = '';
+  for (let n = contentEl.firstChild; n; n = n.nextSibling) {
+    if (isSourceLine(n)) {
+      if (n !== contentEl.firstChild) parts.push(current);
+      current = leaves(n).map(leafText).join('');
+    } else {
+      // Something the browser put between the lines joins the line before it.
+      current += n.nodeType === 3 ? (n as Text).data : (n as HTMLElement).hasAttribute(FILL_ATTR) ? '' : (n.textContent ?? '');
+    }
+  }
+  parts.push(current);
+  return parts.join('\n');
+}
+
 /** `decorated` is false for containers that take no decorations (code and raw blocks). */
 function fillContent(
   target: HTMLElement,
@@ -426,7 +562,7 @@ function fillContent(
     return;
   }
   const decorations =
-    block.type === 'code' ? (ctx.source ? [] : (ctx.decorateCode?.(block) ?? [])) : decorated && ctx.decorate ? ctx.decorate(block, inline, cell) : [];
+    block.type === 'code' ? (ctx.decorateCode?.(block) ?? []) : decorated && ctx.decorate ? ctx.decorate(block, inline, cell) : [];
   const only = inline.length === 1 ? inline[0]! : null;
   if (only && decorations.length === 0 && only.marks.length === 0 && !only.link && !only.token && !only.image) {
     // Plain text, the most common content: one text node.
@@ -1002,6 +1138,8 @@ export class BlockRenderer {
   decorate?: RenderContext['decorate'];
   /** Decorations for a code block's code. */
   decorateCode?: RenderContext['decorateCode'];
+  /** Decorations for source mode's block. */
+  decorateSource?: RenderContext['decorateSource'];
   /**
    * Called when views that returned a promise settle, with the blocks that
    * showed them. Those blocks must render again to show the finished view,
@@ -1077,6 +1215,7 @@ export class BlockRenderer {
       referrerPolicy: this.referrerPolicy,
       decorate: this.decorate,
       decorateCode: this.decorateCode,
+      decorateSource: this.decorateSource,
       views: this.views,
       view: this.views && ((syntax, source, kind) => this.renderView(syntax, source, kind)),
       blockView: this.blockViews.length > 0 ? (block) => this.renderBlockView(block) : undefined,
@@ -1288,6 +1427,10 @@ export class BlockRenderer {
       const prev = this.rendered.get(block.id);
       const reveal = this.revealed.get(block.id);
       let el = prev && kept.has(prev.el) ? prev.el : null;
+      // Source mode's block changes on every keystroke: its element is brought up to date, line by line.
+      if (!el && ctx.source && block.type === 'code' && prev?.block.type === 'code' && prev.el.parentNode === this.root && this.patchSource(prev.el, block, ctx)) {
+        el = prev.el;
+      }
       if (!el) {
         el = renderBlock(block, ctx, reveal);
         if (prev && block.type === 'raw') keepDetailsOpen(prev.el, el);
@@ -1456,6 +1599,21 @@ export class BlockRenderer {
   invalidate(id: string): void {
     this.rendered.delete(id);
   }
+
+  /** Brings source mode's rendered block up to date with the block's text and decorations, in place. False when it has no content element. */
+  private patchSource(el: HTMLElement, block: CodeBlock, ctx = this.context()): boolean {
+    const content = contentElement(el);
+    if (!content) return false;
+    fillSource(content, block, ctx);
+    el.classList.toggle('mbe-empty', inlineLength(block.content) === 0);
+    return true;
+  }
+
+  /** Renders source mode's block again with the decorations as they are now, without touching the lines whose text and decorations are the same. */
+  refreshSource(block: CodeBlock): void {
+    const prev = this.rendered.get(block.id);
+    if (prev && prev.el.parentNode === this.root) this.patchSource(prev.el, block);
+  }
 }
 
 /**
@@ -1602,9 +1760,21 @@ export function childIndex(node: Node): number {
 
 /** Plain text of a content element as the browser currently has it, with atoms as one character. */
 export function domText(contentEl: HTMLElement): string {
+  if (contentEl.classList.contains(SOURCE_TEXT)) return sourceDomText(contentEl);
   return leaves(contentEl)
     .map(leafText)
     .join('');
+}
+
+/** The text before `child` of source mode's content element (or before its end): each line before it with its line ending. */
+function lengthBefore(contentEl: HTMLElement, child: Node | null): number {
+  let acc = 0;
+  for (const [line, length] of sourceLineLengths(contentEl)) {
+    if (line === child) return acc;
+    acc += length + 1;
+  }
+  // Before the end, the last line has no line ending after it.
+  return child === null && acc > 0 ? acc - 1 : acc;
 }
 
 function offsetIn(contentEl: HTMLElement, node: Node, offset: number): number {
@@ -1612,6 +1782,12 @@ function offsetIn(contentEl: HTMLElement, node: Node, offset: number): number {
     // A point on a marker or other chrome: before or after the content.
     const before = node.compareDocumentPosition(contentEl) & Node.DOCUMENT_POSITION_FOLLOWING;
     return before ? 0 : leaves(contentEl).reduce((n, l) => n + leafLength(l), 0);
+  }
+  // Source mode's text is one span per line: the lines before the point are counted by length, not walked.
+  if (contentEl.classList.contains(SOURCE_TEXT)) {
+    if (node === contentEl) return lengthBefore(contentEl, contentEl.childNodes[offset] ?? null);
+    const line = (node instanceof Element ? node : node.parentElement)?.closest<HTMLElement>(`.${SOURCE_LINE}`);
+    if (line?.parentNode === contentEl) return lengthBefore(contentEl, line) + offsetIn(line, node, offset);
   }
   const doc = contentEl.ownerDocument;
   const point = doc.createRange();
@@ -1664,7 +1840,7 @@ export function domToPosition(root: HTMLElement, node: Node, offset: number): Po
 /** The atom (an image or a rendered token) that starts at `pos`, or null. */
 export function atomAt(blockEl: HTMLElement, pos: Position): HTMLElement | null {
   const content = contentElement(blockEl, pos.cell);
-  if (!content) return null;
+  if (!content || content.classList.contains(SOURCE_TEXT)) return null;
   let acc = 0;
   for (const leaf of leaves(content)) {
     if (acc === pos.offset && leaf.nodeType !== 3) return leaf as HTMLElement;
@@ -1680,14 +1856,31 @@ export function positionToDom(blockEl: HTMLElement, pos: Position): { node: Node
     // A divider or rendered block: select around it.
     return { node: blockEl.parentNode!, offset: childIndex(blockEl) };
   }
+  if (content.classList.contains(SOURCE_TEXT)) {
+    // One element per line: find the line by length, then the point in it. An offset at a line's end stays on that line.
+    let acc = 0;
+    let last: [HTMLElement, number] | null = null;
+    for (const entry of sourceLineLengths(content)) {
+      const [line, length] = entry;
+      if (pos.offset <= acc + length) return positionIn(line, pos.offset - acc);
+      acc += length + 1;
+      last = entry;
+    }
+    return last ? positionIn(last[0], last[1]) : { node: content, offset: 0 };
+  }
+  return positionIn(content, pos.offset);
+}
+
+/** The DOM point for a text offset within a content element (or one line of source mode's text). */
+function positionIn(content: HTMLElement, offset: number): { node: Node; offset: number } {
   let acc = 0;
   const all = leaves(content);
   for (const leaf of all) {
     const len = leafLength(leaf);
     if (leaf.nodeType === 3) {
       const text = leaf as Text;
-      if (acc + len >= pos.offset) {
-        const local = pos.offset - acc;
+      if (acc + len >= offset) {
+        const local = offset - acc;
         // After a trailing line break, put the caret before the filler <br> so it shows on the empty last line.
         if (local === len && leaf === all[all.length - 1] && text.data.endsWith('\n')) {
           const br = content.querySelector(`[${FILL_ATTR}]`);
@@ -1695,9 +1888,9 @@ export function positionToDom(blockEl: HTMLElement, pos: Position): { node: Node
         }
         return { node: text, offset: local };
       }
-    } else if (pos.offset < acc + len) {
+    } else if (offset < acc + len) {
       // Before an atom, or after a rendered token when the offset falls inside its source.
-      return { node: leaf.parentNode!, offset: childIndex(leaf) + (acc === pos.offset ? 0 : 1) };
+      return { node: leaf.parentNode!, offset: childIndex(leaf) + (acc === offset ? 0 : 1) };
     }
     acc += len;
   }

@@ -264,7 +264,8 @@ function lowerBlock(node: BlockNode, out: Block[], o: MarkdownOptions, ctx?: Low
   }
 }
 
-function firstWord(info: string): string {
+/** The language of a fence: the first word of its info string. */
+export function firstWord(info: string): string {
   return info.trim().split(/\s+/)[0] ?? '';
 }
 

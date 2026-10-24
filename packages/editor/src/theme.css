@@ -17,6 +17,8 @@
   --mbe-font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans',
     sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
   --mbe-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  /* Source mode's text: the body font, as Obsidian shows source; var(--mbe-mono) for an all-monospace view. */
+  --mbe-source-font: var(--mbe-font);
   --mbe-font-size: 16px;
   --mbe-line-height: 24px;
   /* The room a line has around its text. Headings, code and tables size
@@ -213,10 +215,17 @@
 }
 :is(.mbe-root, .mbe-flow) > .mbe-code pre { padding: 2px 12px 10px; }
 :is(.mbe-root, .mbe-flow) > .mbe-code pre code { background: none; padding: 0; border-radius: 0; font: inherit; }
-/* Source mode: the whole document as Markdown text, in the mono font at the
-   body's size and line height, so markers and indentation line up and a
-   switch keeps the text's rhythm. */
-.mbe-root > .mbe-source { font-family: var(--mbe-mono); }
+/* Source mode: the whole document as Markdown text, at the body's size and
+   line height, so a switch keeps the text's rhythm. Its highlighting changes
+   weight, slant and color, never size: markers dim, strong text is bold,
+   emphasis italic, headings heavier, code is mono, URLs take the link color. */
+.mbe-root > .mbe-source { font-family: var(--mbe-source-font); }
+.mbe-root > .mbe-source :is(.mbe-src-marker, .mbe-src-html, .mbe-src-token, .mbe-src-escape, .mbe-src-lang) { color: var(--mbe-muted); }
+.mbe-root > .mbe-source :is(.mbe-src-heading, .mbe-src-strong) { font-weight: 600; }
+.mbe-root > .mbe-source .mbe-src-em { font-style: italic; }
+.mbe-root > .mbe-source .mbe-src-strike { text-decoration: line-through; }
+.mbe-root > .mbe-source :is(.mbe-src-code, .mbe-src-lang) { font-family: var(--mbe-mono); }
+.mbe-root > .mbe-source .mbe-src-url { color: var(--mbe-link); }
 
 /* Raw blocks: Markdown kept as source (HTML, structure the editor cannot hold, extension syntax) */
 :is(.mbe-root, .mbe-flow) > pre.mbe-raw { color: var(--mbe-muted); }

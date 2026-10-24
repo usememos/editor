@@ -184,6 +184,13 @@ export class SegmentBuilder {
   }
 }
 
+/** The source ranges of the content's `[from, to)`, one per line it spans, without line endings or the lines' prefixes. */
+export function sourcePieces(content: ContentSource, table: LineTable, from: number, to: number): Range[] {
+  const b = new SegmentBuilder(content, table);
+  b.linear(0, from, to);
+  return b.segments.filter((s) => s.linear).map((s) => ({ from: s.srcFrom, to: s.srcTo }));
+}
+
 /** The last segment whose `key` is at or before `value`, or the first. */
 function segmentAt(segments: readonly Segment[], key: 'from' | 'srcFrom', value: number): number {
   let lo = 0;

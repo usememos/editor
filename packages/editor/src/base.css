@@ -243,6 +243,8 @@
 :is(.mbe-root, .mbe-flow) > pre.mbe-raw { white-space: pre-wrap; tab-size: 2; }
 /* Source mode: the document as plain text; theme.css sets its mono font. */
 .mbe-root > .mbe-source { white-space: pre-wrap; tab-size: 4; overflow-wrap: anywhere; }
+/* One block per line, so a keystroke lays out only its line. */
+.mbe-root > .mbe-source .mbe-source-line { display: block; }
 :is(.mbe-root, .mbe-flow) > .mbe-code pre { margin: 0; }
 :is(.mbe-root, .mbe-flow) > .mbe-code pre code { display: block; }
 

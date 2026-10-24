@@ -844,9 +844,9 @@ class BlockParser {
           },
         ];
       case 'thematicBreak':
-        return [{ type: 'thematicBreak' }];
+        return [{ type: 'thematicBreak', lines: linesOf(node) }];
       case 'codeBlock':
-        return [{ type: 'codeBlock', fenced: node.fenced, info: node.info, value: node.content, source: contentSource(node) }];
+        return [{ type: 'codeBlock', fenced: node.fenced, info: node.info, value: node.content, source: contentSource(node), lines: linesOf(node) }];
       case 'htmlBlock':
         return [{ type: 'htmlBlock', value: node.content, source: contentSource(node) }];
       case 'rawBlock':
@@ -872,6 +872,7 @@ class BlockParser {
             type: 'table',
             align: node.align,
             rows: node.rows.map((row) => row.map((cell) => parseInlines(cell, this.refs, this.options.inline, this.options.autolinks))),
+            lines: linesOf(node),
           },
         ];
       default:
@@ -897,7 +898,7 @@ class BlockParser {
     const children = item.children
       .filter((c) => !(task && c === first && !reNonSpace.test(c.content)))
       .flatMap((c) => this.toAst(c));
-    return { type: 'listItem', task, checked, children };
+    return { type: 'listItem', task, checked, children, lines: linesOf(item) };
   }
 }
 
@@ -922,6 +923,10 @@ function leadingTrim(s: string): number {
 /** Where a leaf's content came from, for text that starts `lead` characters into it. */
 function contentSource(node: BNode, lead = 0): ContentSource {
   return { lines: node.lines, start: node.contentStart + lead };
+}
+
+function linesOf(node: BNode): SourceLines {
+  return { start: node.startLine, end: Math.max(node.startLine, node.endLine) };
 }
 
 function isTrimmable(code: number): boolean {

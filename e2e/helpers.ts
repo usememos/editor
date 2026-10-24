@@ -80,8 +80,9 @@ export const viewProblems = (page: Page) =>
     const root = document.getElementById('editor')!;
     const problems: string[] = [];
     const text = (c: any[]) => c.map((s: any) => s.text).join('');
-    // The same walk as domText in view/dom.ts: text nodes, atoms by their source, fills skipped.
+    // The same walk as domText in view/dom.ts: text nodes, atoms by their source, fills skipped; source mode's lines joined by line endings.
     const domText = (el: Element): string => {
+      if (el.classList.contains('mbe-source-text')) return Array.from(el.children, domText).join('\n');
       let out = '';
       for (const child of Array.from(el.childNodes)) {
         if (child.nodeType === 3) out += (child as Text).data;

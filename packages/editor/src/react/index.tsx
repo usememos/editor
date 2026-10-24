@@ -12,6 +12,7 @@ type EditorProps = Pick<
   | 'placeholder'
   | 'mode'
   | 'smartLists'
+  | 'sourceHighlighting'
   | 'editable'
   | 'taskToggle'
   | 'autofocus'
