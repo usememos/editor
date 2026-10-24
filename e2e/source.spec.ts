@@ -412,7 +412,10 @@ test('paste writes HTML as Markdown, plain text as written (and in a fence), and
   await select(page, 1);
   await paste(page, { 'text/plain': '**x**\r\n- y' });
   expect(await md(page)).toBe('a**x**\n- yb\n');
-  await page.keyboard.press('ControlOrMeta+Shift+v');
+  // The keystroke as an event, as clipboard.spec does: the real key would also trigger the browser's own paste.
+  await page.evaluate(() =>
+    document.getElementById('editor')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'V', ctrlKey: true, metaKey: true, shiftKey: true, bubbles: true })),
+  );
   await paste(page, { 'text/plain': 'plain', 'text/html': '<b>bold</b>' });
   expect(await md(page)).toBe('a**x**\n- yplainb\n');
   // Inside a fence the text stays as written.
