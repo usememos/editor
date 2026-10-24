@@ -35,6 +35,9 @@ const CASES: Record<string, (bytes: number) => string> = {
   // cmark and commonmark.js
   'nested strong emphasis': (b) => half('*a **a ', b) + 'b' + half(' a** a*', b),
   'emphasis closers with no openers': (b) => times('a_ ', b),
+  // Source ranges: e-mail literals split a text node whose pieces the escapes and entities around them break up.
+  'emails between escapes': (b) => times('a@b.co \\* ', b),
+  'emails between entities': (b) => times('a@b.co &amp; ', b),
   'emphasis openers with no closers': (b) => times('_a ', b),
   'openers and closers, multiple of 3': (b) => 'a**b' + times('c* ', b),
   'link closers with no openers': (b) => times('a]', b),

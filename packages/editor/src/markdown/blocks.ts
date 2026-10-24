@@ -11,7 +11,7 @@
 // type defines how a line continues it (`continueBlock`), what happens when it
 // closes (`finalize`), and the list of block starts is tried in order.
 
-import type { BlockNode, ListItemNode, Root, SourceLines, TableAlign } from './ast';
+import type { BlockNode, ContentLine, ContentSource, ListItemNode, Root, SourceLines, TableAlign } from './ast';
 import { CLOSETAG, OPENTAG, type RefMap, extractReferences, parseInlines, unescapeString } from './inline';
 import { type BlockSyntaxMatcher, DEFAULT_MARKDOWN, type MarkdownOptions, type ResolvedMarkdown, resolveMarkdown } from './options';
 
@@ -113,6 +113,10 @@ class BNode {
   endLine = 0;
   /** Raw text content of leaf blocks, one "\n"-terminated line at a time. */
   content = '';
+  /** Where each line of `content` came from (see `ContentLine`). */
+  lines: ContentLine[] = [];
+  /** How much of the built content was cut from its start: reference definitions, a task marker, a fence's info line. */
+  contentStart = 0;
 
   // Heading
   level = 0;
@@ -244,11 +248,13 @@ class BlockParser {
     return { type: 'root', children, lines: sourceLines, definitions: this.definitions };
   }
 
-  /** Link reference definitions at the start of a paragraph's content. Keeps their source. */
-  private extractReferences(content: string): string {
+  /** Link reference definitions at the start of a paragraph's content are taken out of it. Keeps their source. */
+  private extractReferences(block: BNode): void {
+    const content = block.content;
     const rest = extractReferences(content, this.refs);
     if (rest.length < content.length) this.definitions.push(content.slice(0, content.length - rest.length).replace(/\n$/, ''));
-    return rest;
+    block.contentStart += content.length - rest.length;
+    block.content = rest;
   }
 
   // -- Line position helpers ------------------------------------------------
@@ -316,11 +322,14 @@ class BlockParser {
   // -- Tree helpers ---------------------------------------------------------
 
   private addLine(): void {
+    let pad = 0;
     if (this.partiallyConsumedTab) {
       // Skip the tab and add the columns it still covers as spaces.
       this.offset += 1;
-      this.tip.content += ' '.repeat(4 - (this.column % 4));
+      pad = 4 - (this.column % 4);
+      this.tip.content += ' '.repeat(pad);
     }
+    this.tip.lines.push({ at: this.tip.content.length - pad, line: this.lineNumber, offset: this.offset, pad });
     this.tip.content += this.line.slice(this.offset) + '\n';
   }
 
@@ -512,7 +521,7 @@ class BlockParser {
 
     switch (block.type) {
       case 'paragraph':
-        block.content = this.extractReferences(block.content);
+        this.extractReferences(block);
         if (!reNonSpace.test(block.content)) block.remove();
         break;
       case 'codeBlock':
@@ -521,6 +530,7 @@ class BlockParser {
           const nl = block.content.indexOf('\n');
           block.info = unescapeString(block.content.slice(0, nl).trim());
           block.content = block.content.slice(nl + 1);
+          block.contentStart += nl + 1;
         } else {
           // Trailing blank lines are not part of an indented code block.
           const lines = block.content.split('\n');
@@ -594,6 +604,7 @@ class BlockParser {
     this.closeUnmatchedBlocks();
     const heading = this.addChild('heading');
     heading.level = m[0].trim().length;
+    heading.lines.push({ at: 0, line: this.lineNumber, offset: this.offset, pad: 0 });
     // Remove the optional closing sequence.
     heading.content = this.line
       .slice(this.offset)
@@ -665,12 +676,14 @@ class BlockParser {
     if (!m) return Start.None;
     this.closeUnmatchedBlocks();
     // Link reference definitions are not heading content.
-    container.content = this.extractReferences(container.content);
+    this.extractReferences(container);
     if (container.content.length === 0) return Start.None;
     const heading = new BNode('heading', container.startLine);
     heading.level = m[0][0] === '=' ? 1 : 2;
     heading.setext = true;
     heading.content = container.content;
+    heading.lines = container.lines;
+    heading.contentStart = container.contentStart;
     const parent = container.parent!;
     parent.children[parent.children.lastIndexOf(container)] = heading;
     heading.parent = parent;
@@ -694,7 +707,7 @@ class BlockParser {
     const align = parseDelimiterRow(rest);
     if (!align) return Start.None;
 
-    container.content = this.extractReferences(container.content);
+    this.extractReferences(container);
     const lines = container.content.split('\n');
     lines.pop(); // the content ends with "\n"
     const headerLine = lines.pop();
@@ -813,7 +826,13 @@ class BlockParser {
   private toAst(node: BNode): BlockNode[] {
     switch (node.type) {
       case 'paragraph':
-        return [{ type: 'paragraph', children: parseInlines(trimContent(node.content), this.refs, this.options.inline, this.options.autolinks) }];
+        return [
+          {
+            type: 'paragraph',
+            children: parseInlines(trimContent(node.content), this.refs, this.options.inline, this.options.autolinks),
+            source: contentSource(node, leadingTrim(node.content)),
+          },
+        ];
       case 'heading':
         return [
           {
@@ -821,16 +840,17 @@ class BlockParser {
             level: node.level as 1 | 2 | 3 | 4 | 5 | 6,
             setext: node.setext,
             children: parseInlines(trimContent(node.content), this.refs, this.options.inline, this.options.autolinks),
+            source: contentSource(node, leadingTrim(node.content)),
           },
         ];
       case 'thematicBreak':
         return [{ type: 'thematicBreak' }];
       case 'codeBlock':
-        return [{ type: 'codeBlock', fenced: node.fenced, info: node.info, value: node.content }];
+        return [{ type: 'codeBlock', fenced: node.fenced, info: node.info, value: node.content, source: contentSource(node) }];
       case 'htmlBlock':
-        return [{ type: 'htmlBlock', value: node.content }];
+        return [{ type: 'htmlBlock', value: node.content, source: contentSource(node) }];
       case 'rawBlock':
-        return [{ type: 'raw', name: node.syntax, value: node.content }];
+        return [{ type: 'raw', name: node.syntax, value: node.content, source: contentSource(node) }];
       case 'blockQuote':
         return [{ type: 'blockQuote', children: node.children.flatMap((c) => this.toAst(c)) }];
       case 'list': {
@@ -871,6 +891,7 @@ class BlockParser {
         task = true;
         checked = m[1] === 'x' || m[1] === 'X';
         first.content = first.content.slice(m[0].length);
+        first.contentStart += m[0].length;
       }
     }
     const children = item.children
@@ -885,11 +906,22 @@ class BlockParser {
 
 /** A paragraph's raw content without leading and trailing whitespace. */
 function trimContent(s: string): string {
-  let start = 0;
+  const start = leadingTrim(s);
   let end = s.length;
-  while (start < end && isTrimmable(s.charCodeAt(start))) start++;
   while (end > start && isTrimmable(s.charCodeAt(end - 1))) end--;
   return start === 0 && end === s.length ? s : s.slice(start, end);
+}
+
+/** How many characters `trimContent` takes off the start. */
+function leadingTrim(s: string): number {
+  let start = 0;
+  while (start < s.length && isTrimmable(s.charCodeAt(start))) start++;
+  return start;
+}
+
+/** Where a leaf's content came from, for text that starts `lead` characters into it. */
+function contentSource(node: BNode, lead = 0): ContentSource {
+  return { lines: node.lines, start: node.contentStart + lead };
 }
 
 function isTrimmable(code: number): boolean {

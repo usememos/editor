@@ -6,6 +6,8 @@
 // document and its text.
 
 import { type MarkdownSource } from './markdown/source';
+import type { Range } from './markdown/ast';
+import { type Segment, fromSource, sourceSpan, toSource } from './markdown/sourceMap';
 import {
   type Block,
   type CodeBlock,
@@ -508,11 +510,15 @@ interface Placed {
   /** Where the block's source ends. */
   readonly end: number;
   readonly text: string | null;
+  /** The block's source map and the source range its text covers, when loading made one (see `markdown/sourceMap.ts`). */
+  readonly segments: readonly Segment[] | null;
+  readonly span: Range | null;
 }
 
 /**
- * Where each loaded block sits in its source: blocks of one group (the items
- * of a list) are found in order, each from the end of the one before.
+ * Where each loaded block sits in its source. A block with a source map
+ * starts where its first text does; other blocks of a group (the items of a
+ * list) are found in order, each from the end of the one before.
  */
 function placeBlocks(loaded: { doc: Doc; source: MarkdownSource }): Placed[] {
   const src = loaded.source.text;
@@ -521,8 +527,10 @@ function placeBlocks(loaded: { doc: Doc; source: MarkdownSource }): Placed[] {
   for (const block of loaded.doc.blocks) {
     const group = loaded.source.groupOf.get(block);
     const text = blockText(block);
+    const span = sourceSpan(loaded.source.mapOf.get(block));
+    const segments = span ? loaded.source.mapOf.get(block)! : null;
     if (!group) {
-      placed.push({ start: lastEnd, end: lastEnd, text });
+      placed.push({ start: lastEnd, end: lastEnd, text, segments, span });
       continue;
     }
     const first = group.blocks[0] === block;
@@ -533,23 +541,28 @@ function placeBlocks(loaded: { doc: Doc; source: MarkdownSource }): Placed[] {
       if (nl !== -1 && nl < group.to) cursor = nl + 1;
     }
     let start = cursor;
-    if (text) {
+    let textEnd = cursor;
+    if (span) {
+      start = span.from;
+      textEnd = span.to;
+    } else if (text) {
       const exact = src.indexOf(text, cursor);
       const head = src.indexOf(text.slice(0, Math.min(text.length, 1)), cursor);
       if (exact !== -1 && exact <= group.to) start = exact;
       else if (head !== -1 && head <= group.to) start = head;
+      textEnd = start + text.length;
     } else if (block.type !== 'table') {
       // An empty item: after its marker.
       const lineEnd = src.indexOf('\n', cursor);
-      start = Math.min(lineEnd === -1 ? group.to : lineEnd, group.to);
+      start = textEnd = Math.min(lineEnd === -1 ? group.to : lineEnd, group.to);
     }
     const last = group.blocks[group.blocks.length - 1] === block;
     let end = group.to;
     if (!last) {
-      const nl = src.indexOf('\n', start + (text?.length ?? 0));
+      const nl = src.indexOf('\n', textEnd);
       end = nl === -1 || nl > group.to ? group.to : nl;
     }
-    placed.push({ start, end, text });
+    placed.push({ start, end, text, segments, span });
     lastEnd = end;
   }
   return placed;
@@ -557,9 +570,11 @@ function placeBlocks(loaded: { doc: Doc; source: MarkdownSource }): Placed[] {
 
 /**
  * The offset in `loaded`'s text for a position in a rich document whose
- * blocks match `loaded`'s by index. The caret keeps its column when the
- * block's text before it appears verbatim in the source; otherwise it goes
- * to the start of the block's text.
+ * blocks match `loaded`'s by index. With the block's source map, the caret
+ * keeps its place in the text, past any syntax before it (an offset on
+ * syntax goes to the text after it). Without one, a table or a section, it
+ * keeps its column when the block's text before it appears verbatim in the
+ * source; otherwise it goes to the start of the block's text.
  */
 export function toSourceOffset(doc: Doc, pos: Position, loaded: { doc: Doc; source: MarkdownSource }, placed = placeBlocks(loaded)): number {
   const index = doc.blocks.findIndex((b) => b.id === pos.blockId);
@@ -569,6 +584,7 @@ export function toSourceOffset(doc: Doc, pos: Position, loaded: { doc: Doc; sour
   if (!block || pos.cell) return at.start;
   const text = blockText(block);
   if (!text) return at.start;
+  if (at.segments) return toSource(at.segments, clamp(pos.offset, text));
   const before = text.slice(0, pos.offset);
   const src = loaded.source.text;
   if (src.startsWith(before, at.start)) return at.start + before.length;
@@ -576,23 +592,33 @@ export function toSourceOffset(doc: Doc, pos: Position, loaded: { doc: Doc; sour
   return found !== -1 && found + before.length <= at.end ? found + before.length : at.start;
 }
 
-/** The position in `loaded`'s document for an offset in its text: the block whose source holds it, at the same column when it can be. */
+/**
+ * The position in `loaded`'s document for an offset in its text: the block
+ * whose source holds it, at the same place in its text. An offset on syntax
+ * goes to the text after it, and one inside an image or an escape before it.
+ */
 export function fromSourceOffset(offset: number, loaded: { doc: Doc; source: MarkdownSource }, placed = placeBlocks(loaded)): Position {
   const blocks = loaded.doc.blocks;
-  let index = 0;
-  for (let i = 0; i < placed.length; i++) {
-    const p = placed[i]!;
-    const group = loaded.source.groupOf.get(blocks[i]!);
-    const from = group && group.blocks[0] === blocks[i] ? group.from : p.start;
-    if (from <= offset) index = i;
-    else break;
+  const src = loaded.source.text;
+  // The block whose text holds the offset; otherwise the last block that starts at or before it.
+  let index = placed.findIndex((p) => p.span !== null && p.span.from <= offset && offset <= p.span.to);
+  if (index === -1) {
+    index = 0;
+    for (let i = 0; i < placed.length; i++) {
+      const p = placed[i]!;
+      const group = loaded.source.groupOf.get(blocks[i]!);
+      // A group's first block owns the group's start; a later one owns its line from its start.
+      const from = group && group.blocks[0] === blocks[i] ? group.from : p.segments ? src.lastIndexOf('\n', p.start - 1) + 1 : p.start;
+      if (from <= offset) index = i;
+      else break;
+    }
   }
   const block = blocks[index]!;
   const p = placed[index];
   const text = blockText(block);
   if (block.type === 'table') return { blockId: block.id, offset: 0, cell: { row: 0, col: 0 } };
   if (!p || !text) return { blockId: block.id, offset: 0 };
-  const src = loaded.source.text;
+  if (p.segments) return { blockId: block.id, offset: clamp(fromSource(p.segments, offset), text) };
   if (offset <= p.start) return { blockId: block.id, offset: 0 };
   const before = src.slice(p.start, offset);
   return { blockId: block.id, offset: text.startsWith(before) ? before.length : 0 };

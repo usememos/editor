@@ -12,28 +12,80 @@
 
 import type { Align } from '../model';
 
+/** A range of the parsed text: `from` inclusive, `to` exclusive. */
+export interface Range {
+  readonly from: number;
+  readonly to: number;
+}
+
+/**
+ * A piece of markup of an inline node, in the coordinates of its `pos`:
+ * `open` and `close` are delimiter runs, brackets, backticks or the `<` and
+ * `>` of an autolink; `tail` is a link's `(destination "title")` or
+ * `[label]`, with `dest` and `title` the destination and title text in it,
+ * or a bare URL's text.
+ */
+export interface SyntaxRange extends Range {
+  readonly kind: 'open' | 'close' | 'tail' | 'dest' | 'title';
+}
+
+/** A run of a text node's value that is a verbatim slice of the parsed text: `value.slice(at, pieceEnd(piece))`. */
+export interface TextPiece extends Range {
+  readonly at: number;
+}
+
+/** Where a piece ends in its text node's value. */
+export function pieceEnd(p: TextPiece): number {
+  return p.at + p.to - p.from;
+}
+
+/**
+ * Where an inline node sits in the text it was parsed from (a paragraph's
+ * content as the block parser built it; see `ContentSource`). Nodes made
+ * elsewhere than by the parser have no `pos`.
+ */
+export interface Positioned {
+  readonly pos?: Range;
+  readonly syntax?: readonly SyntaxRange[];
+}
+
 export type InlineNode =
   | TextNode
-  | { readonly type: 'softBreak' }
-  | { readonly type: 'hardBreak' }
-  | { readonly type: 'code'; readonly value: string }
+  | ({ readonly type: 'softBreak' } & Positioned)
+  | ({ readonly type: 'hardBreak' } & Positioned)
+  | CodeNode
   /** Raw inline HTML, verbatim. */
-  | { readonly type: 'html'; readonly value: string }
+  | ({ readonly type: 'html'; readonly value: string } & Positioned)
   /** A token of an inline syntax extension (`name`), verbatim source. */
-  | { readonly type: 'token'; readonly name: string; readonly value: string }
-  | { readonly type: 'emphasis'; readonly children: InlineNode[] }
-  | { readonly type: 'strong'; readonly children: InlineNode[] }
+  | ({ readonly type: 'token'; readonly name: string; readonly value: string } & Positioned)
+  | ({ readonly type: 'emphasis'; readonly children: InlineNode[] } & Positioned)
+  | ({ readonly type: 'strong'; readonly children: InlineNode[] } & Positioned)
   /** GFM strikethrough (`~text~` or `~~text~~`). */
-  | { readonly type: 'strike'; readonly children: InlineNode[] }
+  | ({ readonly type: 'strike'; readonly children: InlineNode[] } & Positioned)
   | LinkNode
   | ImageNode;
 
 export interface TextNode {
   readonly type: 'text';
   readonly value: string;
+  readonly pos?: Range;
+  /**
+   * The verbatim runs of `value` when it is not one verbatim slice of `pos`:
+   * an escape or entity stands for text that is not written as such, and the
+   * gaps between the pieces are those. Empty when nothing in it is verbatim.
+   * Absent when all of it is.
+   */
+  readonly pieces?: readonly TextPiece[];
 }
 
-export interface LinkNode {
+export interface CodeNode extends Positioned {
+  readonly type: 'code';
+  readonly value: string;
+  /** Where `value` is in the text: between the backtick runs, less a stripped space on each side. */
+  readonly content?: Range;
+}
+
+export interface LinkNode extends Positioned {
   readonly type: 'link';
   /** Decoded destination, not yet percent-encoded. */
   readonly destination: string;
@@ -41,7 +93,7 @@ export interface LinkNode {
   readonly children: InlineNode[];
 }
 
-export interface ImageNode {
+export interface ImageNode extends Positioned {
   readonly type: 'image';
   readonly destination: string;
   readonly title: string;
@@ -121,9 +173,35 @@ export type BlockNode =
   | RawNode
   | TableNode;
 
+/**
+ * One line of a leaf block's content as the block parser built it: the line's
+ * text after the block's prefixes (quote markers, list indentation), followed
+ * by "\n". `at` is where it starts in that content, `line` its 1-based source
+ * line, `offset` where its text starts on that line, and `pad` the spaces that
+ * stand in for the rest of a tab the prefix consumed only partly.
+ */
+export interface ContentLine {
+  readonly at: number;
+  readonly line: number;
+  readonly offset: number;
+  readonly pad: number;
+}
+
+/**
+ * Where a leaf block's content came from, so its text maps back to the
+ * source. The inline nodes' `pos` and a code block's text count from `start`
+ * in the built content: link reference definitions, a task marker, a fence's
+ * info line or trimmed whitespace come before it.
+ */
+export interface ContentSource {
+  readonly lines: readonly ContentLine[];
+  readonly start: number;
+}
+
 export interface ParagraphNode {
   readonly type: 'paragraph';
   readonly children: InlineNode[];
+  readonly source?: ContentSource;
 }
 
 export interface HeadingNode {
@@ -132,6 +210,7 @@ export interface HeadingNode {
   /** True for a setext heading (underlined with `=` or `-`). */
   readonly setext: boolean;
   readonly children: InlineNode[];
+  readonly source?: ContentSource;
 }
 
 export interface BlockQuoteNode {
@@ -166,12 +245,14 @@ export interface CodeBlockNode {
   readonly info: string;
   /** Code text. Ends with "\n" unless empty. */
   readonly value: string;
+  readonly source?: ContentSource;
 }
 
 export interface HtmlBlockNode {
   readonly type: 'htmlBlock';
   /** Raw HTML, verbatim, without the final line ending. */
   readonly value: string;
+  readonly source?: ContentSource;
 }
 
 /** A block of a block syntax extension (`name`): its source lines, verbatim, without the final line ending. */
@@ -179,6 +260,7 @@ export interface RawNode {
   readonly type: 'raw';
   readonly name: string;
   readonly value: string;
+  readonly source?: ContentSource;
 }
 
 export type TableAlign = Align;

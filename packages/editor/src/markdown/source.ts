@@ -9,10 +9,11 @@
 // by the normalizing serializer. With no edits, saving returns the input
 // byte for byte.
 
-import { type Block, type Doc, htmlBlock, quoteKind, sameQuote } from '../model';
+import { type Block, type Doc, htmlBlock, quoteKind, rawBlock, sameQuote } from '../model';
 import { parseAst } from './blocks';
 import { detailsSections, htmlSectionEnd } from './htmlSection';
-import { lowerTopLevel } from './lower';
+import { lowerIfFits } from './lower';
+import { type Segment, identitySegment, lineTable } from './sourceMap';
 import { DEFAULT_MARKDOWN, type MarkdownOptions } from './options';
 import { isEmptyParagraph, serializeBlocks } from './serialize';
 
@@ -38,23 +39,23 @@ export interface MarkdownSource {
   readonly groupOf: WeakMap<Block, SourceGroup>;
   /** Source of every link reference definition, so a kept block's reference links keep working. */
   readonly definitions: readonly string[];
+  /** Where each loaded block's text is in `text` (see `sourceMap.ts`). Tables and blocks with no text have none. */
+  readonly mapOf: WeakMap<Block, readonly Segment[]>;
 }
 
-/** Parses Markdown and remembers its source, for `serializeMarkdown(doc, { source })`. */
-export function loadMarkdown(text: string, options?: MarkdownOptions): { doc: Doc; source: MarkdownSource } {
+/**
+ * Parses Markdown and remembers its source, for `serializeMarkdown(doc, { source })`.
+ * `maps` false skips the source maps, for a caller that keeps only the document.
+ */
+export function loadMarkdown(text: string, options?: MarkdownOptions, maps = true): { doc: Doc; source: MarkdownSource } {
   const root = parseAst(text, options);
-  const lineStarts = [0];
-  const lineEnds: number[] = [];
-  const re = /\r\n|\n|\r/g;
-  for (let m = re.exec(text); m; m = re.exec(text)) {
-    lineEnds.push(m.index);
-    lineStarts.push(m.index + m[0].length);
-  }
-  lineEnds.push(text.length);
+  const { starts: lineStarts, ends: lineEnds } = lineTable(text);
 
   const blocks: Block[] = [];
   const groups: SourceGroup[] = [];
   const groupOf = new WeakMap<Block, SourceGroup>();
+  const mapOf = new WeakMap<Block, readonly Segment[]>();
+  const ctx = maps ? { lines: { starts: lineStarts, ends: lineEnds }, maps: mapOf } : undefined;
   let lastEnd = 0;
   const sections = (options ?? DEFAULT_MARKDOWN).details === false ? null : detailsSections(root.children);
   for (let i = 0; i < root.children.length; i++) {
@@ -67,7 +68,16 @@ export function loadMarkdown(text: string, options?: MarkdownOptions): { doc: Do
     const lines = root.lines[last]!;
     const to = lineEnds[Math.max(lines.start, lines.end) - 1] ?? text.length;
     const source = text.slice(from, to);
-    const lowered = section ? [section] : last > i ? [htmlBlock(source)] : lowerTopLevel(node, options ?? DEFAULT_MARKDOWN, source, blocks[blocks.length - 1]);
+    // A block holding the group's source as it is maps to it offset for offset.
+    const verbatim = (block: Block) => {
+      if (ctx) mapOf.set(block, [identitySegment(0, source.length, from)]);
+      return block;
+    };
+    const lowered = section
+      ? [section]
+      : last > i
+        ? [verbatim(htmlBlock(source))]
+        : (lowerIfFits(node, options ?? DEFAULT_MARKDOWN, blocks[blocks.length - 1], ctx) ?? [verbatim(rawBlock('markdown', source))]);
     i = last;
     blocks.push(...lowered);
     // Line ranges never overlap; if they ever did, the block is just not kept.
@@ -78,7 +88,7 @@ export function loadMarkdown(text: string, options?: MarkdownOptions): { doc: Do
     groups.push(group);
     for (const block of lowered) groupOf.set(block, group);
   }
-  return { doc: { blocks }, source: { text, groups, groupOf, definitions: root.definitions } };
+  return { doc: { blocks }, source: { text, groups, groupOf, definitions: root.definitions, mapOf } };
 }
 
 /** True if a block's source would swallow a paragraph written after it. */
@@ -262,7 +272,7 @@ function tickedGroup(
     return checked === block.checked ? match : head + (block.checked ? 'x' : ' ');
   });
   if (n !== tasks.length) return null;
-  const reread = loadMarkdown(patched, options).doc.blocks;
+  const reread = loadMarkdown(patched, options, false).doc.blocks;
   if (serializeBlocks(reread, options) !== serializeBlocks(current, options)) return null;
   return { group: loaded, blocks: current, text: patched };
 }

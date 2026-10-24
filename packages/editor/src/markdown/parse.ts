@@ -9,5 +9,5 @@ import { loadMarkdown } from './source';
 export { parseAst } from './blocks';
 
 export function parseMarkdown(src: string, options?: MarkdownOptions): Doc {
-  return loadMarkdown(src, options).doc;
+  return loadMarkdown(src, options, false).doc;
 }

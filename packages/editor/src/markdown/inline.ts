@@ -10,7 +10,7 @@
 // wrapping a range of siblings in a new node is cheap.
 
 import type { Inline } from '../model';
-import { type ImageNodeAlign, type InlineNode, imageSuffix } from './ast';
+import { type ImageNodeAlign, type InlineNode, type Positioned, type Range, type SyntaxRange, type TextNode, type TextPiece, imageSuffix, pieceEnd } from './ast';
 import { lookupEntity } from '#entities';
 import { lowerInlines } from './lower';
 import { emailLiterals, isLiteralBoundary, urlLiteralAt } from './autolink';
@@ -35,7 +35,7 @@ export function parseInline(src: string, options?: MarkdownOptions): Inline {
 export function parseInlines(src: string, refs: RefMap, syntax: readonly InlineSyntax[] = [], autolinks = false): InlineNode[] {
   // Most headings, list items and short paragraphs are plain text, which the
   // parser would return as one text node. Skip it for those.
-  if (isPlain(src, syntax, autolinks)) return src ? [{ type: 'text', value: src }] : [];
+  if (isPlain(src, syntax, autolinks)) return src ? [{ type: 'text', value: src, pos: { from: 0, to: src.length } }] : [];
   const nodes = new InlineParser(src, refs, syntax, autolinks).parse();
   return autolinks ? linkEmails(nodes) : nodes;
 }
@@ -69,21 +69,78 @@ function linkEmails(nodes: InlineNode[]): InlineNode[] {
       changed = true;
       let pos = 0;
       for (const { from, to } of found) {
-        if (from > pos) out.push({ type: 'text', value: node.value.slice(pos, from) });
-        const email = node.value.slice(from, to);
-        out.push({ type: 'link', destination: 'mailto:' + email, title: '', children: [{ type: 'text', value: email }] });
+        if (from > pos) out.push(sliceText(node, pos, from));
+        const email = sliceText(node, from, to);
+        const link: InlineNode = { type: 'link', destination: 'mailto:' + email.value, title: '', children: [email] };
+        out.push(email.pos ? { ...link, pos: email.pos, syntax: [{ kind: 'dest', ...email.pos }] } : link);
         pos = to;
       }
-      if (pos < node.value.length) out.push({ type: 'text', value: node.value.slice(pos) });
+      if (pos < node.value.length) out.push(sliceText(node, pos, node.value.length));
     } else if (node.type === 'emphasis' || node.type === 'strong' || node.type === 'strike') {
       const children = linkEmails(node.children);
       if (children !== node.children) changed = true;
-      out.push(children === node.children ? node : { type: node.type, children });
+      out.push(children === node.children ? node : { ...node, children });
     } else {
       out.push(node);
     }
   }
   return changed ? out : nodes;
+}
+
+/** The text node for `value.slice(a, b)` of a text node, with its part of the node's range and pieces. */
+function sliceText(node: TextNode, a: number, b: number): TextNode {
+  const value = node.value.slice(a, b);
+  if (!node.pos) return { type: 'text', value };
+  if (!node.pieces) return { type: 'text', value, pos: { from: node.pos.from + a, to: node.pos.from + b } };
+  const pieces: TextPiece[] = [];
+  // Only the pieces that reach into [a, b): the slices of one node move forward, so this stays linear.
+  for (let i = pieceIndex(node.pieces, a); i < node.pieces.length && node.pieces[i]!.at < b; i++) {
+    const p = node.pieces[i]!;
+    const from = Math.max(p.at, a);
+    const to = Math.min(pieceEnd(p), b);
+    if (to > from) pieces.push({ at: from - a, from: p.from + (from - p.at), to: p.from + (to - p.at) });
+  }
+  const pos = { from: pieceOffset(node, a), to: pieceOffset(node, b) };
+  return { type: 'text', value, pos, ...(verbatim(pieces, value, pos) ? {} : { pieces }) };
+}
+
+/** The index of the first piece that ends at or after value offset `k`, or the number of pieces. */
+function pieceIndex(pieces: readonly TextPiece[], k: number): number {
+  let lo = 0;
+  let hi = pieces.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (pieceEnd(pieces[mid]!) < k) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * Where offset `k` of a text node's value is in the parsed text: its place in
+ * the verbatim piece holding it, or, in text not written as such, the end of
+ * that text.
+ */
+function pieceOffset(node: TextNode, k: number): number {
+  const p = node.pieces![pieceIndex(node.pieces!, k)];
+  if (!p) return node.pos!.to;
+  return k < p.at ? p.from : p.from + (k - p.at);
+}
+
+/** True when the pieces say the value is one verbatim slice of `pos`, so they need not be kept. */
+function verbatim(pieces: readonly TextPiece[], value: string, pos: Range): boolean {
+  const p = pieces[0];
+  return pieces.length === 1 && p!.at === 0 && p!.from === pos.from && p!.to === pos.to && value.length === pos.to - pos.from;
+}
+
+/** Appends a following text's pieces, moved by `shift` in the value; a piece that follows the last one in both the value and the parsed text joins it. */
+function appendPieces(out: TextPiece[], after: readonly TextPiece[], shift: number): void {
+  for (const p of after) {
+    const at = p.at + shift;
+    const last = out[out.length - 1];
+    if (last && pieceEnd(last) === at && last.to === p.from) out[out.length - 1] = { ...last, to: p.to };
+    else out.push({ at, from: p.from, to: p.to });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +273,14 @@ class Node {
   height = 0;
   /** An escaped "@": kept apart from the text around it, so it does not join an e-mail literal. */
   apart = false;
+  /** The node's range in the subject. A delimiter run's shrinks as emphasis uses it up. */
+  from: number;
+  to: number;
+  /** A text node written as an escape or entity: nothing in its range is verbatim. */
+  escaped = false;
+  syntax: SyntaxRange[] | null = null;
+  /** A code span's text range. */
+  content: Range | null = null;
   parent: Node | null = null;
   first: Node | null = null;
   last: Node | null = null;
@@ -224,9 +289,13 @@ class Node {
 
   constructor(
     public type: NodeType,
+    from = 0,
+    to = from,
     value = '',
   ) {
     this.value = value;
+    this.from = from;
+    this.to = to;
   }
 
   append(child: Node): void {
@@ -275,11 +344,45 @@ function innerDepth(from: Node, to: Node | null): number {
   return depth;
 }
 
-/** Text written as a backslash escape or an entity. As in cmark-gfm, `a\@b.com` and `a&#64;b.com` are not e-mail links. */
-function escapedText(value: string): Node {
-  const text = new Node('text', value);
+/**
+ * Text written as a backslash escape or an entity, covering `[from, to)` of
+ * the subject with nothing verbatim in it (the gaps between a text node's
+ * pieces are its escapes and entities). As in cmark-gfm, `a\@b.com` and
+ * `a&#64;b.com` are not e-mail links.
+ */
+function escapedText(value: string, from: number, to: number): Node {
+  const text = new Node('text', from, to, value);
+  text.escaped = true;
   text.apart = value === '@';
   return text;
+}
+
+/** Adds a tree node's position fields to the AST node just made for it. */
+function positioned<T extends object>(n: Node, node: T): T & Positioned {
+  const out = node as T & { pos?: Range; syntax?: readonly SyntaxRange[] };
+  out.pos = { from: n.from, to: n.to };
+  if (n.syntax) out.syntax = n.syntax;
+  return out;
+}
+
+function textNode(n: Node): TextNode {
+  const pos = { from: n.from, to: n.to };
+  return n.escaped ? { type: 'text', value: n.value, pos, pieces: [] } : { type: 'text', value: n.value, pos };
+}
+
+/**
+ * Two adjacent text nodes as one, keeping where each part of the value is.
+ * `prev` is a node this conversion made, so its pieces are appended to in
+ * place: a text with thousands of escapes merges in constant time each.
+ */
+function mergeText(prev: TextNode, n: Node): TextNode {
+  const value = prev.value + n.value;
+  const pos = { from: prev.pos!.from, to: n.to };
+  // Most merges join two plain runs that follow each other: one verbatim slice, nothing to keep.
+  if (!prev.pieces && !n.escaped && prev.pos!.to === n.from && n.value.length === n.to - n.from) return { type: 'text', value, pos };
+  const pieces = (prev.pieces as TextPiece[] | undefined) ?? [{ at: 0, from: prev.pos!.from, to: prev.pos!.to }];
+  appendPieces(pieces, n.escaped ? [] : [{ at: 0, from: n.from, to: n.to }], prev.value.length);
+  return verbatim(pieces, value, pos) ? { type: 'text', value, pos } : { type: 'text', value, pos, pieces };
 }
 
 /** Converts the mutable tree to plain AST nodes, merging adjacent text nodes. */
@@ -291,40 +394,44 @@ function toAst(parent: Node): InlineNode[] {
       case 'text': {
         if (n.value === '') break;
         const prev = out[out.length - 1];
-        if (prev?.type === 'text' && !apart && !n.apart) out[out.length - 1] = { type: 'text', value: prev.value + n.value };
-        else out.push({ type: 'text', value: n.value });
+        if (prev?.type === 'text' && !apart && !n.apart) out[out.length - 1] = mergeText(prev, n);
+        else out.push(textNode(n));
         apart = n.apart;
         break;
       }
       case 'softBreak':
       case 'hardBreak':
-        out.push({ type: n.type });
+        out.push(positioned(n, { type: n.type }));
         break;
       case 'code':
+        out.push(positioned(n, n.content ? { type: n.type, value: n.value, content: n.content } : { type: n.type, value: n.value }));
+        break;
       case 'html':
-        out.push({ type: n.type, value: n.value });
+        out.push(positioned(n, { type: n.type, value: n.value }));
         break;
       case 'token':
-        out.push({ type: 'token', name: n.name, value: n.value });
+        out.push(positioned(n, { type: 'token', name: n.name, value: n.value }));
         break;
       case 'emphasis':
       case 'strong':
       case 'strike':
-        out.push({ type: n.type, children: toAst(n) });
+        out.push(positioned(n, { type: n.type, children: toAst(n) }));
         break;
       case 'link':
-        out.push({ type: n.type, destination: n.destination, title: n.title, children: toAst(n) });
+        out.push(positioned(n, { type: n.type, destination: n.destination, title: n.title, children: toAst(n) }));
         break;
       case 'image': {
-        out.push({
-          type: n.type,
-          destination: n.destination,
-          title: n.title,
-          children: toAst(n),
-          ...(n.align ? { align: n.align } : {}),
-          ...(n.width ? { width: n.width } : {}),
-          ...(n.width && n.height ? { height: n.height } : {}),
-        });
+        out.push(
+          positioned(n, {
+            type: n.type,
+            destination: n.destination,
+            title: n.title,
+            children: toAst(n),
+            ...(n.align ? { align: n.align } : {}),
+            ...(n.width ? { width: n.width } : {}),
+            ...(n.width && n.height ? { height: n.height } : {}),
+          }),
+        );
         break;
       }
       case 'root':
@@ -381,6 +488,9 @@ class InlineParser {
   private titleFailedFrom = new Map<string, number>();
   /** The last index of each end of raw HTML (`-->`, `?>`, `]]>`, `>`) in the subject, found once. */
   private lastEnds = new Map<string, number>();
+  /** Where the last destination and title parsed were written, set by `parseLinkDestination` and `parseLinkTitle`. */
+  private destRange: Range | null = null;
+  private titleRange: Range | null = null;
 
   /** Inline syntax extensions by trigger character code. */
   private readonly triggers = new Map<number, InlineSyntax[]>();
@@ -425,6 +535,11 @@ class InlineParser {
     return m;
   }
 
+  /** A text node holding `[from, to)` of the subject as written. */
+  private text(from: number, to: number): Node {
+    return new Node('text', from, to, this.subject.slice(from, to));
+  }
+
   private parseOne(block: Node): void {
     const c = this.peek();
     if (this.triggers.size > 0 && this.parseToken(c, block)) return;
@@ -464,7 +579,7 @@ class InlineParser {
     }
     if (!handled) {
       this.pos += 1;
-      block.append(new Node('text', String.fromCharCode(c)));
+      block.append(new Node('text', this.pos - 1, this.pos, String.fromCharCode(c)));
     }
   }
 
@@ -475,7 +590,7 @@ class InlineParser {
     for (const s of syntaxes) {
       const end = s.match(this.subject, this.pos);
       if (end > this.pos) {
-        const node = new Node('token', this.subject.slice(this.pos, end));
+        const node = new Node('token', this.pos, end, this.subject.slice(this.pos, end));
         node.name = s.name;
         block.append(node);
         this.pos = end;
@@ -498,30 +613,45 @@ class InlineParser {
         if (!isLiteralBoundary(this.subject[at - 1], c[0].toLowerCase() === 'www.')) continue;
         const url = urlLiteralAt(this.subject, at);
         if (!url) continue;
-        if (at > start) block.append(new Node('text', this.subject.slice(start, at)));
-        const link = new Node('link');
+        if (at > start) block.append(this.text(start, at));
+        const link = new Node('link', at, url.end);
         link.destination = url.href;
-        link.append(new Node('text', this.subject.slice(at, url.end)));
+        link.syntax = [{ kind: 'dest', from: at, to: url.end }];
+        link.append(this.text(at, url.end));
         block.append(link);
         this.pos = url.end;
         return true;
       }
     }
-    block.append(new Node('text', m[0]));
+    block.append(new Node('text', start, this.pos, m[0]));
     return true;
   }
 
-  /** A line ending: a hard break after two or more spaces, otherwise a soft break. */
+  /**
+   * A line ending: a hard break after two or more spaces, otherwise a soft
+   * break. The break's range runs from the spaces before it over the next
+   * line's indentation.
+   */
   private parseNewline(block: Node): boolean {
+    let from = this.pos;
     this.pos += 1;
     const last = block.last;
     let hard = false;
     if (last && last.type === 'text' && last.value.endsWith(' ')) {
       hard = last.value.endsWith('  ');
-      last.value = last.value.replace(/ +$/, '');
+      const trimmed = last.value.replace(/ +$/, '');
+      const n = last.value.length - trimmed.length;
+      last.value = trimmed;
+      // The spaces were written as such: the text's range gives them up.
+      if (!last.escaped) {
+        last.to -= n;
+        from = last.to;
+      }
     }
-    block.append(new Node(hard ? 'hardBreak' : 'softBreak'));
+    const brk = new Node(hard ? 'hardBreak' : 'softBreak', from);
+    block.append(brk);
     this.skipLineStart();
+    brk.to = this.pos;
     return true;
   }
 
@@ -535,22 +665,26 @@ class InlineParser {
   }
 
   private parseBackslash(block: Node): boolean {
+    const start = this.pos;
     this.pos += 1;
     const c = this.peek();
     if (c === C_NEWLINE) {
       this.pos += 1;
-      block.append(new Node('hardBreak'));
+      const brk = new Node('hardBreak', start);
+      block.append(brk);
       this.skipLineStart();
+      brk.to = this.pos;
     } else if (c !== -1 && reEscapable.test(this.subject[this.pos]!)) {
-      block.append(escapedText(this.subject[this.pos]!));
+      block.append(escapedText(this.subject[this.pos]!, start, start + 2));
       this.pos += 1;
     } else {
-      block.append(new Node('text', '\\'));
+      block.append(new Node('text', start, start + 1, '\\'));
     }
     return true;
   }
 
   private parseBackticks(block: Node): boolean {
+    const start = this.pos;
     const ticks = this.match(reBackticks)![0];
     const n = ticks.length;
     const afterOpen = this.pos;
@@ -560,11 +694,20 @@ class InlineParser {
       while ((m = this.match(reBackticks)) || this.findNextBacktick()) {
         if (!m) continue;
         if (m[0].length === n) {
-          let code = this.subject.slice(afterOpen, this.pos - n).replace(/\n/g, ' ');
+          const closeFrom = this.pos - n;
+          let code = this.subject.slice(afterOpen, closeFrom).replace(/\n/g, ' ');
+          let strip = 0;
           if (code.length > 2 && code[0] === ' ' && code[code.length - 1] === ' ' && /[^ ]/.test(code)) {
             code = code.slice(1, -1);
+            strip = 1;
           }
-          block.append(new Node('code', code));
+          const node = new Node('code', start, this.pos, code);
+          node.syntax = [
+            { kind: 'open', from: start, to: afterOpen },
+            { kind: 'close', from: closeFrom, to: this.pos },
+          ];
+          node.content = { from: afterOpen + strip, to: closeFrom - strip };
+          block.append(node);
           return true;
         }
       }
@@ -572,7 +715,7 @@ class InlineParser {
     }
     // No matching closer: the run is literal text.
     this.pos = afterOpen;
-    block.append(new Node('text', ticks));
+    block.append(this.text(start, afterOpen));
     return true;
   }
 
@@ -588,23 +731,31 @@ class InlineParser {
   }
 
   private parseAutolink(block: Node): boolean {
+    const start = this.pos;
     let m = this.match(reEmailAutolink);
     if (m) {
-      const link = new Node('link');
-      link.destination = 'mailto:' + m[1]!;
-      link.append(new Node('text', m[1]!));
-      block.append(link);
+      this.autolink(block, start, 'mailto:' + m[1]!);
       return true;
     }
     m = this.match(reAutolink);
     if (m) {
-      const link = new Node('link');
-      link.destination = m[1]!;
-      link.append(new Node('text', m[1]!));
-      block.append(link);
+      this.autolink(block, start, m[1]!);
       return true;
     }
     return false;
+  }
+
+  /** An autolink from `start` to the current position: `<` and `>` around text that is its own destination. */
+  private autolink(block: Node, start: number, destination: string): void {
+    const link = new Node('link', start, this.pos);
+    link.destination = destination;
+    link.syntax = [
+      { kind: 'open', from: start, to: start + 1 },
+      { kind: 'dest', from: start + 1, to: this.pos - 1 },
+      { kind: 'close', from: this.pos - 1, to: this.pos },
+    ];
+    link.append(this.text(start + 1, this.pos - 1));
+    block.append(link);
   }
 
   private parseHtmlTag(block: Node): boolean {
@@ -624,7 +775,7 @@ class InlineParser {
     }
     const m = this.match(reHtmlTag);
     if (!m) return false;
-    block.append(new Node('html', m[0]));
+    block.append(new Node('html', p, this.pos, m[0]));
     return true;
   }
 
@@ -643,7 +794,7 @@ class InlineParser {
     if (m) {
       const decoded = decodeEntity(m[0]);
       if (decoded !== null) {
-        block.append(escapedText(decoded));
+        block.append(escapedText(decoded, start, this.pos));
         return true;
       }
       this.pos = start;
@@ -685,7 +836,7 @@ class InlineParser {
     // GFM strikethrough uses runs of one or two tildes only.
     if (cc === C_TILDE && count > 2) canOpen = canClose = false;
 
-    const node = new Node('text', this.subject.slice(start, this.pos));
+    const node = this.text(start, this.pos);
     block.append(node);
     if (canOpen || canClose) {
       const d: Delimiter = {
@@ -771,9 +922,16 @@ class InlineParser {
           // stops the next search at them: `*a **a *a …` stays linear.
           openerNode.depth = closerNode.depth = MAX_INLINE_NESTING;
         } else {
+          // The delimiters used are the innermost: the opener's last and the closer's first.
           openerNode.value = openerNode.value.slice(0, openerNode.value.length - use);
           closerNode.value = closerNode.value.slice(0, closerNode.value.length - use);
-          const wrapper = new Node(type);
+          openerNode.to -= use;
+          closerNode.from += use;
+          const wrapper = new Node(type, openerNode.to, closerNode.from);
+          wrapper.syntax = [
+            { kind: 'open', from: wrapper.from, to: wrapper.from + use },
+            { kind: 'close', from: wrapper.to - use, to: wrapper.to },
+          ];
           let n = openerNode.next;
           while (n && n !== closerNode) {
             const next: Node | null = n.next;
@@ -827,7 +985,7 @@ class InlineParser {
   private parseOpenBracket(block: Node): boolean {
     const start = this.pos;
     this.pos += 1;
-    const node = new Node('text', '[');
+    const node = new Node('text', start, start + 1, '[');
     block.append(node);
     this.pushBracket(node, start, false);
     return true;
@@ -838,11 +996,11 @@ class InlineParser {
     this.pos += 1;
     if (this.peek() === C_OPEN_BRACKET) {
       this.pos += 1;
-      const node = new Node('text', '![');
+      const node = new Node('text', start, start + 2, '![');
       block.append(node);
       this.pushBracket(node, start + 1, true);
     } else {
-      block.append(new Node('text', '!'));
+      block.append(new Node('text', start, start + 1, '!'));
     }
     return true;
   }
@@ -852,17 +1010,19 @@ class InlineParser {
     const startPos = this.pos;
     const opener = this.brackets;
     if (!opener) {
-      block.append(new Node('text', ']'));
+      block.append(new Node('text', startPos - 1, startPos, ']'));
       return true;
     }
     if (!opener.active) {
-      block.append(new Node('text', ']'));
+      block.append(new Node('text', startPos - 1, startPos, ']'));
       this.brackets = opener.prev;
       return true;
     }
 
     let dest: string | null = null;
     let title: string | null = null;
+    let destRange: Range | null = null;
+    let titleRange: Range | null = null;
     let matched = false;
 
     // Inline link: [text](destination "title")
@@ -879,6 +1039,8 @@ class InlineParser {
         if (this.peek() === C_CLOSE_PAREN) {
           this.pos += 1;
           matched = true;
+          destRange = this.destRange;
+          if (title !== null) titleRange = this.titleRange;
         }
       }
       if (!matched) this.pos = startPos;
@@ -905,13 +1067,21 @@ class InlineParser {
     if (!matched || innerDepth(opener.node, null) >= MAX_INLINE_NESTING) {
       this.brackets = opener.prev;
       this.pos = startPos;
-      block.append(new Node('text', ']'));
+      block.append(new Node('text', startPos - 1, startPos, ']'));
       return true;
     }
 
-    const link = new Node(opener.image ? 'image' : 'link');
+    const link = new Node(opener.image ? 'image' : 'link', opener.node.from, this.pos);
     link.destination = dest ?? '';
     link.title = title ?? '';
+    const syntax: SyntaxRange[] = [
+      { kind: 'open', from: opener.node.from, to: opener.node.to },
+      { kind: 'close', from: startPos - 1, to: startPos },
+    ];
+    if (this.pos > startPos) syntax.push({ kind: 'tail', from: startPos, to: this.pos });
+    if (destRange) syntax.push({ kind: 'dest', ...destRange });
+    if (titleRange) syntax.push({ kind: 'title', ...titleRange });
+    link.syntax = syntax;
     if (opener.image) {
       // An alignment and a size after the description, `![alt|center|320](src)`.
       const suffix = imageSuffix(this.subject.slice(opener.index + 1, startPos - 1));
@@ -943,10 +1113,14 @@ class InlineParser {
     this.match(reSpnl);
   }
 
-  /** Returns the decoded destination, or null if there is none here. */
+  /** Returns the decoded destination, or null if there is none here. Records where it was written in `destRange`. */
   parseLinkDestination(): string | null {
+    const braces = this.pos;
     const m = this.match(reLinkDestinationBraces);
-    if (m) return unescapeString(m[0].slice(1, -1));
+    if (m) {
+      this.destRange = { from: braces + 1, to: this.pos - 1 };
+      return unescapeString(m[0].slice(1, -1));
+    }
     if (this.peek() === C_LESSTHAN) return null;
 
     const start = this.pos;
@@ -975,6 +1149,7 @@ class InlineParser {
     }
     if (this.pos === start && this.peek() !== C_CLOSE_PAREN) return null;
     if (depth !== 0) return null;
+    this.destRange = { from: start, to: this.pos };
     return unescapeString(this.subject.slice(start, this.pos));
   }
 
@@ -991,6 +1166,7 @@ class InlineParser {
       if (quote === '"' || quote === "'") this.titleFailedFrom.set(quote, start);
       return null;
     }
+    this.titleRange = { from: start, to: this.pos };
     return unescapeString(m[0].slice(1, -1));
   }
 

@@ -79,11 +79,52 @@ describe('caret mapping', () => {
     expect(back(text, text.indexOf('quoted') + 6)).toEqual([4, 6]);
   });
 
-  it('goes to the start of the block text when the text before the caret has syntax', () => {
-    const text = 'a **b** c\n';
-    // Rich offset 3 is after "a b": the source has "a **b".
-    expect(at(text, 0, 3)).toBe(0);
-    expect(at(text, 0, 2)).toBe(2);
+  it('keeps the caret in place past syntax before it', () => {
+    const text = 'a **b** c [link](http://x.y "t") `co de` \\* ![alt](i.png) end\n';
+    // The block's text: "a b c link co de * ￼ end".
+    expect(at(text, 0, 2)).toBe(text.indexOf('b'));
+    // Between the text before and after a delimiter, the caret goes after it.
+    expect(at(text, 0, 3)).toBe(text.indexOf(' c'));
+    expect(at(text, 0, 6)).toBe(text.indexOf('link'));
+    expect(at(text, 0, 8)).toBe(text.indexOf('link') + 2);
+    expect(at(text, 0, 10)).toBe(text.indexOf(') `') + 1);
+    expect(at(text, 0, 11)).toBe(text.indexOf('co de'));
+    expect(at(text, 0, 13)).toBe(text.indexOf('co de') + 2);
+    expect(at(text, 0, 17)).toBe(text.indexOf('\\*'));
+    expect(at(text, 0, 18)).toBe(text.indexOf('\\*') + 2);
+    expect(at(text, 0, 19)).toBe(text.indexOf('!['));
+    expect(at(text, 0, 20)).toBe(text.indexOf('![') + '![alt](i.png)'.length);
+    expect(at(text, 0, 23)).toBe(text.indexOf('end') + 2);
+    expect(at(text, 0, 24)).toBe(text.indexOf('end') + 3);
+    expect(back(text, text.indexOf('b'))).toEqual([0, 2]);
+    // On syntax, the caret goes to the text after it; inside an escape or an image, before it.
+    expect(back(text, 3)).toEqual([0, 2]);
+    expect(back(text, text.indexOf('link') + 2)).toEqual([0, 8]);
+    expect(back(text, text.indexOf('http'))).toEqual([0, 10]);
+    expect(back(text, text.indexOf('\\*') + 1)).toEqual([0, 17]);
+    expect(back(text, text.indexOf('alt'))).toEqual([0, 19]);
+    expect(back(text, text.indexOf('end') + 3)).toEqual([0, 24]);
+  });
+
+  it('keeps the caret in place on continuation lines and after block markers', () => {
+    const text = '## Title ##\n\nfirst line\n  second line\n\n> quoted\n> more\n\n- item\n  wrapped\n- [x] done\n\n1. one\n   two\n';
+    expect(at(text, 0, 3)).toBe(text.indexOf('Title') + 3);
+    expect(at(text, 0, 5)).toBe(text.indexOf('Title') + 5);
+    // "first line second line": the soft break stands for the line ending and the indentation.
+    expect(at(text, 1, 11)).toBe(text.indexOf('second'));
+    expect(at(text, 1, 14)).toBe(text.indexOf('second') + 3);
+    expect(back(text, text.indexOf('second') - 1)).toEqual([1, 11]);
+    // "quoted more": the second line's quote marker is not in the text.
+    expect(at(text, 2, 7)).toBe(text.indexOf('more'));
+    expect(back(text, text.indexOf('> more'))).toEqual([2, 7]);
+    expect(back(text, text.indexOf('> more') + 1)).toEqual([2, 7]);
+    // "item wrapped", "done" after its task box, "one two".
+    expect(at(text, 3, 5)).toBe(text.indexOf('wrapped'));
+    expect(back(text, text.indexOf('wrapped') + 3)).toEqual([3, 8]);
+    expect(at(text, 4, 0)).toBe(text.indexOf('done'));
+    expect(back(text, text.indexOf('[x]'))).toEqual([4, 0]);
+    expect(at(text, 5, 4)).toBe(text.indexOf('two'));
+    expect(back(text, text.indexOf('two') + 1)).toEqual([5, 5]);
   });
 
   it('maps an offset on a marker to the start of its block', () => {
