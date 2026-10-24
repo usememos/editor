@@ -153,6 +153,8 @@ interface SourceLine {
   readonly indentEnd: number;
   readonly blank: boolean;
   readonly item: ListMarker | null;
+  /** The index of the opening fence's line when the line is fenced code (the fences included), or -1. */
+  readonly fence: number;
 }
 
 interface TextChange {
@@ -204,7 +206,7 @@ function parseMarker(body: string, at: number, indent: number): ListMarker | nul
 /** Every line of a text, with its quote markers, indentation and list marker. */
 function sourceLines(text: string): SourceLine[] {
   const lines: SourceLine[] = [];
-  let fence: { char: string; length: number } | null = null;
+  let fence: { char: string; length: number; line: number } | null = null;
   for (let from = 0; ; ) {
     const nl = text.indexOf('\n', from);
     const to = nl === -1 ? text.length : nl;
@@ -214,13 +216,13 @@ function sourceLines(text: string): SourceLine[] {
     const indentEnd = from + quote.length + space.length;
     const body = line.slice(quote.length + space.length);
     const indent = columns(space);
-    let code = fence !== null;
+    let code = fence?.line ?? -1;
     const f = FENCE.exec(body);
     if (fence) {
       if (f && f[1]![0] === fence.char && f[1]!.length >= fence.length && f[2]!.trim() === '') fence = null;
     } else if (f && !(f[1]![0] === '`' && f[2]!.includes('`'))) {
-      fence = { char: f[1]![0]!, length: f[1]!.length };
-      code = true;
+      fence = { char: f[1]![0]!, length: f[1]!.length, line: lines.length };
+      code = lines.length;
     }
     lines.push({
       from,
@@ -230,7 +232,8 @@ function sourceLines(text: string): SourceLine[] {
       indent,
       indentEnd,
       blank: body.trim() === '',
-      item: code ? null : parseMarker(body, indentEnd, indent),
+      item: code !== -1 ? null : parseMarker(body, indentEnd, indent),
+      fence: code,
     });
     if (nl === -1) return lines;
     from = nl + 1;
@@ -360,6 +363,7 @@ function finish(text: string, changes: TextChange[], anchor: number, focus: numb
   let next = applyChanges(text, changes);
   let a = mapped ? anchor : mapThrough(anchor, changes);
   let f = mapped ? focus : mapThrough(focus, changes);
+  if (targets.length === 0) return sourceState(next, a, f);
   const lines = sourceLines(next);
   const numbers = renumber(
     lines,
@@ -454,10 +458,7 @@ export function sourceIndentList(state: EditorState, delta: 1 | -1): EditorState
   const text = sourceText(state.doc);
   if (!mayBeItem(text, from)) return null;
   const lines = sourceLines(text);
-  const first = lineAt(lines, from);
-  let last = lineAt(lines, to);
-  // A selection that ends at the start of a line does not include that line.
-  if (last > first && to === lines[last]!.from) last--;
+  const [first, last] = selectedLines(lines, from, to);
   const line = lines[first]!;
   if (!line.item) return null;
   for (let j = first + 1; j <= last; j++) {
@@ -644,4 +645,221 @@ export function blockEndOffset(doc: Doc, blockId: string, loaded: { doc: Doc; so
   const placed = placeBlocks(loaded);
   const index = doc.blocks.findIndex((b) => b.id === blockId);
   return placed[Math.max(0, Math.min(index, placed.length - 1))]?.end ?? loaded.source.text.length;
+}
+
+// ---------------------------------------------------------------------------
+// Formatting keys: text edits that wrap the selection in a marker or change
+// the lines it touches, each one undo step, as the list keys are.
+
+export type WrapMarker = '**' | '*' | '`' | '~~';
+
+const WORD = /[\p{L}\p{N}_]/u;
+const ATX_PREFIX = /^(#{1,6})(?:[ \t]+|$)/;
+const QUOTE_MARKER = /^ {0,3}>[ \t]?/;
+
+/** How many `ch` end right before `at`. */
+function runBefore(text: string, at: number, ch: string): number {
+  let n = 0;
+  while (text[at - 1 - n] === ch) n++;
+  return n;
+}
+
+/** How many `ch` start at `at`. */
+function runAfter(text: string, at: number, ch: string): number {
+  let n = 0;
+  while (text[at + n] === ch) n++;
+  return n;
+}
+
+/** The selection's anchor and focus offsets, in that order, so an edit keeps a backward selection backward. */
+function ends(state: EditorState): [number, number] {
+  return [state.selection.anchor.offset, state.selection.focus.offset];
+}
+
+/** `from` and `to` of a replaced selection as its new anchor and focus, in the selection's own direction. */
+function directed(state: EditorState, from: number, to: number): [number, number] {
+  const [anchor, focus] = ends(state);
+  return anchor > focus ? [to, from] : [from, to];
+}
+
+/**
+ * Wraps the selection in `marker`, or unwraps it when it is already wrapped,
+ * whether or not the markers are selected. The wrapped range is trimmed of
+ * whitespace, since `** foo**` is not strong. With no selection, the word at
+ * the caret; on whitespace, the pair is inserted with the caret between the
+ * markers. Italic inside strong adds its own star, so `**bold**` becomes
+ * `***bold***`, and a run of three unwraps one. A code span's backticks are
+ * one more than any run inside it.
+ */
+export function sourceToggleWrap(state: EditorState, marker: WrapMarker): EditorState {
+  const text = sourceText(state.doc);
+  let { from, to } = sourceRange(state);
+  const ch = marker[0]!;
+  if (from === to) {
+    while (from > 0 && WORD.test(text[from - 1]!)) from--;
+    while (to < text.length && WORD.test(text[to]!)) to++;
+    if (from === to) return edit(state, from, from, marker + marker, from + marker.length);
+  } else {
+    while (from < to && /\s/.test(text[from]!)) from++;
+    while (to > from && /\s/.test(text[to - 1]!)) to--;
+    if (from === to) return state;
+  }
+  // Markers taken into the selection count as around it: `**bold**` selected whole unwraps.
+  const inside = Math.min(runAfter(text, from, ch), runBefore(text, to, ch), Math.floor((to - from - 1) / 2));
+  from += inside;
+  to -= inside;
+  const before = runBefore(text, from, ch);
+  const after = runAfter(text, to, ch);
+  let remove = 0;
+  if (marker === '`') remove = before > 0 && before === after ? before : 0;
+  else if (marker === '*') remove = before % 2 === 1 && after % 2 === 1 ? 1 : 0;
+  else remove = before >= 2 && after >= 2 ? 2 : 0;
+  if (remove > 0) return edit(state, from - remove, to + remove, text.slice(from, to), ...directed(state, from - remove, to - remove));
+  let open: string = marker;
+  let close: string = marker;
+  if (marker === '`') {
+    const selected = text.slice(from, to);
+    let longest = 0;
+    for (const m of selected.matchAll(/`+/g)) longest = Math.max(longest, m[0].length);
+    const ticks = '`'.repeat(longest + 1);
+    // A backtick at either end needs a space inside the span, which the parser strips.
+    const pad = selected.startsWith('`') || selected.endsWith('`') ? ' ' : '';
+    open = ticks + pad;
+    close = pad + ticks;
+  }
+  return edit(state, from, to, open + text.slice(from, to) + close, ...directed(state, from + open.length, to + open.length));
+}
+
+/** The lines the selection touches, first to last; a selection that ends at a line's start leaves that line out. */
+function selectedLines(lines: readonly SourceLine[], from: number, to: number): [number, number] {
+  const first = lineAt(lines, from);
+  let last = lineAt(lines, to);
+  if (to > from && last > first && lines[last]!.from === to) last--;
+  return [first, last];
+}
+
+/** The lines of a range a block key acts on: not fenced code, and not a blank line among others. */
+function targetLines(lines: readonly SourceLine[], first: number, last: number): SourceLine[] {
+  return lines.slice(first, last + 1).filter((l) => l.fence === -1 && (!l.blank || first === last));
+}
+
+/** Where a line's block prefix ends: after its list marker and task box, or its `#`s; the text's start otherwise. */
+function prefixEnd(text: string, line: SourceLine): number {
+  if (line.item) return line.item.content;
+  const m = ATX_PREFIX.exec(text.slice(line.indentEnd, line.to));
+  return line.indentEnd + (m ? m[0].length : 0);
+}
+
+function headingLevel(text: string, line: SourceLine): number {
+  const m = line.item ? null : ATX_PREFIX.exec(text.slice(line.indentEnd, line.to));
+  return m ? m[1]!.length : 0;
+}
+
+/**
+ * Sets the heading level of the selected lines, after any quote markers: the
+ * `#`s replace a list marker or another level, and a level every line already
+ * has, or level 0, removes them, as `setParagraph` does.
+ */
+export function sourceSetHeading(state: EditorState, level: number): EditorState | null {
+  const text = sourceText(state.doc);
+  const { from, to } = sourceRange(state);
+  const lines = sourceLines(text);
+  const targets = targetLines(lines, ...selectedLines(lines, from, to));
+  if (targets.length === 0) return null;
+  const same = level > 0 && targets.every((l) => headingLevel(text, l) === level);
+  const insert = same || level === 0 ? '' : '#'.repeat(level) + ' ';
+  const changes = targets.map((l) => ({ from: l.indentEnd, to: prefixEnd(text, l), insert })).filter((c) => c.to > c.from || c.insert);
+  return changes.length ? finish(text, changes, ...ends(state), [], []) : null;
+}
+
+export type SourceListKind = 'bullet' | 'ordered' | 'task';
+
+/**
+ * Makes the selected lines list items of `kind`, after any quote markers,
+ * replacing another kind's marker or a heading's `#`s; when every line is one
+ * already, removes the markers. New ordered items are numbered from the
+ * list they join, or from 1.
+ */
+export function sourceToggleList(state: EditorState, kind: SourceListKind): EditorState | null {
+  const text = sourceText(state.doc);
+  const { from, to } = sourceRange(state);
+  const lines = sourceLines(text);
+  const targets = targetLines(lines, ...selectedLines(lines, from, to));
+  if (targets.length === 0) return null;
+  const is = (l: SourceLine) =>
+    !!l.item && (kind === 'ordered' ? l.item.ordered : kind === 'task' ? l.item.box !== -1 : !l.item.ordered && l.item.box === -1);
+  const all = targets.every(is);
+  const marker = all ? '' : kind === 'bullet' ? '- ' : kind === 'ordered' ? '1. ' : '- [ ] ';
+  // A line that is one already keeps its marker (an ordered item its number) and is only numbered again.
+  const changed = all ? targets : targets.filter((l) => !is(l));
+  const changes = changed.map((l) => ({ from: l.indentEnd, to: prefixEnd(text, l), insert: marker }));
+  const moved = targets.map((l) => mapThrough(l.indentEnd, changes));
+  const fresh = kind === 'ordered' && !all ? changed.map((l) => mapThrough(l.indentEnd, changes)) : [];
+  return finish(text, changes, ...ends(state), moved, fresh);
+}
+
+/** Quotes the selected lines with `> `, or, when every line that has text is quoted, removes one quote marker from each. */
+export function sourceToggleQuote(state: EditorState): EditorState | null {
+  const text = sourceText(state.doc);
+  const { from, to } = sourceRange(state);
+  const lines = sourceLines(text);
+  const [first, last] = selectedLines(lines, from, to);
+  const targets = lines.slice(first, last + 1);
+  const quoted = targets.some((l) => !l.blank) && targets.every((l) => l.blank || l.depth > 0);
+  const changes: TextChange[] = quoted
+    ? targets.flatMap((l) => {
+        const m = QUOTE_MARKER.exec(text.slice(l.from, l.to));
+        return m ? [{ from: l.from, to: l.from + m[0].length, insert: '' }] : [];
+      })
+    : targets.map((l) => ({ from: l.from, to: l.from, insert: l.blank ? '>' : '> ' }));
+  return changes.length ? finish(text, changes, ...ends(state), [], []) : null;
+}
+
+/**
+ * Wraps the selected lines in a code fence, keeping their quote markers; a
+ * blank line becomes an empty fence with the caret in it. When the selection
+ * is in fenced code, removes that fence's lines.
+ */
+export function sourceToggleFence(state: EditorState): EditorState | null {
+  const text = sourceText(state.doc);
+  const { from, to } = sourceRange(state);
+  const lines = sourceLines(text);
+  const [first, last] = selectedLines(lines, from, to);
+  const fenced = lines.slice(first, last + 1).find((l) => l.fence !== -1);
+  if (fenced) {
+    const open = lines[fenced.fence]!;
+    let close = fenced.fence;
+    while (close + 1 < lines.length && lines[close + 1]!.fence === fenced.fence) close++;
+    const changes: TextChange[] = [{ from: open.from, to: Math.min(open.to + 1, text.length), insert: '' }];
+    // The last line closes the fence when it is a run of the same character, at least as long; otherwise the fence is open and the line is code.
+    const opener = FENCE.exec(text.slice(open.indentEnd, open.to))![1]!;
+    const closer = lines[close]!;
+    const run = FENCE.exec(text.slice(closer.indentEnd, closer.to));
+    if (close > fenced.fence && run && run[1]![0] === opener[0] && run[1]!.length >= opener.length && run[2]!.trim() === '') {
+      changes.push({ from: closer.from - 1, to: closer.to, insert: '' });
+    }
+    return finish(text, changes, ...ends(state), [], []);
+  }
+  const head = lines[first]!;
+  const tail = lines[last]!;
+  const prefix = text.slice(head.from, head.quoteEnd);
+  if (first === last && head.blank) return edit(state, head.quoteEnd, head.to, '```\n' + prefix + '\n' + prefix + '```', head.quoteEnd + 4 + prefix.length);
+  const open = prefix + '```\n';
+  const close = '\n' + text.slice(tail.from, tail.quoteEnd) + '```';
+  // The selection stays on its lines, between the fences.
+  return edit(state, head.from, tail.to, open + text.slice(head.from, tail.to) + close, ...directed(state, from + open.length, to + open.length));
+}
+
+/** Makes the selected text a link to `url`: `[text](url)`, with the caret after it. Nothing without a selection. */
+export function sourceLink(state: EditorState, url: string): EditorState | null {
+  const { from, to } = sourceRange(state);
+  if (from === to) return null;
+  return insertSourceText(state, `[${sourceText(state.doc).slice(from, to)}](${url})`);
+}
+
+/** True when the selection starts in fenced code, where a paste should stay the text as written. */
+export function inFence(state: EditorState): boolean {
+  const text = sourceText(state.doc);
+  const lines = sourceLines(text);
+  return lines[lineAt(lines, sourceRange(state).from)]!.fence !== -1;
 }

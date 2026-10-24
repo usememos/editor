@@ -395,7 +395,7 @@ To style the editor entirely with your own classes, import `@usememos/editor/bas
 
 With blocks selected: ArrowUp and ArrowDown select the block above or below, Shift extends the selection, Mod+A selects every block, Backspace and Delete delete them, Mod+C, Mod+X and paste copy, cut and replace them as whole blocks, Mod+D duplicates them, and the block type keys, Tab and the mark keys apply to all of them. Enter, ArrowLeft and ArrowRight go back to editing text. Typing does nothing. See [Block selection](docs/architecture.md#block-selection).
 
-In source mode the formatting keys do nothing, and Enter and Tab edit list items as text; see [Source mode](#source-mode).
+In source mode the formatting keys edit the Markdown text, and Enter and Tab edit list items as text; see [Source mode](#source-mode).
 
 Markdown shortcuts at the start of a line: `#`–`######`, `-`, `*`, `+`, `1.`, `[ ]`, `[x]`, `>`, `[!note]` and the other callout types, `>>>` (collapsible section), ` ``` `, `---`. Inline: `**bold**`, `*italic*`, `_italic_`, `` `code` ``, `~~strike~~`.
 
@@ -450,7 +450,7 @@ With `mode: 'source'`, the editor shows the whole document as Markdown text, as 
 
 **Switching** is a change of view, not an edit. The text shown in source mode is exactly `getMarkdown()`. Going back to rich mode loads the text as `setMarkdown` does, so `getMarkdown()` returns it byte for byte, including lines edited in source mode. A switch emits no `change`, adds no undo step and does not move focus. Undo and redo work across it: undoing an edit made in the other mode restores it in the current mode. The caret stays in the same block, at the same place in its text, past any Markdown syntax before it: a caret on syntax goes to the text after it, one inside an image or an escape before it, and one in a table to the start of the table. A switch requested while an input method is composing waits for the composition to end.
 
-**What works in source mode.** Source mode is plain text editing, like a `<textarea>` or a code block, that knows Markdown lists and opens the extensions' autocomplete popups. It has no formatting keys.
+**What works in source mode.** Source mode is plain text editing, like a `<textarea>` or a code block, that knows Markdown lists, opens the extensions' autocomplete popups, and makes the formatting keys edit the text.
 
 | | |
 | --- | --- |
@@ -458,15 +458,16 @@ With `mode: 'source'`, the editor shows the whole document as Markdown text, as 
 | Enter | On a list item, after its marker, starts the next item: the same marker and indentation, the next number, and an unticked `[ ]` after a task. Text after the caret moves to the new item, and the items after it in an ordered list are numbered again. On an empty item, removes the marker, or outdents a nested item, as in rich mode. Elsewhere, inside fenced code and before an item's marker, inserts a line break |
 | Shift+Enter | Inserts a line break |
 | Tab, Shift+Tab | On list items: Tab nests the items the selection touches under the item before them, at that item's text column, and Shift+Tab moves them out to their parent's level. Lines nested under them move with them, ordered lists they leave and join are numbered again, and an item that cannot move stays. Elsewhere, as in a code block: Tab inserts two spaces, or indents the selected lines by two spaces. Shift+Tab removes up to two spaces (or a tab) from the start of those lines |
-| Paste | The clipboard's plain text (`text/plain`). Files go to `fileHandler` as in rich mode |
+| Paste | HTML pastes as Markdown, through the same conversion as in rich mode, and the editor's own HTML as the Markdown it was copied from; plain text as written, and always inside a fence. Mod+Shift+V pastes the plain text. A URL pasted over selected text makes it a link, `[text](url)`. Files go to `fileHandler` as in rich mode |
 | Copy and cut | The selected text, as `text/plain` |
 | Mod+Enter, undo, redo, Mod+A | As in rich mode |
 | Escape | Leaves the editor |
-| Formatting keys (Mod+B, Mod+I, Mod+E, Mod+Shift+X, Mod+Alt+0–4, Mod+Alt+C, Mod+Shift+6–9) | Do nothing. Mod+K is left to the app |
+| Mod+B, Mod+I, Mod+E, Mod+Shift+X | Wrap the selection in `**`, `*`, backticks or `~~`, or unwrap it when it is already wrapped, whether or not the markers are selected; the wrapped range is trimmed of whitespace. With no selection, the word at the caret; on whitespace, the pair with the caret between the markers. Italic inside strong adds its own star, and a backtick run grows past any backticks in the code. One undo step each |
+| Mod+Alt+0–4, Mod+Shift+7–9, Mod+Alt+C | Set or replace the `#` prefix of the selected lines (a level every line has, or Mod+Alt+0, removes it), toggle `1. `, `- ` or `- [ ] ` on them (new ordered items are numbered from the list they join), and wrap them in a code fence or remove the fence around the selection, all after any quote markers. `commands.toggleBlockquote` toggles `> `; rich mode binds no key to it either. Mod+Shift+6 (a section) and Mod+K are left to the app |
 | Markdown shortcuts, autolinks | Do not run: the text is the Markdown |
 | Autocomplete | `suggestion()` popups open for the tokens their extension owns, in prose and not inside code, a URL, raw HTML or extension syntax, and a pick inserts its text; Ctrl+Space opens one explicitly. The slash menu stays off, as does a suggestion with `richOnly` |
 | `fileHandler`, `handlePaste`, `handleDrop`, extension key bindings | As in rich mode |
-| `commands.*` | `insertText` and `insertMarkdown` insert the text as written; `insertMarkdown` with `block: true` puts it on lines of its own. `indent` and `outdent` work as Tab and Shift+Tab. `undo`, `undo`, `redo`, `selectAll`, `focus`, `blur` and `scrollIntoView` work. The mark, block type, link, image, table, divider, callout, section and `selectBlocks` commands return `false` |
+| `commands.*` | `insertText` and `insertMarkdown` insert the text as written; `insertMarkdown` with `block: true` puts it on lines of its own. `indent` and `outdent` work as Tab and Shift+Tab. The mark commands, `setParagraph`, `toggleHeading`, the list commands, `toggleBlockquote` and `toggleCodeBlock` make the text edits above and return `true`. `undo`, `redo`, `selectAll`, `focus`, `blur` and `scrollIntoView` work. The link, image, table, divider, callout, section and `selectBlocks` commands return `false` |
 | Placeholder | Shown when the text is empty |
 | `addWidget` | Shown below the text. A widget remembers its place in the text, which moves with edits before it, and `insertMarkdown(md, { at: widget })` inserts there |
 | `editable: false` | The text is read-only and can be selected and copied. `taskToggle` has no effect |

@@ -38,7 +38,6 @@ import {
   type CodeBlock,
   type Inline,
   type HeadingLevel,
-  type Mark,
   type ParagraphBlock,
   type Position,
   type RawBlock,
@@ -1195,21 +1194,22 @@ export class Editor {
     inSource('indent', () => indentSource(1));
     inSource('outdent', () => indentSource(-1));
     inSource('insertMarkdown', (markdown: string, options: InsertMarkdownOptions = {}) => this.insertSourceMarkdown(markdown, options));
+    // The formatting keys are text edits: a wrapped selection, or changed line prefixes.
+    inSource('toggleBold', () => run((s) => src.sourceToggleWrap(s, '**')));
+    inSource('toggleItalic', () => run((s) => src.sourceToggleWrap(s, '*')));
+    inSource('toggleStrike', () => run((s) => src.sourceToggleWrap(s, '~~')));
+    inSource('toggleCode', () => run((s) => src.sourceToggleWrap(s, '`')));
+    inSource('setParagraph', () => run((s) => src.sourceSetHeading(s, 0)));
+    inSource('toggleHeading', ({ level }: { level: HeadingLevel }) => run((s) => src.sourceSetHeading(s, level)));
+    inSource('toggleBulletList', () => run((s) => src.sourceToggleList(s, 'bullet')));
+    inSource('toggleOrderedList', () => run((s) => src.sourceToggleList(s, 'ordered')));
+    inSource('toggleTaskList', () => run((s) => src.sourceToggleList(s, 'task')));
+    inSource('toggleBlockquote', () => run((s) => src.sourceToggleQuote(s)));
+    inSource('toggleCodeBlock', () => run((s) => src.sourceToggleFence(s)));
     for (const name of [
-      'toggleBold',
-      'toggleItalic',
-      'toggleStrike',
-      'toggleCode',
-      'setParagraph',
-      'toggleHeading',
-      'toggleBulletList',
-      'toggleOrderedList',
-      'toggleTaskList',
-      'toggleBlockquote',
       'toggleCallout',
       'setCallout',
       'toggleDetails',
-      'toggleCodeBlock',
       'setLink',
       'unsetLink',
       'updateImage',
@@ -1226,11 +1226,6 @@ export class Editor {
       (commands as unknown as Record<string, (...args: unknown[]) => boolean>)[name] = (...args) => !this.destroyed && fn(...args);
     }
     return commands;
-  }
-
-  private toggleMark(mark: Mark): boolean {
-    if (this.modeValue === 'source') return false;
-    return this.run((s) => cmd.toggleMark(s, mark));
   }
 
   /** `insertMarkdown` in source mode: the Markdown is inserted as text. */
@@ -2009,13 +2004,13 @@ export class Editor {
         this.redo();
         return;
       case 'formatBold':
-        this.toggleMark('bold');
+        this.commands.toggleBold();
         return;
       case 'formatItalic':
-        this.toggleMark('italic');
+        this.commands.toggleItalic();
         return;
       case 'formatStrikeThrough':
-        this.toggleMark('strike');
+        this.commands.toggleStrike();
         return;
       default:
         // Paste, cut and drop have their own handlers. Everything else is ignored
@@ -2726,8 +2721,14 @@ export class Editor {
     const plainOnly = this.plainPasteNext;
     this.plainPasteNext = false;
     if (this.modeValue === 'source') {
-      // Plain text only.
-      if (text) this.run((s) => src.insertSourceText(s, text.replace(/\r\n?/g, '\n')));
+      // A URL pasted over selected text makes it a link; HTML pastes as Markdown, as in rich mode.
+      const link = this.pastedUrl(text, plainOnly);
+      if (link !== null) {
+        this.run((s) => src.sourceLink(s, link));
+        return;
+      }
+      const markdown = this.pastedMarkdown(text, html, plainOnly);
+      if (markdown) this.run((s) => src.insertSourceText(s, markdown.replace(/\r\n?/g, '\n')));
       return;
     }
 
@@ -2745,8 +2746,8 @@ export class Editor {
       return;
     }
     // A URL pasted over selected text makes it a link.
-    const url = text.trim();
-    if (!plainOnly && !isCollapsed(this.state.selection) && /^(https?:\/\/|mailto:)\S+$/i.test(url)) {
+    const url = this.pastedUrl(text, plainOnly);
+    if (url !== null) {
       this.run((s) => cmd.setLink(s, url));
       return;
     }
@@ -2754,13 +2755,25 @@ export class Editor {
     this.run((s) => cmd.insertBlocks(s, fragment));
   }
 
+  /** What a paste writes in source mode: the editor's own Markdown, other HTML as Markdown, else the text; inside a fence, the text as written. */
+  private pastedMarkdown(text: string, html: string, plainOnly: boolean): string {
+    if (plainOnly || !html || src.inFence(this.state)) return text;
+    return internalMarkdown(html) ?? (serializeMarkdown({ blocks: htmlToDoc(html).blocks }, this.markdown).replace(/\n$/, '') || text);
+  }
+
+  /** The URL a paste makes a link of: the text, when it is one URL and the paste is not plain. */
+  private pastedUrl(text: string, plainOnly: boolean): string | null {
+    const url = text.trim();
+    return !plainOnly && !isCollapsed(this.state.selection) && PASTED_LINK.test(url) ? url : null;
+  }
+
   /** Clipboard content as blocks: the editor's own Markdown, other HTML, or text as Markdown. */
   private pastedBlocks(text: string, html: string, plainOnly: boolean): readonly Block[] {
     // Mod+Shift+V: the text as typed, one paragraph per line.
     if (plainOnly) return text.replace(/\r\n?/g, '\n').split('\n').map((l) => paragraph(plain(l)));
     let fragment: readonly Block[];
-    const internal = /data-mbe-markdown="([^"]*)"/.exec(html);
-    if (internal) fragment = parseMarkdown(decodeURIComponent(internal[1]!), this.markdown).blocks;
+    const internal = internalMarkdown(html);
+    if (internal !== null) fragment = parseMarkdown(internal, this.markdown).blocks;
     else if (html) fragment = htmlToDoc(html).blocks;
     else fragment = parseMarkdown(text, this.markdown).blocks;
     if (fragment.length === 0 && text) fragment = parseMarkdown(text, this.markdown).blocks;
@@ -3603,6 +3616,15 @@ function blockName(block: Block): ActiveName {
 function writeClipboard(data: DataTransfer, doc: Doc, markdown: string, plain = markdown): void {
   data.setData('text/plain', plain);
   data.setData('text/html', `<meta charset="utf-8"><div data-mbe-markdown="${encodeURIComponent(markdown)}">${docToHtml(doc)}</div>`);
+}
+
+/** A URL pasted over a selection, which becomes a link. */
+const PASTED_LINK = /^(https?:\/\/|mailto:)\S+$/i;
+
+/** The Markdown the editor's own copied HTML carries (see `writeClipboard`), or null for other HTML. */
+function internalMarkdown(html: string): string | null {
+  const m = /data-mbe-markdown="([^"]*)"/.exec(html);
+  return m ? decodeURIComponent(m[1]!) : null;
 }
 
 function sameBlocks(a: Doc, b: Doc): boolean {

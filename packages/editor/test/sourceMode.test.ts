@@ -243,3 +243,105 @@ describe('lists', () => {
     expect(tab('- a\n[- b\ntext]')).toBeNull();
   });
 });
+
+describe('formatting keys', () => {
+  const wrap = (marked: string, marker: src.WrapMarker) => show(src.sourceToggleWrap(state(marked), marker));
+
+  it('wraps and unwraps the selection, with or without the markers selected, trimmed of whitespace', () => {
+    expect(wrap('a [bold] c', '**')).toBe('a **[bold]** c');
+    expect(wrap('a **[bold]** c', '**')).toBe('a [bold] c');
+    expect(wrap('a [**bold**] c', '**')).toBe('a [bold] c');
+    expect(wrap('a [ bold ] c', '**')).toBe('a  **[bold]**  c');
+    expect(wrap('a [em] c', '*')).toBe('a *[em]* c');
+    expect(wrap('a *[em]* c', '*')).toBe('a [em] c');
+    expect(wrap('a [gone] c', '~~')).toBe('a ~~[gone]~~ c');
+    expect(wrap('a ~~[gone]~~ c', '~~')).toBe('a [gone] c');
+  });
+
+  it('adds italic inside strong and takes it off a run of three', () => {
+    expect(wrap('**[bold]**', '*')).toBe('***[bold]***');
+    expect(wrap('***[both]***', '*')).toBe('**[both]**');
+    expect(wrap('***[both]***', '**')).toBe('*[both]*');
+    expect(wrap('*[em]*', '**')).toBe('***[em]***');
+  });
+
+  it('wraps the word at the caret, and inserts the pair on whitespace', () => {
+    expect(wrap('some wo|rd here', '**')).toBe('some **[word]** here');
+    expect(wrap('some **wo|rd** here', '**')).toBe('some [word] here');
+    expect(wrap('some | here', '*')).toBe('some *|* here');
+    expect(wrap('|', '`')).toBe('`|`');
+  });
+
+  it('uses a longer backtick run around code that holds backticks, with a space at an end', () => {
+    expect(wrap('a [x] c', '`')).toBe('a `[x]` c');
+    expect(wrap('a `[x]` c', '`')).toBe('a [x] c');
+    expect(wrap('a [a`b] c', '`')).toBe('a ``[a`b]`` c');
+    expect(wrap('a [`x] c', '`')).toBe('a `` [`x] `` c');
+  });
+
+  const heading = (marked: string, level: number) => show(src.sourceSetHeading(state(marked), level)!);
+  const list = (marked: string, kind: src.SourceListKind) => show(src.sourceToggleList(state(marked), kind)!);
+
+  it('sets, replaces and removes the heading prefix of the selected lines, after quote markers', () => {
+    expect(heading('wo|rd', 2)).toBe('## wo|rd');
+    expect(heading('# wo|rd', 2)).toBe('## wo|rd');
+    expect(heading('## wo|rd', 2)).toBe('wo|rd');
+    expect(heading('## wo|rd', 0)).toBe('wo|rd');
+    expect(heading('- it|em', 1)).toBe('# it|em');
+    expect(heading('> [a\nb]', 3)).toBe('> ### [a\n### b]');
+    expect(heading('[a\n\nb]', 1)).toBe('# [a\n\n# b]');
+    // Fenced code is not a heading, and a line with nothing to remove is not an edit.
+    expect(src.sourceSetHeading(state('```\n#|x\n```'), 1)).toBeNull();
+    expect(src.sourceSetHeading(state('word|'), 0)).toBeNull();
+  });
+
+  it('toggles list markers on the selected lines, keeping the indentation, and numbers ordered items', () => {
+    expect(list('a|\nb', 'bullet')).toBe('- a|\nb');
+    expect(list('[a\nb]', 'bullet')).toBe('- [a\n- b]');
+    expect(list('- [a\n- b]', 'bullet')).toBe('[a\nb]');
+    expect(list('[a\nb\nc]', 'ordered')).toBe('1. [a\n2. b\n3. c]');
+    expect(list('1. a\n2. [b\nc]', 'ordered')).toBe('1. a\n2. [b\n3. c]');
+    expect(list('- [a\n- b]', 'task')).toBe('- [ ] [a\n- [ ] b]');
+    expect(list('- [x] a|', 'bullet')).toBe('- a|');
+    expect(list('  - [a]', 'ordered')).toBe('  1. [a]');
+    expect(list('# [a]', 'bullet')).toBe('- [a]');
+    expect(list('> [a\n>\n> b]', 'bullet')).toBe('> - [a\n>\n> - b]');
+  });
+
+  const quote = (marked: string) => show(src.sourceToggleQuote(state(marked))!);
+  const fence = (marked: string) => show(src.sourceToggleFence(state(marked))!);
+
+  it('quotes the selected lines, or removes one quote marker from each', () => {
+    expect(quote('[a\n\nb]')).toBe('> [a\n>\n> b]');
+    expect(quote('> [a\n>\n> b]')).toBe('[a\n\nb]');
+    expect(quote('> > [a]')).toBe('> [a]');
+    expect(quote('a|')).toBe('> a|');
+  });
+
+  it('wraps the selected lines in a fence, or removes the fence around the selection', () => {
+    expect(fence('[a\nb]\nc')).toBe('```\n[a\nb]\n```\nc');
+    expect(fence('```\na|\n```\nc')).toBe('a|\nc');
+    expect(fence('x\n|\ny')).toBe('x\n```\n|\n```\ny');
+    expect(fence('> [a]')).toBe('> ```\n> [a]\n> ```');
+    expect(fence('```js\n|\n```')).toBe('|');
+  });
+
+  it('keeps a backward selection backward, and leaves a line that only looks like a closing fence', () => {
+    const backward = src.sourceToggleWrap(src.sourceState('a word b', 6, 2), '**');
+    expect([src.sourceText(backward.doc), backward.selection.anchor.offset, backward.selection.focus.offset]).toEqual(['a **word** b', 8, 4]);
+    const lines = src.sourceToggleList(src.sourceState('a\nb', 3, 0), 'bullet')!;
+    expect([src.sourceText(lines.doc), lines.selection.anchor.offset, lines.selection.focus.offset]).toEqual(['- a\n- b', 7, 2]);
+    // The three-backtick line is code in a fence of four: only the opener goes.
+    expect(fence('````\ncode|\n```')).toBe('code|\n```');
+  });
+
+  it('makes the selection a link', () => {
+    expect(show(src.sourceLink(state('see [here] now'), 'https://x.y')!)).toBe('see [here](https://x.y)| now');
+    expect(src.sourceLink(state('a|'), 'https://x.y')).toBeNull();
+  });
+
+  it('knows when the selection is in fenced code', () => {
+    expect(src.inFence(state('a\n```\nb|\n```'))).toBe(true);
+    expect(src.inFence(state('a|\n```\nb\n```'))).toBe(false);
+  });
+});

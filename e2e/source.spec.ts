@@ -240,20 +240,55 @@ test('smartLists: false makes Enter a line break and Tab indent as in a code blo
   expect(await md(page)).toBe('- a\n\n  - b\n');
 });
 
-test('formatting keys and commands do nothing', async ({ page }) => {
-  await open(page, 'word\n');
-  await select(page, 0, 4);
-  for (const key of ['Control+b', 'Control+i', 'Control+e', 'Control+Shift+x', 'Control+Alt+2', 'Control+Alt+0', 'Control+Alt+c', 'Control+Shift+8', 'Control+Shift+6']) {
-    await page.keyboard.press(key);
-  }
-  expect(await md(page)).toBe('word\n');
+test('formatting keys wrap the selection or the word at the caret, as one undo step each', async ({ page }) => {
+  await open(page, 'some word here\n');
+  await select(page, 5, 9);
+  await page.keyboard.press('ControlOrMeta+b');
+  expect(await md(page)).toBe('some **word** here\n');
+  await page.keyboard.press('ControlOrMeta+i');
+  expect(await md(page)).toBe('some ***word*** here\n');
+  await page.keyboard.press('ControlOrMeta+z');
+  expect(await md(page)).toBe('some **word** here\n');
+  await page.keyboard.press('ControlOrMeta+b');
+  expect(await md(page)).toBe('some word here\n');
+  // The caret in a word wraps the word; on whitespace, the pair with the caret between.
+  await select(page, 7);
+  await page.keyboard.press('ControlOrMeta+e');
+  expect(await md(page)).toBe('some `word` here\n');
+  await select(page, 5);
+  await page.keyboard.press('ControlOrMeta+Shift+x');
+  await page.keyboard.type('x');
+  expect(await md(page)).toBe('some ~~x~~`word` here\n');
+  // The shown text and the highlighting follow.
+  expect(await shown(page)).toBe(await md(page));
+  expect(await page.locator('#editor .mbe-source .mbe-src-code').allTextContents()).toEqual(['word']);
+  expect(await page.evaluate(() => (window as any).editor.isActive('bold'))).toBe(false);
+  await expect(page.locator('.mbe-toolbar:visible')).toHaveCount(0);
+});
+
+test('block keys and commands change the lines: headings, lists, quote and fences', async ({ page }) => {
+  await open(page, 'one\ntwo\n');
+  await select(page, 1);
+  await page.keyboard.press('ControlOrMeta+Alt+2');
+  expect(await md(page)).toBe('## one\ntwo\n');
+  await page.keyboard.press('ControlOrMeta+Alt+2');
+  expect(await md(page)).toBe('one\ntwo\n');
+  await select(page, 0, 6);
+  await page.keyboard.press('ControlOrMeta+Shift+7');
+  expect(await md(page)).toBe('1. one\n2. two\n');
+  await page.keyboard.press('ControlOrMeta+Shift+9');
+  expect(await md(page)).toBe('- [ ] one\n- [ ] two\n');
+  await page.keyboard.press('ControlOrMeta+Alt+0');
+  expect(await md(page)).toBe('one\ntwo\n');
+  await page.keyboard.press('ControlOrMeta+Alt+c');
+  expect(await md(page)).toBe('```\none\ntwo\n```\n');
+  await page.keyboard.press('ControlOrMeta+Alt+c');
+  expect(await md(page)).toBe('one\ntwo\n');
   const results = await page.evaluate(() => {
     const { commands } = (window as any).editor;
     return [
-      commands.toggleBold(),
-      commands.toggleHeading({ level: 1 }),
+      commands.toggleBlockquote(),
       commands.toggleBulletList(),
-      commands.toggleCodeBlock(),
       commands.setLink({ href: 'https://x.org' }),
       commands.insertTable(),
       commands.insertDivider(),
@@ -262,14 +297,11 @@ test('formatting keys and commands do nothing', async ({ page }) => {
       commands.selectBlocks(),
     ];
   });
-  expect(results.every((r) => r === false)).toBe(true);
-  expect(await md(page)).toBe('word\n');
-  const state = await page.evaluate(() => {
-    const editor = (window as any).editor;
-    return { bold: editor.isActive('bold'), code: editor.isActive('codeBlock'), attrs: editor.getAttributes('codeBlock') };
-  });
-  expect(state).toEqual({ bold: false, code: false, attrs: {} });
-  await expect(page.locator('.mbe-toolbar:visible')).toHaveCount(0);
+  expect(results).toEqual([true, true, false, false, false, false, false, false]);
+  expect(await md(page)).toBe('> - one\n> - two\n');
+  // Mod+Shift+6 (a section) has no text form: nothing happens.
+  await page.keyboard.press('ControlOrMeta+Shift+6');
+  expect(await md(page)).toBe('> - one\n> - two\n');
 });
 
 test('autocomplete: a tag popup opens while typing, a pick inserts the tag, and the slash menu stays off', async ({ page }) => {
@@ -370,22 +402,41 @@ test('Escape leaves the editor', async ({ page }) => {
   expect(await page.evaluate(() => (window as any).editor.selectedBlocks.length)).toBe(0);
 });
 
-test('paste inserts the plain text as written; copy and cut write the selected text', async ({ page }) => {
+test('paste writes HTML as Markdown, plain text as written (and in a fence), and a URL over a selection as a link', async ({ page }) => {
   await open(page, 'ab\n');
   await select(page, 1);
-  await paste(page, { 'text/plain': '**x**\r\n- y', 'text/html': '<b>z</b>' });
+  await paste(page, { 'text/plain': 'z', 'text/html': '<p>see <b>z</b> and <a href="https://x.y">it</a></p>' });
+  expect(await md(page)).toBe('asee **z** and [it](https://x.y)b\n');
+  // Plain text only: as written, line endings normalized; Mod+Shift+V keeps the text even with HTML.
+  await open(page, 'ab\n');
+  await select(page, 1);
+  await paste(page, { 'text/plain': '**x**\r\n- y' });
   expect(await md(page)).toBe('a**x**\n- yb\n');
-  // HTML alone pastes nothing: source mode takes plain text only.
-  await paste(page, { 'text/html': '<b>z</b>' });
-  expect(await md(page)).toBe('a**x**\n- yb\n');
-  await select(page, 1, 6);
+  await page.keyboard.press('ControlOrMeta+Shift+v');
+  await paste(page, { 'text/plain': 'plain', 'text/html': '<b>bold</b>' });
+  expect(await md(page)).toBe('a**x**\n- yplainb\n');
+  // Inside a fence the text stays as written.
+  await open(page, '```\ncode\n```\n');
+  await select(page, 8);
+  await paste(page, { 'text/plain': 'x', 'text/html': '<b>x</b>' });
+  expect(await md(page)).toBe('```\ncodex\n```\n');
+  // A URL over a selection makes a link; the editor's own HTML pastes its Markdown.
+  await open(page, 'see here now\n');
+  await select(page, 4, 8);
+  await paste(page, { 'text/plain': 'https://x.y' });
+  expect(await md(page)).toBe('see [here](https://x.y) now\n');
+  await select(page, 0);
+  await paste(page, { 'text/plain': 'ignored', 'text/html': '<div data-mbe-markdown="%2A%2Aown%2A%2A%0A"><p><strong>own</strong></p></div>' });
+  expect(await md(page)).toBe('**own**\nsee [here](https://x.y) now\n');
+  // Copy and cut write the selected text.
+  await select(page, 0, 7);
   const copied = await page.evaluate(() => {
     const transfer = new DataTransfer();
     document.activeElement!.dispatchEvent((window as any).clipboardEvent('cut', transfer));
     return [transfer.getData('text/plain'), transfer.getData('text/html')];
   });
-  expect(copied).toEqual(['**x**', '']);
-  expect(await md(page)).toBe('a\n- yb\n');
+  expect(copied).toEqual(['**own**', '']);
+  expect(await md(page)).toBe('\nsee [here](https://x.y) now\n');
 });
 
 test('Mod+A selects all the text, and Mod+Enter submits', async ({ page }) => {
