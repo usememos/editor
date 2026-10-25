@@ -137,7 +137,7 @@ class BNode {
   tight = true;
   // Table
   align: TableAlign[] = [];
-  rows: string[][] = [];
+  rows: Cell[][] = [];
 
   constructor(
     readonly type: BlockType,
@@ -417,7 +417,7 @@ class BlockParser {
         }
       } else if (type === 'table') {
         if (!this.blank && this.offset < this.line.length) {
-          const cells = splitRow(this.line.slice(this.offset));
+          const cells = splitRow(this.line.slice(this.offset), this.lineNumber, this.offset);
           const filled = Math.max(0, container.align.length - cells.length);
           if (this.filledCells + filled <= this.maxFilledCells) {
             this.filledCells += filled;
@@ -712,7 +712,9 @@ class BlockParser {
     lines.pop(); // the content ends with "\n"
     const headerLine = lines.pop();
     if (headerLine === undefined) return Start.None;
-    const header = splitRow(headerLine);
+    // The header row's content is the paragraph's last line, with its pad.
+    const written = container.lines[container.lines.length - 1]!;
+    const header = splitRow(headerLine, written.line, written.offset, written.pad);
     if (header.length !== align.length) return Start.None;
 
     this.closeUnmatchedBlocks();
@@ -871,7 +873,8 @@ class BlockParser {
           {
             type: 'table',
             align: node.align,
-            rows: node.rows.map((row) => row.map((cell) => parseInlines(cell, this.refs, this.options.inline, this.options.autolinks))),
+            rows: node.rows.map((row) => row.map((cell) => parseInlines(cell.text, this.refs, this.options.inline, this.options.autolinks))),
+            sources: node.rows.map((row) => row.map((cell) => cell.source)),
             lines: linesOf(node),
           },
         ];
@@ -956,39 +959,79 @@ function isTight(list: BNode): boolean {
   return true;
 }
 
+/** A cell of a table row: its text, trimmed and with `\|` read as `|`, and where it was written (see `ContentLine`). */
+interface Cell {
+  readonly text: string;
+  readonly source: ContentSource;
+}
+
+const EMPTY_CELL: Cell = { text: '', source: { lines: [], start: 0 } };
+
 /**
  * Splits a table row into cells. Leading and trailing pipes are optional,
- * and `\|` is a literal pipe (also inside code spans, as in GFM).
+ * and `\|` is a literal pipe (also inside code spans, as in GFM). `text` is
+ * the row from column `offset` of source line `line`, after `pad` spaces
+ * standing in for a tab the prefix consumed only partly.
  */
-function splitRow(line: string): string[] {
-  const s = line.replace(/^[ \t]+|[ \t]+$/g, '');
-  const cells: string[] = [];
-  let cell = '';
+function splitRow(text: string, line = 0, offset = 0, pad = 0): Cell[] {
+  let start = 0;
+  let end = text.length;
+  while (start < end && isSpaceOrTab(text[start])) start++;
+  while (end > start && isSpaceOrTab(text[end - 1])) end--;
+  const cells: Cell[] = [];
+  let value = '';
+  let pieces: ContentLine[] = [];
+  /** The cell's text from here on is written as such from `text[i]`. */
+  const piece = (i: number) => pieces.push({ at: value.length, line, offset: offset + i - pad, pad: 0 });
+  const close = () => {
+    cells.push(cell(value, pieces));
+    value = '';
+    pieces = [];
+  };
   let endsWithPipe = false;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i]!;
+  piece(start);
+  for (let i = start; i < end; i++) {
+    const c = text[i]!;
     endsWithPipe = false;
-    if (c === '\\' && i + 1 < s.length) {
-      cell += s[i + 1] === '|' ? '|' : c + s[i + 1];
+    if (c === '\\' && i + 1 < end) {
+      if (text[i + 1] === '|') {
+        piece(i + 1);
+        value += '|';
+      } else value += c + text[i + 1]!;
       i++;
     } else if (c === '|') {
-      cells.push(cell);
-      cell = '';
+      close();
+      piece(i + 1);
       endsWithPipe = true;
     } else {
-      cell += c;
+      value += c;
     }
   }
-  if (!endsWithPipe || cells.length === 0) cells.push(cell);
+  if (!endsWithPipe || cells.length === 0) close();
   // A leading pipe opens no cell: `|` alone is a row of none.
-  if (s.startsWith('|')) cells.shift();
-  return cells.map((c) => c.replace(/^[ \t]+|[ \t]+$/g, ''));
+  if (text[start] === '|') cells.shift();
+  return cells;
+}
+
+/** A cell from the text between its pipes and the pieces of it written as such: the whitespace around the text is trimmed off, and so are the pieces in it. */
+function cell(value: string, pieces: readonly ContentLine[]): Cell {
+  let lead = 0;
+  let end = value.length;
+  while (lead < end && isSpaceOrTab(value[lead])) lead++;
+  while (end > lead && isSpaceOrTab(value[end - 1])) end--;
+  const lines: ContentLine[] = [];
+  pieces.forEach((p, k) => {
+    if ((pieces[k + 1]?.at ?? value.length) <= lead) return;
+    const cut = Math.max(0, lead - p.at);
+    lines.push({ ...p, at: p.at - lead + cut, offset: p.offset + cut });
+  });
+  return { text: value.slice(lead, end), source: { lines, start: 0 } };
 }
 
 /** Pads a body row with empty cells or drops excess cells. */
-function fitRow(cells: string[], length: number): string[] {
+function fitRow(cells: Cell[], length: number): Cell[] {
   const row = cells.slice(0, length);
-  while (row.length < length) row.push('');
+  while (row.length < length) row.push(EMPTY_CELL);
   return row;
 }
 
@@ -996,7 +1039,7 @@ function parseDelimiterRow(line: string): TableAlign[] | null {
   const cells = splitRow(line);
   if (cells.length === 0) return null;
   const align: TableAlign[] = [];
-  for (const cell of cells) {
+  for (const { text: cell } of cells) {
     if (!reTableDelimiterCell.test(cell)) return null;
     const left = cell.startsWith(':');
     const right = cell.endsWith(':');

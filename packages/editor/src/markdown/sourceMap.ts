@@ -118,7 +118,9 @@ export class SegmentBuilder {
       const k = d - line.pad;
       const textLength = lineEnd - lineStart - line.offset;
       if (k < textLength) {
-        const n = Math.min(textLength - k, end - o);
+        // Up to the next entry's start: before the line's end for a piece of a table cell.
+        const next = lines[i + 1];
+        const n = Math.min(textLength - k, end - o, next ? next.at - o : Infinity);
         this.push({ from: m, to: m + n, srcFrom: lineStart + line.offset + k, srcTo: lineStart + line.offset + k + n, linear: true });
         o += n;
         m += n;

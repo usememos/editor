@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { decorationContext } from '../src/decorations';
 import { tags } from '../src/extensions/tags';
 import { markdownMarkup } from '../src/markdown/markup';
+import type { MarkdownOptions } from '../src/markdown/options';
+import { parseMarkdown } from '../src/markdown/parse';
 import { SYNC_LIMIT, SourceHighlighter, highlightDecorations, sourceDecorations, sourceInline } from '../src/sourceHighlight';
 import { codeBlock, inlineText } from '../src/model';
 
@@ -105,6 +107,60 @@ describe('markdownMarkup', () => {
     ]);
   });
 
+  it('marks the syntax inside table cells, and an escaped pipe', () => {
+    const md = '| a | b |\n| - | - |\n| [x](/u#f) | `c \\| d` \\| **e** |\n';
+    expect(show(md)).toEqual([
+      ['marker', '|'],
+      ['marker', '|'],
+      ['marker', '|'],
+      ['marker', '| - | - |'],
+      ['marker', '|'],
+      ['marker', '['],
+      ['link', 'x'],
+      ['marker', ']'],
+      ['marker', '('],
+      ['url', '/u#f'],
+      ['marker', ')'],
+      ['marker', '|'],
+      ['marker', '`'],
+      ['code', 'c '],
+      ['escape', '\\|'],
+      ['code', '| d'],
+      ['marker', '`'],
+      ['escape', '\\|'],
+      ['marker', '**'],
+      ['strong', 'e'],
+      ['marker', '**'],
+      ['marker', '|'],
+    ]);
+  });
+
+  it('places cell syntax after the prefixes of a table in a quoted list item', () => {
+    const md = '> - | #a | b |\n>   | - | - |\n>   | `#c` | [d](/e#f) |\n';
+    expect(show(md)).toEqual([
+      ['marker', '>'],
+      ['marker', '-'],
+      ['marker', '|'],
+      ['marker', '|'],
+      ['marker', '|'],
+      ['marker', '>'],
+      ['marker', '  | - | - |'],
+      ['marker', '>'],
+      ['marker', '|'],
+      ['marker', '`'],
+      ['code', '#c'],
+      ['marker', '`'],
+      ['marker', '|'],
+      ['marker', '['],
+      ['link', 'd'],
+      ['marker', ']'],
+      ['marker', '('],
+      ['url', '/e#f'],
+      ['marker', ')'],
+      ['marker', '|'],
+    ]);
+  });
+
   it('splits a range at line endings and prefixes', () => {
     const md = '> **a\n> b**\n';
     expect(show(md)).toEqual([
@@ -148,6 +204,36 @@ describe('highlighting', () => {
     const md = 'see #a and `#b` or [#c](x) **#d** <https://x.y/#e>\n';
     const ctx = decorationContext(codeBlock('', md), sourceInline(md, markdownMarkup(md)));
     expect(tags().decorations!(ctx).map((d) => md.slice(d.from, d.to))).toEqual(['#a', '#c', '#d']);
+  });
+
+  it('lets tags() find the tags rich mode finds, in every kind of block', () => {
+    const options: MarkdownOptions = { syntax: [tags().markdown!] };
+    const inSource = (md: string) => {
+      const ctx = decorationContext(codeBlock('', md), sourceInline(md, markdownMarkup(md, options)));
+      return tags().decorations!(ctx).map((d) => md.slice(d.from, d.to));
+    };
+    // `$` stands for the sample. Rich mode skips link text, which source mode shows as prose, so no sample puts a tag there.
+    const samples = ['#a [t](/u#b) #c', '`#d` #e', '<https://x.y/#f> #g', 'https://x.y/#h #i', '<b>#j</b> #k', '\\#l #m', '#n\\|#o', '**#p**'];
+    // Every block the model holds, with the sample in it; the rich side must find a tag in each, so a context that lowered to a raw block (never decorated) would fail here.
+    const contexts = ['$', '# $', '> $', '- $', '1. [ ] $', '> - $', '| h |\n| - |\n| $ |', '| $ |\n| - |', '| h | i |\n| - | - |\n| #q | $ |'];
+    for (const context of contexts) {
+      for (const sample of samples) {
+        const md = context.replaceAll('$', sample) + '\n';
+        const rich: string[] = [];
+        for (const block of parseMarkdown(md, options).blocks) {
+          const contents = block.type === 'table' ? block.rows.flat() : 'content' in block && block.type !== 'raw' ? [block.content] : [];
+          for (const content of contents) rich.push(...tags().decorations!(decorationContext(block, content)).map((d) => inlineText(content).slice(d.from, d.to)));
+        }
+        expect(rich.length, md).toBeGreaterThan(0);
+        expect(inSource(md), md).toEqual(rich);
+      }
+    }
+    // A table in a quote or a list item is a raw block in rich mode; source mode reads it as the table it is.
+    for (const sample of samples) {
+      const table = `| h | i |\n| - | - |\n| #q | ${sample} |\n`;
+      expect(inSource(table.replaceAll(/^/gm, '> ')), sample).toEqual(inSource(table));
+      expect(inSource(table.replace(/^/, '- ').replaceAll(/\n(?=.)/g, '\n  ')), sample).toEqual(inSource(table));
+    }
   });
 });
 

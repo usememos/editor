@@ -90,10 +90,24 @@ export function markdownMarkup(text: string, options?: MarkdownOptions): Markup 
       prefixMarkers(start, start + line.offset);
     }
   };
+  /** A table row's pipes, and the escapes that keep a pipe in a cell (`\|`), read as `splitRow` in blocks.ts does. */
+  const rowMarkers = (from: number, to: number) => {
+    for (let i = from; i < to; i++) {
+      if (text[i] === '\\' && i + 1 < to) {
+        if (text[i + 1] === '|') push('escape', i, i + 2);
+        i++;
+      } else if (text[i] === '|') push('marker', i, i + 1);
+    }
+  };
+  /** A leaf's content: its lines' prefixes, the text as `kind`, and the inline markup in it. */
   const inline = (source: ContentSource | undefined, nodes: readonly InlineNode[], kind?: MarkupKind) => {
     if (!source) return;
     contentLines(source);
     if (kind && nodes.length > 0) pieces(source, 0, Math.max(...nodes.map((n) => n.pos?.to ?? 0)), kind);
+    inlineMarkup(source, nodes);
+  };
+  /** The markup of inline nodes parsed from `source`. */
+  const inlineMarkup = (source: ContentSource, nodes: readonly InlineNode[]) => {
     const walk = (list: readonly InlineNode[]) => {
       for (const node of list) {
         const { pos } = node;
@@ -273,8 +287,10 @@ export function markdownMarkup(text: string, options?: MarkdownOptions): Markup 
             const line = lineRange(n);
             const at = bareLineMarkers(line);
             if (n === node.lines.start + 1) push('marker', at, line.to);
-            else for (let i = at; i < line.to; i++) if (text[i] === '|' && text[i - 1] !== '\\') push('marker', i, i + 1);
+            else rowMarkers(at, line.to);
           }
+          // Each cell's syntax, in the pieces of its row the cell was written in.
+          node.sources?.forEach((row, r) => row.forEach((source, c) => inlineMarkup(source, node.rows[r]?.[c] ?? [])));
         }
         break;
     }

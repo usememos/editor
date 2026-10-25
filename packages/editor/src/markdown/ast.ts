@@ -178,7 +178,9 @@ export type BlockNode =
  * text after the block's prefixes (quote markers, list indentation), followed
  * by "\n". `at` is where it starts in that content, `line` its 1-based source
  * line, `offset` where its text starts on that line, and `pad` the spaces that
- * stand in for the rest of a tab the prefix consumed only partly.
+ * stand in for the rest of a tab the prefix consumed only partly. A table
+ * cell's content is pieces of one line instead: one entry per run of its text
+ * written as such, an escaped pipe (`\|`, read as `|`) starting a new one.
  */
 export interface ContentLine {
   readonly at: number;
@@ -274,6 +276,8 @@ export interface TableNode {
   readonly align: TableAlign[];
   /** `rows[0]` is the header row. Every row has `align.length` cells. */
   readonly rows: InlineNode[][][];
+  /** Where each cell's content was written, by row and cell, for a table from the parser: the cell's inline nodes' `pos` count from its content's start. */
+  readonly sources?: readonly (readonly ContentSource[])[];
   /** The table's source lines: the header row, the delimiter row and the body rows. */
   readonly lines?: SourceLines;
 }
