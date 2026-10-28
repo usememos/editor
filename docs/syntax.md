@@ -125,7 +125,21 @@ Below
 > Second paragraph
 ```
 
-Each paragraph in a quote becomes one `quote` block. Adjacent quote blocks are saved as one quote, with a `>` line between paragraphs. Two quotes with a blank line between them stay two quotes: the first block of the second has `quoteStart`, and they are saved with the blank line. A quote that holds anything other than paragraphs and lists becomes a raw Markdown block.
+Each paragraph in a quote becomes one `quote` block. Adjacent quote blocks are saved as one quote, with a `>` line between paragraphs. Two quotes with a blank line between them stay two quotes: the first block of the second has `quoteStart`, and they are saved with the blank line.
+
+Every other block in a quote becomes its own block with `quote: true` (and `callout` in a callout): a heading, a code block, a table, a divider, an HTML block, an extension's block, and each item of a list, as below. Each is edited as that kind of block, inside the quote, and saved with `> ` before every line. Only a quote inside a quote, or a list the model cannot hold, becomes a raw Markdown block, with `quote: true` as well: the blocks around it in the quote stay blocks (see [Structure kept as source](#structure-kept-as-source)).
+
+```md
+> ## Heading in a quote
+>
+> | Habit | Minutes |
+> | --- | --- |
+> | Walk | 20 |
+>
+> ```js
+> const room = plan.filter((slot) => !slot.busy);
+> ```
+```
 
 A list in a quote becomes `listItem` blocks with `quote: true`, next to the quote's paragraphs:
 
@@ -135,8 +149,9 @@ A list in a quote becomes `listItem` blocks with `quote: true`, next to the quot
 > - Item 2: check abc
 ```
 
-- Adjacent quote blocks and quoted list items are one quote. They are saved as one blockquote: the paragraphs and the list as they are saved outside a quote, with `> ` before every line. An edited quote has a `>` line between a paragraph and a list: `> ✏️ **Quick note**`, `>`, `> - Item 1: check xyz`.
-- A list in a quote follows the rules of other lists: one paragraph per item, nested lists up to six levels. A list that breaks them makes the whole quote a raw Markdown block.
+- Adjacent quote blocks and quoted list items are one quote. They are saved as one blockquote: the paragraphs and the list as they are saved outside a quote, with `> ` before every line. An edited block of a quote has a `>` line between it and the next: `> ✏️ **Quick note!**`, `>`, `> - Item 1: check xyz`.
+- Editing one block of a quote rewrites only that block (a list counts as one block: all its items). The other blocks of the quote are saved as they were written, with the lines between them; a callout's marker line stays as written while the block after it is unchanged.
+- A list in a quote follows the rules of other lists: one paragraph per item, nested lists up to six levels. A list that breaks them is kept as one raw Markdown block inside the quote; the rest of the quote stays blocks.
 - A list in a quote and a list outside it are separate lists, saved with a blank line between.
 
 ### Callouts
@@ -229,11 +244,12 @@ A `<details>` element is a collapsible section when its opening tag and its `<su
 
 ### Structure kept as source
 
-The whole top-level list or quote is kept as one raw block with `syntax: "markdown"` when:
+The whole top-level list is kept as one raw block with `syntax: "markdown"` when:
 
 - a list item holds more than one paragraph, or any block other than a nested list;
-- lists nest more than six levels deep;
-- a quote holds anything other than paragraphs and lists, or a list that breaks these rules.
+- lists nest more than six levels deep.
+
+Inside a quote, only the block the model cannot hold is kept as source, as a raw block with `quote: true`: a quote inside the quote, or a list that breaks the rules above. Its source is the lines as they are inside the quote, without the quote markers; saving puts them back. The blocks around it in the quote stay blocks.
 
 Each of these examples loads as one raw Markdown block:
 
@@ -243,9 +259,14 @@ Each of these examples loads as one raw Markdown block:
   Second paragraph in the same item
 ```
 
+In this quote, the middle block is a raw block with `quote: true` holding `> A quote inside the quote`, and the two paragraphs are `quote` blocks:
+
 ```md
-> # Heading inside a quote
 > Text
+>
+> > A quote inside the quote
+>
+> More text
 ```
 
 A raw Markdown block is shown rendered, with the editor's own blocks: a quote or list item the model cannot hold is drawn as a container around its blocks, and a GitHub alert as a callout. While editing, the caret in the block, or a click on it, shows its source, which is edited as plain text. Read-only, it always shows rendered. An extension's own `markdown` view replaces this rendering.
@@ -256,15 +277,15 @@ Typed at the start of a paragraph. Undo, or Backspace right after the shortcut, 
 
 | Type | Becomes |
 | --- | --- |
-| `# ` to `###### ` | Heading, level 1 to 6 |
+| `# ` to `###### ` | Heading, level 1 to 6; in a quote or callout, a heading in it |
 | `- `, `* `, `+ ` | Bullet list item; in a quote or callout, a list item in it |
 | `1. `, `1) ` | Ordered list item, starting at that number; in a quote or callout, a list item in it |
 | `[ ] `, `[x] ` | Task list item (also at the start of a bullet item); in a quote or callout, a list item in it |
-| `> ` | Quote |
+| `> ` | Quote; nothing in a quote, which holds no quote |
 | `[!note] `, `[!tip] `, `[!important] `, `[!warning] `, `[!caution] ` (any case) | Callout of that type; in a quote, the whole quote becomes the callout |
 | `>>> ` | Collapsible section: the rest of the paragraph is its title |
-| ` ``` ` or ` ```lang `, then a space | Code block |
-| `---` | Divider, on the third `-` |
+| ` ``` ` or ` ```lang `, then a space | Code block; in a quote or callout, a code block in it |
+| `---` | Divider, on the third `-`; in a quote or callout, a divider in it |
 
 ## Inline syntax
 

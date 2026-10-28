@@ -38,6 +38,7 @@ import {
   table,
   withQuote,
   quoteKind,
+  withQuoteStart,
 } from '../model';
 
 export function htmlToDoc(html: string, parser?: DOMParser): Doc {
@@ -446,24 +447,21 @@ class Converter {
     for (const block of blocks) {
       switch (block.type) {
         case 'paragraph':
-        case 'heading':
         case 'quote':
-        case 'code':
-        case 'raw':
+          // A quote in the quote is part of it: the model holds no nested quotes.
           this.out.push(quote(block.content, undefined, callout));
           break;
-        case 'listItem':
-          this.out.push(withQuote(block, callout ?? 'quote'));
+        case 'details':
+        case 'detailsEnd':
+          this.out.push(block);
           break;
         default:
-          this.out.push(block);
+          this.out.push(withQuote(block, callout ?? 'quote'));
       }
     }
     // Right after a blockquote of the same kind, this one starts a new blockquote.
     const first = this.out[start];
-    if ((first?.type === 'quote' || first?.type === 'listItem') && quoteKind(first) !== null && quoteKind(this.out[start - 1]) === quoteKind(first)) {
-      this.out[start] = { ...first, quoteStart: true };
-    }
+    if (first && quoteKind(first) !== null && quoteKind(this.out[start - 1]) === quoteKind(first)) this.out[start] = withQuoteStart(first);
   }
 
   private table(el: Element, format: Format): void {

@@ -1,7 +1,7 @@
 // Helpers for syntax.test.ts: a compact text form of a document, so each
 // case in the spec reads as one line.
 
-import type { Block, Doc, Inline, Span } from '../src/model';
+import { type Block, type Doc, type Inline, type Span, isQuotable } from '../src/model';
 
 const TAGS: Record<string, string> = { bold: 'b', italic: 'i', strike: 's', code: 'code', html: 'html' };
 
@@ -19,8 +19,17 @@ export function inlineForm(inline: Inline): string {
   return inline.map(span).join('');
 }
 
-/** One block as one line. */
+/**
+ * One block as one line. A block in a quote starts with the quote and a
+ * slash: "quote/h2 Title", "callout(note)/bullet:0 item". "new": the block
+ * starts a new blockquote after one of the same kind.
+ */
 export function blockForm(b: Block): string {
+  const quoted = isQuotable(b) && b.quote ? `${b.quoteStart ? 'new ' : ''}${b.callout ? `callout(${b.callout})` : 'quote'}/` : '';
+  return quoted + ownForm(b);
+}
+
+function ownForm(b: Block): string {
   switch (b.type) {
     case 'paragraph':
       return `p ${inlineForm(b.content)}`;
@@ -29,11 +38,9 @@ export function blockForm(b: Block): string {
     case 'listItem': {
       const head = b.listType === 'task' ? `task${b.checked ? '[x]' : '[ ]'}` : b.listType;
       const start = b.start !== undefined ? `@${b.start}` : '';
-      const quoted = b.quote ? `${b.quoteStart ? 'new ' : ''}${b.callout ? `callout(${b.callout})` : 'quote'}/` : '';
-      return `${quoted}${head}${start}:${b.indent} ${inlineForm(b.content)}`;
+      return `${head}${start}:${b.indent} ${inlineForm(b.content)}`;
     }
     case 'quote':
-      // "new": the block starts a new blockquote after one of the same kind.
       return `${b.quoteStart ? 'new ' : ''}${b.callout ? `callout(${b.callout})` : 'quote'} ${inlineForm(b.content)}`;
     case 'code':
       return `code(${b.language}) ${inlineForm(b.content)}`;

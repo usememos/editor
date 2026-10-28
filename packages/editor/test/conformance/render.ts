@@ -124,7 +124,7 @@ function flow(blocks: HTMLElement[]): string {
   return out;
 }
 
-/** A quote part: a quote paragraph, or a list item inside a quote. Not a quote the model cannot hold, which renders whole. */
+/** A quote part: a quote paragraph, or a list item, heading, code block, raw block, divider or table inside a quote. Not a quote the model cannot hold, which renders whole. */
 function isQuotePart(el: HTMLElement): boolean {
   return el.tagName === 'BLOCKQUOTE' && (has(el, 'mbe-list-item') || !el.querySelector(':scope > .mbe-flow'));
 }
@@ -139,8 +139,8 @@ function quote(parts: HTMLElement[]): string {
       inner += lists(parts.slice(i, end));
       i = end;
     } else {
-      const content = parts[i]!.querySelector(':scope > .mbe-content') ?? parts[i]!;
-      inner += `<p>${inline(content)}</p>`;
+      // A quote paragraph holds its text; any other quoted block holds the block's own element (see renderBlock).
+      inner += has(parts[i]!, 'mbe-quote') ? `<p>${inline(parts[i]!)}</p>` : block(parts[i]!);
       i++;
     }
   }
@@ -182,26 +182,29 @@ function lists(items: HTMLElement[]): string {
 }
 
 function block(el: HTMLElement): string {
-  if (has(el, 'mbe-view-markdown')) return flow(Array.from(el.querySelector(':scope > .mbe-flow')!.children) as HTMLElement[]);
-  if (el.dataset.syntax === 'html') return has(el, 'mbe-view-html') ? inline(el) : `<pre>${escapeText(el.textContent ?? '')}</pre>`;
-  if (el.dataset.syntax) return `<pre data-raw="${escapeAttr(el.dataset.syntax)}">${escapeText(el.textContent ?? '')}</pre>`;
-  if (el.tagName === 'BLOCKQUOTE') {
-    // A quote the model cannot hold, such as one with a code block in it.
+  // A block in a quote is a blockquote holding the block's own element, which carries the block's data and views (see renderBlock).
+  const quoted = el.tagName === 'BLOCKQUOTE' && !has(el, 'mbe-quote') && !has(el, 'mbe-list-item') ? el.querySelector<HTMLElement>(':scope > .mbe-content') : null;
+  const own = quoted ?? el;
+  if (has(own, 'mbe-view-markdown')) return flow(Array.from(own.querySelector(':scope > .mbe-flow')!.children) as HTMLElement[]);
+  if (own.dataset.syntax === 'html') return has(own, 'mbe-view-html') ? inline(own) : `<pre>${escapeText(own.textContent ?? '')}</pre>`;
+  if (own.dataset.syntax) return `<pre data-raw="${escapeAttr(own.dataset.syntax)}">${escapeText(own.textContent ?? '')}</pre>`;
+  if (el.tagName === 'BLOCKQUOTE' && el.querySelector(':scope > .mbe-flow')) {
+    // A quote the model cannot hold, such as one inside a quote.
     const callout = el.dataset.callout;
     return `<blockquote${callout ? ` data-alert="${callout}"` : ''}>${flow(Array.from(el.querySelector(':scope > .mbe-flow')!.children) as HTMLElement[])}</blockquote>`;
   }
-  if (el.tagName === 'P' || /^H[1-6]$/.test(el.tagName)) {
-    const tag = el.tagName.toLowerCase();
-    return `<${tag}>${inline(el)}</${tag}>`;
+  if (own.tagName === 'P' || /^H[1-6]$/.test(own.tagName)) {
+    const tag = own.tagName.toLowerCase();
+    return `<${tag}>${inline(own)}</${tag}>`;
   }
   if (has(el, 'mbe-code')) {
-    const language = (el.dataset.language ?? '').split(/\s/)[0];
-    const code = el.querySelector('pre > code')!;
+    const language = (own.dataset.language ?? '').split(/\s/)[0];
+    const code = own.querySelector('pre > code')!;
     return `<pre><code${language ? ` class="language-${escapeAttr(language)}"` : ''}>${text(code.textContent ?? '', true)}</code></pre>`;
   }
   if (has(el, 'mbe-divider')) return '<hr>';
   if (has(el, 'mbe-table')) {
-    const rows = Array.from(el.querySelectorAll('tr')).map((tr) => {
+    const rows = Array.from(own.querySelectorAll('tr')).map((tr) => {
       const cells = Array.from(tr.children as HTMLCollectionOf<HTMLElement>).map((cell) => {
         const tag = cell.tagName.toLowerCase();
         const align = cell.style.textAlign;
@@ -212,7 +215,7 @@ function block(el: HTMLElement): string {
     return `<table>${rows.join('')}</table>`;
   }
   if (has(el, 'mbe-details-end')) return '';
-  return `<div data-unknown-block="${escapeAttr(el.className)}">${inline(el)}</div>`;
+  return `<div data-unknown-block="${escapeAttr(el.className)}">${inline(own)}</div>`;
 }
 
 const MARKS: Record<string, string> = { STRONG: 'strong', EM: 'em', S: 'del', CODE: 'code' };

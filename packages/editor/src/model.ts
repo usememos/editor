@@ -75,7 +75,23 @@ export interface ParagraphBlock {
   readonly content: Inline;
 }
 
-export interface HeadingBlock {
+/**
+ * The fields that put a block inside a blockquote. A paragraph in a quote is
+ * a `quote` block instead; every other block that Markdown allows in a quote
+ * (a list item, heading, code block, raw block, table or divider) carries
+ * these, and forms one blockquote with the quoted blocks around it (see
+ * `quoteKind`).
+ */
+export interface Quoted {
+  /** The block is inside a blockquote. */
+  readonly quote?: true;
+  /** Quoted blocks only: the block is inside a callout of this type. */
+  readonly callout?: CalloutType;
+  /** Quoted blocks only: the block starts a new blockquote (see `QuoteBlock.quoteStart`). */
+  readonly quoteStart?: true;
+}
+
+export interface HeadingBlock extends Quoted {
   readonly id: string;
   readonly type: 'heading';
   readonly level: HeadingLevel;
@@ -83,7 +99,7 @@ export interface HeadingBlock {
 }
 
 /** One list item. Adjacent items form a list; `indent` gives nesting (0 to MAX_INDENT). */
-export interface ListItemBlock {
+export interface ListItemBlock extends Quoted {
   readonly id: string;
   readonly type: 'listItem';
   readonly listType: ListType;
@@ -92,12 +108,6 @@ export interface ListItemBlock {
   readonly checked: boolean;
   /** Ordered items only: the number of the first item of a list. Ignored on later items. */
   readonly start?: number;
-  /** The item is inside a blockquote, with the quote blocks and quoted items around it (see `quoteKind`). */
-  readonly quote?: true;
-  /** Quoted items only: the item is inside a callout of this type. */
-  readonly callout?: CalloutType;
-  /** Quoted items only: the item starts a new blockquote (see `QuoteBlock.quoteStart`). */
-  readonly quoteStart?: true;
   readonly content: Inline;
 }
 
@@ -123,7 +133,7 @@ export interface QuoteBlock {
 }
 
 /** Code block. Content is plain text (no marks); lines are separated by "\n". */
-export interface CodeBlock {
+export interface CodeBlock extends Quoted {
   readonly id: string;
   readonly type: 'code';
   readonly language: string;
@@ -133,10 +143,10 @@ export interface CodeBlock {
 /**
  * Markdown kept as source, shown and edited as plain text and saved
  * verbatim. `syntax` says what it is: `html` for an HTML block, `markdown`
- * for structure the editor cannot edit as blocks (a list inside a quote, a
+ * for structure the editor cannot edit as blocks (a quote inside a quote, a
  * code block inside a list item), or the name of a syntax extension.
  */
-export interface RawBlock {
+export interface RawBlock extends Quoted {
   readonly id: string;
   readonly type: 'raw';
   readonly syntax: string;
@@ -144,14 +154,14 @@ export interface RawBlock {
 }
 
 /** GFM table. `rows[0]` is the header row. Every row has `align.length` cells. */
-export interface TableBlock {
+export interface TableBlock extends Quoted {
   readonly id: string;
   readonly type: 'table';
   readonly align: readonly Align[];
   readonly rows: readonly (readonly Inline[])[];
 }
 
-export interface DividerBlock {
+export interface DividerBlock extends Quoted {
   readonly id: string;
   readonly type: 'divider';
 }
@@ -178,6 +188,8 @@ export interface DetailsEndBlock {
 export type TextBlock = ParagraphBlock | HeadingBlock | ListItemBlock | QuoteBlock | CodeBlock | RawBlock | DetailsBlock;
 export type Block = TextBlock | TableBlock | DividerBlock | DetailsEndBlock;
 export type BlockType = Block['type'];
+/** The blocks that go inside a blockquote with the `Quoted` fields: every block but a paragraph (a `quote` block there) and a collapsible section. */
+export type QuotableBlock = HeadingBlock | ListItemBlock | CodeBlock | RawBlock | TableBlock | DividerBlock;
 
 export interface Doc {
   readonly blocks: readonly Block[];
@@ -307,14 +319,20 @@ export function plain(text: string): Span[] {
 
 /**
  * Which blockquote a block is part of: `'quote'` for a plain quote, or the
- * type of a callout. Quote blocks and quoted list items are the only blocks
- * in quotes; adjacent ones of the same kind form one blockquote.
+ * type of a callout. Quote blocks and blocks with the `quote` flag are the
+ * only blocks in quotes; adjacent ones of the same kind form one blockquote.
  */
 export type QuoteKind = 'quote' | CalloutType;
 
+/** True for a block that carries the `Quoted` fields: a quoted one, or one a quote could hold. */
+export function isQuotable(block: Block): block is QuotableBlock {
+  return block.type !== 'paragraph' && block.type !== 'quote' && block.type !== 'details' && block.type !== 'detailsEnd';
+}
+
 /** The blockquote a block is part of, or null for a block outside quotes. */
 export function quoteKind(block: Block | undefined): QuoteKind | null {
-  if (block?.type === 'quote' || (block?.type === 'listItem' && block.quote)) return block.callout ?? 'quote';
+  if (!block) return null;
+  if (block.type === 'quote' || (isQuotable(block) && block.quote)) return block.callout ?? 'quote';
   return null;
 }
 
@@ -325,28 +343,55 @@ export function sameQuote(a: Block | undefined, b: Block | undefined): boolean {
 }
 
 /** True if a quoted block starts a new blockquote after one of the same kind (`quoteStart`). */
-function startsQuote(block: Block | undefined): boolean {
-  return (block?.type === 'quote' || block?.type === 'listItem') && block.quoteStart === true;
+export function startsQuote(block: Block | undefined): boolean {
+  return quoteKind(block) !== null && (block as QuoteBlock | QuotableBlock).quoteStart === true;
+}
+
+/** A quoted `block` as the start of a new blockquote after one of the same kind (see `QuoteBlock.quoteStart`). A block outside quotes is returned as it is. */
+export function withQuoteStart<B extends Block>(block: B): B {
+  if (quoteKind(block) === null || startsQuote(block)) return block;
+  return { ...block, quoteStart: true } as B;
+}
+
+/** `block` without its `quoteStart`: it no longer starts a blockquote. */
+export function withoutQuoteStart<B extends Block>(block: B): B {
+  if (!startsQuote(block)) return block;
+  const { quoteStart: _start, ...rest } = block as B & { quoteStart?: true };
+  return rest as B;
 }
 
 /** `to` with the `quoteStart` of `from`, when both are quoted: a block that changes type keeps its quote boundary. */
 export function keepQuoteStart<B extends Block>(from: Block, to: B): B {
-  if (!startsQuote(from) || quoteKind(to) === null || startsQuote(to)) return to;
-  return { ...to, quoteStart: true };
+  return startsQuote(from) ? withQuoteStart(to) : to;
 }
 
-/** A list item moved into a blockquote of `kind`, or out of any with null. Keeps its ID. */
-export function withQuote(item: ListItemBlock, kind: QuoteKind | null): ListItemBlock {
-  const { quote: _quote, callout: _callout, quoteStart, ...rest } = item;
+/**
+ * A block moved into a blockquote of `kind`, or out of any with null. Keeps
+ * its ID and its `quoteStart`. A paragraph becomes a quote block and a quote
+ * block a paragraph; a collapsible section's blocks stay as they are.
+ */
+export function withQuote(item: ListItemBlock, kind: QuoteKind | null): ListItemBlock;
+export function withQuote(block: TextBlock, kind: QuoteKind | null): TextBlock;
+export function withQuote(block: Block, kind: QuoteKind | null): Block;
+export function withQuote(block: Block, kind: QuoteKind | null): Block {
+  // The same object when nothing changes: edits keep block identity, which the source-preserving save relies on.
+  if (quoteKind(block) === kind) return block;
+  if (block.type === 'paragraph') return kind ? quote(block.content, block.id, kind === 'quote' ? undefined : kind) : block;
+  if (block.type === 'quote') {
+    if (!kind) return paragraph(block.content, block.id);
+    const { callout: _callout, ...rest } = block;
+    return kind === 'quote' ? rest : { ...rest, callout: kind };
+  }
+  if (!isQuotable(block)) return block;
+  const { quote: _quote, callout: _callout, quoteStart, ...rest } = block;
   if (!kind) return rest;
-  if (quoteStart) return kind === 'quote' ? { ...rest, quote: true, quoteStart } : { ...rest, quote: true, callout: kind, quoteStart };
-  return kind === 'quote' ? { ...rest, quote: true } : { ...rest, quote: true, callout: kind };
+  const quoted = kind === 'quote' ? { ...rest, quote: true as const } : { ...rest, quote: true as const, callout: kind };
+  return quoteStart ? { ...quoted, quoteStart } : quoted;
 }
 
-/** A block as it is inside its blockquote: a quote block is a paragraph there, and a quoted list item a plain one. */
+/** A block as it is inside its blockquote: a quote block is a paragraph there, and a quoted block a plain one. */
 export function unquote(block: Block): Block {
-  if (block.type === 'quote') return paragraph(block.content, block.id);
-  return block.type === 'listItem' && block.quote ? withQuote(block, null) : block;
+  return withQuote(block, null);
 }
 
 // ---------------------------------------------------------------------------

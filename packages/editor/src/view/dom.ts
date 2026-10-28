@@ -24,6 +24,7 @@ import {
   imageBlockOffset,
   inlineLength,
   inlineText,
+  isQuotable,
   quoteKind,
   sameQuote,
   sliceInline,
@@ -75,8 +76,13 @@ function classes(...names: (string | undefined)[]): string {
   return names.filter(Boolean).join(' ');
 }
 
-/** The theme's classes for a block's element. */
+/** The theme's classes for a block's element. A block in a quote is a blockquote too, so it takes the quote's class as well. */
 function blockClasses(block: Block, theme: ThemeClasses): string | undefined {
+  const own = ownClasses(block, theme);
+  return isQuotable(block) && block.quote ? classes(own, theme.blockquote) || undefined : own;
+}
+
+function ownClasses(block: Block, theme: ThemeClasses): string | undefined {
   switch (block.type) {
     case 'paragraph':
       return theme.paragraph;
@@ -85,8 +91,7 @@ function blockClasses(block: Block, theme: ThemeClasses): string | undefined {
     case 'quote':
       return theme.blockquote;
     case 'listItem':
-      // An item in a quote is a blockquote too.
-      return block.quote ? classes(theme[`${block.listType}List`], theme.blockquote) || undefined : theme[`${block.listType}List`];
+      return theme[`${block.listType}List`];
     case 'code':
       return theme.codeBlock;
     case 'table':
@@ -400,6 +405,24 @@ function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HT
       root.appendChild(tableEl);
       break;
     }
+  }
+  // A heading, code block, raw block, divider or table in a quote is a
+  // blockquote holding the block's usual element as its content, as a quoted
+  // list item is one holding the item's marker and text. The quote's rules
+  // style the blockquote; the element inside keeps the block's own.
+  if (!hosted && !ctx.source && block.type !== 'listItem' && isQuotable(block) && block.quote) {
+    const inner = root;
+    root = el('blockquote');
+    if (block.type === 'heading') root.dir = 'auto';
+    if (block.callout) {
+      root.dataset.callout = block.callout;
+      root.appendChild(calloutIcon(block.callout, ctx));
+    }
+    inner.classList.add('mbe-content');
+    if (inner.contentEditable === 'false') root.contentEditable = 'false';
+    if (inner.classList.contains('mbe-view-block')) root.classList.add('mbe-view-block');
+    for (const key of ['language', 'syntax'] as const) if (inner.dataset[key] !== undefined) root.dataset[key] = inner.dataset[key];
+    root.appendChild(inner);
   }
   root.setAttribute(BLOCK_ATTR, block.id);
   // One className write instead of several classList calls: this runs for every block on load.
@@ -721,13 +744,20 @@ function renderMarkdown(source: string, ctx: RenderContext): HTMLElement {
   return root;
 }
 
+/**
+ * Syntax tree nodes rendered as blocks. Runs of nodes the model can hold
+ * render as blocks; a quote holding a quote, or a list the model cannot hold,
+ * becomes a container whose content renders the same way. The tree is not
+ * lowered with its source here, which would parse the source of each nested
+ * quote again at every level.
+ */
 function renderNodes(nodes: readonly BlockNode[], ctx: RenderContext): HTMLElement {
   const options = ctx.markdown ?? DEFAULT_MARKDOWN;
   const flow = ctx.doc.createElement('div');
   flow.className = 'mbe-flow';
   let run: Block[] = [];
   for (const node of nodes) {
-    const blocks = lowerIfFits(node, options);
+    const blocks = lowerIfFits(node, options, run[run.length - 1]);
     if (blocks) {
       run.push(...blocks);
       continue;

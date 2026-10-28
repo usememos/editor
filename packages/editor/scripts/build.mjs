@@ -12,7 +12,11 @@ const src = (p) => join(pkg, 'src', p);
 
 rmSync(dist, { recursive: true, force: true });
 
-const shared = { bundle: true, format: 'esm', target: 'es2022', sourcemap: true, logLevel: 'warning' };
+// The published files are minified, with source maps beside them for
+// readable stack traces. An app's bundler minifies them again either way;
+// minifying here keeps the install small and makes `npm run size` the size
+// of the files themselves.
+const shared = { bundle: true, format: 'esm', target: 'es2022', minify: true, sourcemap: true, logLevel: 'warning' };
 
 // The core. #entities stays an import so the package's "imports" map picks
 // the browser or the Node file, as it does in development.
@@ -46,9 +50,8 @@ await build({
   outdir: dist,
 });
 
-// style.css inlines its two @imports; base.css and theme.css ship as they are.
-await build({ ...shared, entryPoints: [src('style.css')], outfile: join(dist, 'style.css'), sourcemap: false });
-for (const file of ['base.css', 'theme.css']) copyFileSync(src(file), join(dist, file));
+// style.css inlines its two @imports; base.css and theme.css ship on their own too, for apps that import one of them.
+for (const file of ['style.css', 'base.css', 'theme.css']) await build({ ...shared, entryPoints: [src(file)], outfile: join(dist, file), sourcemap: false });
 
 execFileSync('npx', ['tsc', '-p', join(pkg, 'tsconfig.build.json')], { stdio: 'inherit' });
 addExtensions(join(dist, 'types'));

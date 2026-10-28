@@ -20,7 +20,7 @@ import { type Block, details, detailsEnd, plain } from '../model';
 import { decodeEntities } from './inline';
 import type { BlockNode } from './ast';
 import { parseAst } from './blocks';
-import { lowerTopLevel } from './lower';
+import { lowerTopLevel, sourceText } from './lower';
 import { DEFAULT_MARKDOWN, type MarkdownOptions } from './options';
 
 /** Elements that have no closing tag. */
@@ -142,19 +142,12 @@ export interface HtmlSection {
 export function splitHtmlSection(source: string, options: MarkdownOptions = DEFAULT_MARKDOWN): HtmlSection | null {
   const root = parseAst(source, options);
   if (root.children.every((node) => node.type === 'htmlBlock')) return null;
-  const lineStarts = [0];
-  const lineEnds: number[] = [];
-  const re = /\r\n|\n|\r/g;
-  for (let m = re.exec(source); m; m = re.exec(source)) {
-    lineEnds.push(m.index);
-    lineStarts.push(m.index + m[0].length);
-  }
-  lineEnds.push(source.length);
+  const src = sourceText(source);
   // The source lines of top-level node `i`, as in loadMarkdown.
   const textOf = (i: number): string => {
     const lines = root.lines[i]!;
-    const from = lineStarts[lines.start - 1] ?? source.length;
-    const to = lineEnds[Math.max(lines.start, lines.end) - 1] ?? source.length;
+    const from = src.lines.starts[lines.start - 1] ?? source.length;
+    const to = src.lines.ends[Math.max(lines.start, lines.end) - 1] ?? source.length;
     return source.slice(from, Math.max(from, to));
   };
   const parts: string[] = [];
@@ -171,7 +164,7 @@ export function splitHtmlSection(source: string, options: MarkdownOptions = DEFA
       slots.push(slot);
       parts.push(`\n${slotMarker(slots.length - 1)}\n`);
     }
-    slot.push(...lowerTopLevel(node, options, textOf(i), slot[slot.length - 1]));
+    slot.push(...lowerTopLevel(node, options, textOf(i), slot[slot.length - 1], src));
   });
   return { html: parts.join('\n'), slots };
 }

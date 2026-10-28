@@ -36,32 +36,39 @@ export const test = base.extend<{ pageErrors: string[]; clipboardEvents: void }>
 export const md = (page: Page) => page.evaluate(() => (window as any).editor.getMarkdown() as string);
 
 /** Compact form of the document: "p:text", "h2:text", "ul0:text", "task1[x]:text", "quote:text", "note:text" (a callout), "quote/ul0:text" (a list item in a quote), "details:title", "/details", "code(js):text", "hr", "table:a|b/c|d". */
+/**
+ * The document's blocks, one short line each: "p:text", "h2:Title", "ul0:item", "quote:text",
+ * "code(js):x", "hr", "table:a|b/c|d". A block in a quote or callout starts with it and a slash:
+ * "quote/ul0:item", "note/h2:Title", "quote/hr".
+ */
 export const blocks = (page: Page) =>
   page.evaluate(() => {
     const text = (c: any[]) => c.map((s) => s.text).join('');
     return (window as any).editor.state.doc.blocks.map((b: any) => {
+      const quoted = b.quote ? `${b.callout ?? 'quote'}/` : '';
       switch (b.type) {
         case 'paragraph':
           return `p:${text(b.content)}`;
         case 'heading':
-          return `h${b.level}:${text(b.content)}`;
+          return `${quoted}h${b.level}:${text(b.content)}`;
         case 'listItem': {
           const kind = b.listType === 'bullet' ? 'ul' : b.listType === 'ordered' ? 'ol' : 'task';
-          const quoted = b.quote ? `${b.callout ?? 'quote'}/` : '';
           return `${quoted}${kind}${b.indent}${b.listType === 'task' ? (b.checked ? '[x]' : '[ ]') : ''}:${text(b.content)}`;
         }
         case 'quote':
           return `${b.callout ?? 'quote'}:${text(b.content)}`;
         case 'code':
-          return `code(${b.language}):${text(b.content)}`;
+          return `${quoted}code(${b.language}):${text(b.content)}`;
+        case 'raw':
+          return `${quoted}raw(${b.syntax}):${text(b.content)}`;
         case 'divider':
-          return 'hr';
+          return `${quoted}hr`;
         case 'details':
           return `details:${text(b.content)}`;
         case 'detailsEnd':
           return '/details';
         case 'table':
-          return `table:${b.rows.map((r: any[]) => r.map(text).join('|')).join('/')}`;
+          return `${quoted}table:${b.rows.map((r: any[]) => r.map(text).join('|')).join('/')}`;
         default:
           return b.type;
       }

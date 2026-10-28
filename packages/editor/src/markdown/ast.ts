@@ -218,6 +218,8 @@ export interface HeadingNode {
 export interface BlockQuoteNode {
   readonly type: 'blockQuote';
   readonly children: BlockNode[];
+  /** The quote's source lines, from a quote the parser built. */
+  readonly lines?: SourceLines;
 }
 
 export interface ListNode {
@@ -230,6 +232,8 @@ export interface ListNode {
   /** A tight list renders its paragraphs without `<p>` tags. */
   readonly tight: boolean;
   readonly items: ListItemNode[];
+  /** The list's source lines, from a list the parser built. */
+  readonly lines?: SourceLines;
 }
 
 export interface ListItemNode {

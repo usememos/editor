@@ -297,9 +297,9 @@ test('a font token of inherit keeps the sizes of the code language label and raw
   const [langSize, langLineHeight] = await size(page, '#editor .mbe-code-lang');
   expect(langSize).toBe('15px');
   expect(parseFloat(langLineHeight)).toBeGreaterThanOrEqual(17);
-  // A raw block shows its source when clicked.
+  // A raw block shows its source when clicked. This one is the nested quote, a raw block inside the quote.
   await page.locator('#editor > .mbe-raw').click();
-  expect(await size(page, '#editor pre.mbe-raw')).toEqual(['17.5px', '21.5px']);
+  expect(await size(page, '#editor :is(pre.mbe-raw, .mbe-raw > pre)')).toEqual(['17.5px', '21.5px']);
 });
 
 test('headings, code, tables and the language label scale with fontSize and lineHeight', async ({ page }) => {

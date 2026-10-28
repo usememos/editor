@@ -81,13 +81,14 @@
   background: var(--mbe-bg);
 }
 
-/* Headings: close to the body size (24, 20, 18 and 16px at the defaults), each with the body's leading. */
-:is(.mbe-root, .mbe-flow) > :is(h1, h2, h3, h4, h5, h6) { font-weight: 600; line-height: calc(1em + var(--mbe-leading)); }
-:is(.mbe-root, .mbe-flow) > h1 { font-size: calc(var(--mbe-font-size) * 1.5); }
-:is(.mbe-root, .mbe-flow) > h2 { font-size: calc(var(--mbe-font-size) * 1.25); }
-:is(.mbe-root, .mbe-flow) > h3 { font-size: calc(var(--mbe-font-size) * 1.125); }
-:is(.mbe-root, .mbe-flow) > :is(h4, h5, h6) { font-size: var(--mbe-font-size); }
-:is(.mbe-root, .mbe-flow) > h6 { color: var(--mbe-muted); }
+/* Headings: close to the body size (24, 20, 18 and 16px at the defaults), each with the body's leading.
+   A heading in a quote sits inside its blockquote (see renderBlock) and looks the same. */
+:is(.mbe-root, .mbe-flow, .mbe-root > blockquote, .mbe-flow > blockquote) > :is(h1, h2, h3, h4, h5, h6) { font-weight: 600; line-height: calc(1em + var(--mbe-leading)); }
+:is(.mbe-root, .mbe-flow, .mbe-root > blockquote, .mbe-flow > blockquote) > h1 { font-size: calc(var(--mbe-font-size) * 1.5); }
+:is(.mbe-root, .mbe-flow, .mbe-root > blockquote, .mbe-flow > blockquote) > h2 { font-size: calc(var(--mbe-font-size) * 1.25); }
+:is(.mbe-root, .mbe-flow, .mbe-root > blockquote, .mbe-flow > blockquote) > h3 { font-size: calc(var(--mbe-font-size) * 1.125); }
+:is(.mbe-root, .mbe-flow, .mbe-root > blockquote, .mbe-flow > blockquote) > :is(h4, h5, h6) { font-size: var(--mbe-font-size); }
+:is(.mbe-root, .mbe-flow, .mbe-root > blockquote, .mbe-flow > blockquote) > h6 { color: var(--mbe-muted); }
 
 /* Block selection */
 .mbe-root > .mbe-block.mbe-block-selected {
@@ -188,8 +189,11 @@
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
 }
 
-/* Code: a quiet panel, with the language as a small label above the code. */
-:is(.mbe-root, .mbe-flow) > .mbe-code:not(.mbe-view-block) {
+/* Code: a quiet panel, with the language as a small label above the code.
+   In a quote the panel is the block's element inside the blockquote, so the
+   quote's bar and padding stay outside it. */
+:is(.mbe-root, .mbe-flow) > .mbe-code:not(.mbe-view-block, blockquote),
+:is(.mbe-root, .mbe-flow) > blockquote.mbe-code:not(.mbe-view-block) > .mbe-content {
   background: var(--mbe-block-code-bg);
   border-radius: var(--mbe-radius);
   overflow: hidden;
@@ -208,7 +212,8 @@
 .mbe-root .mbe-code-copy.mbe-copied { color: var(--mbe-accent); }
 /* Block source text: code blocks and raw blocks. 14px on 22px lines at the defaults. */
 :is(.mbe-root, .mbe-flow) > .mbe-code pre,
-:is(.mbe-root, .mbe-flow) > pre.mbe-raw {
+:is(.mbe-root, .mbe-flow) > pre.mbe-raw,
+:is(.mbe-root, .mbe-flow) > blockquote.mbe-raw > pre {
   font-size: calc(var(--mbe-font-size) * 0.875);
   line-height: calc(1em + var(--mbe-leading));
   font-family: var(--mbe-mono);
@@ -228,7 +233,8 @@
 .mbe-root > .mbe-source .mbe-src-url { color: var(--mbe-link); }
 
 /* Raw blocks: Markdown kept as source (HTML, structure the editor cannot hold, extension syntax) */
-:is(.mbe-root, .mbe-flow) > pre.mbe-raw { color: var(--mbe-muted); }
+:is(.mbe-root, .mbe-flow) > pre.mbe-raw,
+:is(.mbe-root, .mbe-flow) > blockquote.mbe-raw > pre { color: var(--mbe-muted); }
 
 /* Rendered HTML: its elements look like the Markdown they stand for, as on GitHub. */
 .mbe-root .mbe-view-html blockquote:not(.mbe-flow *) {
@@ -301,9 +307,8 @@
 /* Placeholders and hints */
 .mbe-root > .mbe-paragraph.mbe-empty:only-child::before,
 .mbe-root > .mbe-paragraph.mbe-empty.mbe-show-hint::before,
-.mbe-root:not(.mbe-readonly) > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote:not(.mbe-list-item))::before,
-.mbe-root:not(.mbe-readonly) > .mbe-list-item.mbe-empty[data-hint] > .mbe-content::before,
-.mbe-root:not(.mbe-readonly) > .mbe-details.mbe-empty[data-hint] > .mbe-content::before,
+.mbe-root:not(.mbe-readonly) > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote.mbe-quote)::before,
+.mbe-root:not(.mbe-readonly) > :is(.mbe-list-item, .mbe-heading, .mbe-details).mbe-empty[data-hint] > .mbe-content::before,
 .mbe-root > .mbe-source.mbe-empty:only-child > .mbe-source-text::before {
   color: var(--mbe-muted);
   opacity: 0.7;

@@ -74,16 +74,8 @@ describe('lowering: Markdown → model', () => {
     ]);
   });
 
-  it('keeps lists and quotes the model cannot hold as Markdown source', () => {
-    const cases = [
-      '- p1\n\n  p2\n- next',
-      '- item\n  ```js\n  code\n  ```',
-      '- item\n\n  > q',
-      '> - a\n>\n>   p2',
-      '> # H',
-      '>     code',
-      '> > nested',
-    ];
+  it('keeps lists the model cannot hold as Markdown source', () => {
+    const cases = ['- p1\n\n  p2\n- next', '- item\n  ```js\n  code\n  ```', '- item\n\n  > q'];
     for (const md of cases) {
       expect(shape(parseMarkdown(`before\n\n${md}\n\nafter`)), md).toEqual([
         { type: 'paragraph', content: [t('before')] },
@@ -91,6 +83,22 @@ describe('lowering: Markdown → model', () => {
         { type: 'paragraph', content: [t('after')] },
       ]);
     }
+  });
+
+  it('keeps what a quote holds that the model cannot as quoted Markdown source, without the quote markers', () => {
+    const cases: [string, string][] = [
+      ['> - a\n>\n>   p2', '- a\n\n  p2'],
+      ['> > nested', '> nested'],
+      ['> > a\n> > b\n>\n> c', '> a\n> b'],
+    ];
+    for (const [md, inner] of cases) {
+      const blocks = shape(parseMarkdown(`before\n\n${md}\n\nafter`));
+      expect(blocks[1], md).toEqual({ type: 'raw', syntax: 'markdown', quote: true, content: [t(inner)] });
+    }
+    expect(shape(parseMarkdown('> # H\n>     code'))).toEqual([
+      { type: 'heading', level: 1, quote: true, content: [t('H')] },
+      { type: 'code', language: '', quote: true, content: [t('code')] },
+    ]);
   });
 
   it('lowers a list in a quote to list items in the quote', () => {

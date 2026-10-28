@@ -854,7 +854,7 @@ class BlockParser {
       case 'rawBlock':
         return [{ type: 'raw', name: node.syntax, value: node.content, source: contentSource(node) }];
       case 'blockQuote':
-        return [{ type: 'blockQuote', children: node.children.flatMap((c) => this.toAst(c)) }];
+        return [{ type: 'blockQuote', children: node.children.flatMap((c) => this.toAst(c)), lines: linesOf(node) }];
       case 'list': {
         const data = node.list!;
         return [
@@ -865,6 +865,7 @@ class BlockParser {
             marker: data.type === 'ordered' ? data.delimiter : data.bulletChar,
             tight: node.tight,
             items: node.children.map((item) => this.itemToAst(item)),
+            lines: linesOf(node),
           },
         ];
       }

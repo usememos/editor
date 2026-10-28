@@ -8,7 +8,8 @@ test('line-break dialect: an untouched note saves byte for byte', async ({ page 
   await open(page, note);
   expect(await md(page)).toBe(note);
   await expect(page.locator('#editor > .mbe-raw[data-syntax="math"]')).toHaveCount(1);
-  await expect(page.locator('#editor > .mbe-raw[data-syntax="markdown"]')).toHaveCount(1);
+  await expect(page.locator('#editor > .mbe-raw[data-syntax="markdown"]')).toHaveCount(0);
+  await expect(page.locator('#editor > blockquote.mbe-heading h1')).toHaveText('quoted heading');
   await expect(page.locator('#editor .mbe-footnote-ref')).toHaveText('1');
 });
 

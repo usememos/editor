@@ -72,26 +72,151 @@ test('a list in a callout keeps one icon and one box', async ({ page }) => {
   expect(await blocks(page)).toEqual(['tip/ul0:one', 'tip/ul0:two', 'tip:Text.']);
 });
 
-test('a quote the editor cannot hold as blocks shows rendered, and its source when clicked', async ({ page }) => {
-  const doc = 'Before.\n\n> [!WARNING]\n> Run this first:\n> ```\n> rm -rf build\n> ```\n> - then this\n\n- Step\n\n  Second paragraph.\n';
+test('a quote inside a quote, or a list the editor cannot hold, is one raw block in the quote; the rest of the quote stays blocks', async ({ page }) => {
+  const doc = 'Before.\n\n> [!WARNING]\n> Run this first:\n> ```\n> rm -rf build\n> ```\n> > nested\n> - then this\n\n- Step\n\n  Second paragraph.\n';
   await page.goto(`/?md=${encodeURIComponent(doc)}`);
+  expect(await blocks(page)).toEqual([
+    'p:Before.',
+    'warning:Run this first:',
+    'warning/code():rm -rf build',
+    'warning/raw(markdown):> nested',
+    'warning/ul0:then this',
+    'raw(markdown):- Step\n\n  Second paragraph.',
+  ]);
   const raw = page.locator('#editor > .mbe-raw[data-syntax="markdown"]');
   await expect(raw).toHaveCount(2);
-  // Rendered with the editor's blocks: a callout box around a code block and a list, and a list item holding two paragraphs.
+  // The nested quote is a blockquote of the callout, rendered with the editor's blocks, and the item holding two paragraphs a list item.
   await expect(raw.first()).toHaveClass(/mbe-view-block/);
-  await expect(raw.first().locator('blockquote[data-callout="warning"] .mbe-callout-icon')).toBeVisible();
-  await expect(raw.first().locator('blockquote .mbe-code code')).toHaveText('rm -rf build');
-  await expect(raw.first().locator('blockquote .mbe-list-item')).toHaveText('then this');
+  await expect(raw.first()).toHaveAttribute('data-callout', 'warning');
+  await expect(raw.first().locator('.mbe-flow > blockquote')).toHaveText('nested');
   await expect(raw.nth(1).locator('.mbe-list-item p')).toHaveText(['Step', 'Second paragraph.']);
   await expect(page.locator('#editor')).not.toContainText('[!WARNING]');
-  // Nothing in it is a block of the document.
+  // The code block is a block of the document, in the callout.
+  await expect(page.locator('#editor > blockquote.mbe-code[data-callout="warning"] code')).toHaveText('rm -rf build');
+  // Nothing in a raw block is a block of the document.
   await expect(raw.first().locator('[data-block-id]')).toHaveCount(0);
-  // A click shows the source, as plain text to edit.
+  // A click shows the nested quote's source, without the outer quote's markers, as plain text to edit.
   await raw.first().click();
-  await expect(page.locator('#editor > pre.mbe-raw[data-syntax="markdown"]')).toHaveText('> [!WARNING]\n> Run this first:\n> ```\n> rm -rf build\n> ```\n> - then this');
+  await expect(page.locator('#editor > blockquote.mbe-raw[data-syntax="markdown"] > pre')).toHaveText('> nested');
   // Read-only always shows it rendered.
   await page.evaluate(() => (window as any).editor.setOptions({ editable: false }));
-  await expect(page.locator('#editor > pre.mbe-raw')).toHaveCount(0);
+  await expect(page.locator('#editor pre.mbe-raw')).toHaveCount(0);
   await expect(raw).toHaveCount(2);
   expect(await md(page)).toBe(doc);
+});
+
+// A web clipper's default template quotes the whole clip, so the quote holds a heading, a list, a table and code.
+const CLIP = [
+  '> ## Why room matters',
+  '>',
+  '> Leave a little room in your day. It is **easy** to fill every gap.',
+  '>',
+  '> - Walk before email',
+  '> - Write one line',
+  '>   - Even a bad one',
+  '>',
+  '> | Habit | Minutes |',
+  '> | --- | --- |',
+  '> | Walk | 20 |',
+  '>',
+  '> ```js',
+  '> const room = plan.filter((slot) => !slot.busy);',
+  '> ```',
+  '',
+  'A short summary.',
+  '',
+  '[A little room to think](https://fieldnotes.example/a-little-room)',
+  '',
+].join('\n');
+
+test('a clipped page in a quote loads as blocks in the quote, with no raw block, and saves unchanged', async ({ page }) => {
+  await page.goto(`/?md=${encodeURIComponent(CLIP)}`);
+  expect(await blocks(page)).toEqual([
+    'quote/h2:Why room matters',
+    'quote:Leave a little room in your day. It is easy to fill every gap.',
+    'quote/ul0:Walk before email',
+    'quote/ul0:Write one line',
+    'quote/ul1:Even a bad one',
+    'quote/table:Habit|Minutes/Walk|20',
+    'quote/code(js):const room = plan.filter((slot) => !slot.busy);',
+    'p:A short summary.',
+    'p:A little room to think',
+  ]);
+  await expect(page.locator('#editor .mbe-raw')).toHaveCount(0);
+  // One quote: every part is a blockquote, and the bar runs unbroken from the heading through the code.
+  const parts = page.locator('#editor > blockquote');
+  await expect(parts).toHaveCount(7);
+  await expect(parts.first()).toHaveClass(/mbe-heading/);
+  await expect(parts.first().locator('h2')).toHaveText('Why room matters');
+  await expect(parts.nth(5)).toHaveClass(/mbe-table/);
+  await expect(parts.last()).toHaveClass(/mbe-code/);
+  const boxes = await parts.evaluateAll((els) => els.map((el) => el.getBoundingClientRect()).map((r) => ({ top: r.top, bottom: r.bottom, left: r.left })));
+  for (let i = 1; i < boxes.length; i++) {
+    expect(Math.abs(boxes[i]!.top - boxes[i - 1]!.bottom)).toBeLessThan(1);
+    expect(boxes[i]!.left).toBe(boxes[0]!.left);
+  }
+  // The heading is sized as a heading, and the code block keeps its panel inside the quote.
+  const [h2Size, pSize] = await Promise.all([
+    parts.first().locator('h2').evaluate((el) => getComputedStyle(el).fontSize),
+    parts.nth(1).evaluate((el) => getComputedStyle(el).fontSize),
+  ]);
+  expect(Number.parseFloat(h2Size)).toBeGreaterThan(Number.parseFloat(pSize));
+  const panel = parts.last().locator(':scope > .mbe-content');
+  expect(await panel.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe(await parts.last().evaluate((el) => getComputedStyle(el).backgroundColor));
+  expect(await md(page)).toBe(CLIP);
+  expect(await viewProblems(page)).toEqual([]);
+});
+
+test('editing inside a clipped quote keeps every block in the quote and saves the quote prefix on every line', async ({ page }) => {
+  await page.goto(`/?md=${encodeURIComponent(CLIP)}`);
+  // Type at the end of the heading, then Enter: a new line of the quote, where "### " makes a heading in the quote.
+  await page.locator('#editor > blockquote h2').click();
+  await page.keyboard.press('End');
+  await page.keyboard.type('!');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('### ');
+  await page.keyboard.type('New line');
+  expect((await blocks(page)).slice(0, 3)).toEqual(['quote/h2:Why room matters!', 'quote/h3:New line', 'quote:Leave a little room in your day. It is easy to fill every gap.']);
+  // Backspace at the start of the heading makes it a paragraph of the quote again.
+  await page.keyboard.press('ArrowLeft', { delay: 0 });
+  for (let i = 0; i < 'New line'.length - 1; i++) await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('Backspace');
+  expect((await blocks(page)).slice(0, 3)).toEqual(['quote/h2:Why room matters!', 'quote:New line', 'quote:Leave a little room in your day. It is easy to fill every gap.']);
+  // Typing at the end of the code block stays in the quote.
+  await page.evaluate(() => {
+    const editor = (window as any).editor;
+    const code = editor.state.doc.blocks.find((b: any) => b.type === 'code');
+    const end = { blockId: code.id, offset: code.content.map((s: any) => s.text).join('').length };
+    editor.setSelection({ anchor: end, focus: end });
+    editor.focus();
+  });
+  await page.keyboard.type(' // filter');
+  const saved = await md(page);
+  expect(saved).toBe(
+    CLIP.replace('> ## Why room matters', '> ## Why room matters!\n>\n> New line').replace('!slot.busy);', '!slot.busy); // filter'),
+  );
+  expect(await viewProblems(page)).toEqual([]);
+});
+
+test('the toolbar quote button and the slash menu work on blocks in a quote', async ({ page }) => {
+  await page.goto(`/?md=${encodeURIComponent('> ## Title\n>\n> text\n')}`);
+  // The quote button is pressed on a quoted heading; pressing it takes the heading out of the quote.
+  const h2 = page.locator('#editor > blockquote h2');
+  await h2.click();
+  await page.keyboard.press('Home');
+  for (let i = 0; i < 5; i++) await page.keyboard.press('Shift+ArrowRight');
+  const quoteButton = page.locator('.mbe-toolbar .mbe-tool-quote');
+  await expect(quoteButton).toHaveAttribute('aria-pressed', 'true');
+  await quoteButton.click();
+  expect(await blocks(page)).toEqual(['h2:Title', 'quote:text']);
+  await quoteButton.click();
+  expect(await blocks(page)).toEqual(['quote/h2:Title', 'quote:text']);
+  // The slash menu's divider goes into the quote.
+  await page.locator('#editor > blockquote.mbe-quote').click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('/div');
+  await page.keyboard.press('Enter');
+  expect(await blocks(page)).toEqual(['quote/h2:Title', 'quote:text', 'quote/hr', 'quote:']);
+  expect(await md(page)).toBe('> ## Title\n>\n> text\n>\n> ---\n>\n> &nbsp;\n');
 });

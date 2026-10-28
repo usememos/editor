@@ -56,6 +56,7 @@ import {
   quoteKind,
   rangeHasMark,
   sameQuote,
+  startsQuote,
   sameCell,
   sameMarks,
   setLinkInRange,
@@ -67,6 +68,7 @@ import {
   toPlain,
   withContainerContent,
   withContent,
+  withoutQuoteStart,
   withQuote,
   createId,
   sameLink,
@@ -102,16 +104,10 @@ function contentOf(block: Block, cell?: Cell): Inline {
   return containerContent(block, cell) ?? [];
 }
 
-/** The same kind of block, empty, for Enter and for paste splits. */
+/** The same kind of block, empty, for Enter and for paste splits. In a quote, a heading or code block gives an empty paragraph of the quote. */
 function emptyLike(block: TextBlock): TextBlock {
-  switch (block.type) {
-    case 'listItem':
-      return listItem(block.listType, [], { indent: block.indent, quote: quoteKind(block) });
-    case 'quote':
-      return quote([], undefined, block.callout);
-    default:
-      return paragraph();
-  }
+  if (block.type === 'listItem') return listItem(block.listType, [], { indent: block.indent, quote: quoteKind(block) });
+  return withQuote(paragraph(), quoteKind(block));
 }
 
 // ---------------------------------------------------------------------------
@@ -224,10 +220,12 @@ export function deleteBackward(state: EditorState): EditorState {
   }
 
   // At the start of a styled block, the first Backspace removes the style.
-  // A list item in a quote becomes a paragraph of the quote first.
+  // A list item, heading or code block in a quote becomes a paragraph of the quote first.
   if (block.type === 'listItem' && block.indent > 0) return replaceBlock(state, { ...block, indent: block.indent - 1 });
-  if (block.type === 'listItem' && block.quote) return replaceBlock(state, keepQuoteStart(block, quote(block.content, block.id, block.callout)));
-  if (block.type !== 'paragraph') return replaceBlock(state, paragraph(block.content, block.id));
+  if (block.type !== 'paragraph') {
+    const kind = block.type === 'quote' ? null : quoteKind(block);
+    return replaceBlock(state, keepQuoteStart(block, withQuote(paragraph(block.content, block.id), kind)));
+  }
 
   const prev = state.doc.blocks[index - 1];
   if (!prev) return state;
@@ -413,16 +411,16 @@ export function splitBlock(state: EditorState): EditorState {
     // Enter on an empty last line, below another empty line, leaves the code or raw block.
     if (pos.offset === length && text.endsWith('\n\n')) {
       const trimmed = withContent(block, sliceInline(block.content, 0, length - 2));
-      const p = paragraph();
+      const p = withQuote(paragraph(), quoteKind(block));
       return withBlocks(s, splice(s, index, 1, trimmed, p), caret(p.id, 0));
     }
     return insertText(s, '\n');
   }
 
-  // "```lang" + Enter in a paragraph starts a code block.
-  const fence = block.type === 'paragraph' && pos.offset === length ? /^```([^`\s]*)$/.exec(text) : null;
+  // "```lang" + Enter in a paragraph starts a code block; in a quote, one in the quote.
+  const fence = (block.type === 'paragraph' || block.type === 'quote') && pos.offset === length ? /^```([^`\s]*)$/.exec(text) : null;
   if (fence) {
-    const code = codeBlock(fence[1], '', block.id);
+    const code = keepQuoteStart(block, withQuote(codeBlock(fence[1], '', block.id), quoteKind(block)));
     return replaceBlock(s, code, caret(code.id, 0));
   }
 
@@ -449,9 +447,8 @@ export function splitBlock(state: EditorState): EditorState {
   // Enter at the start of a non-empty block inserts an empty block above
   // and keeps the caret where it is. The empty block starts the blockquote if this one did.
   if (pos.offset === 0 && length > 0) {
-    if (block.type !== 'heading' && block.type !== 'paragraph' && block.quoteStart) {
-      const { quoteStart: _start, ...rest } = block;
-      return withBlocks(s, splice(s, index, 1, keepQuoteStart(block, emptyLike(block)), rest as TextBlock), s.selection);
+    if (startsQuote(block)) {
+      return withBlocks(s, splice(s, index, 1, keepQuoteStart(block, emptyLike(block)), withoutQuoteStart(block)), s.selection);
     }
     return withBlocks(s, splice(s, index, 0, emptyLike(block)), s.selection);
   }
@@ -460,8 +457,8 @@ export function splitBlock(state: EditorState): EditorState {
   const rightContent = sliceInline(block.content, pos.offset);
   let right: TextBlock;
   if (block.type === 'heading') {
-    // Splitting a heading in the middle gives two headings; at the end, a paragraph.
-    right = rightContent.length > 0 ? heading(block.level, rightContent) : paragraph();
+    // Splitting a heading in the middle gives two headings; at the end, a paragraph. Both stay in the heading's quote.
+    right = withQuote(rightContent.length > 0 ? heading(block.level, rightContent) : paragraph(), quoteKind(block));
   } else {
     right = withContent(emptyLike(block), rightContent);
   }
@@ -784,37 +781,46 @@ export type BlockTypeSpec =
   | { type: 'details' };
 
 /**
- * Converts one text block to another type, keeping its ID and text. A list
- * item made from a quote, or from a list item in a quote, stays in the quote.
- * A list item made a quote or callout keeps its list and goes into the quote.
+ * Converts one text block to another type, keeping its ID and text. A block
+ * in a quote stays in the quote: a paragraph of a quote made a heading is a
+ * heading in the quote, and a heading or list item in a quote made a
+ * paragraph is a paragraph of the quote. A paragraph of a quote made a
+ * paragraph leaves the quote, as Backspace at its start does. A block made a
+ * quote or callout keeps its type and goes into the quote; a paragraph
+ * becomes a quote block.
  */
 function convert(block: TextBlock, spec: BlockTypeSpec): TextBlock {
   return keepQuoteStart(block, convertType(block, spec));
 }
 
 function convertType(block: TextBlock, spec: BlockTypeSpec): TextBlock {
+  const kind = quoteKind(block);
+  if (spec.type === 'quote') return withQuote(block, spec.callout ?? kind ?? 'quote');
   const content = block.content;
+  let converted: TextBlock;
   switch (spec.type) {
     case 'paragraph':
-      return paragraph(content, block.id);
+      converted = paragraph(content, block.id);
+      if (block.type === 'quote') return converted;
+      break;
     case 'heading':
-      return heading(spec.level, content, block.id);
+      converted = heading(spec.level, content, block.id);
+      break;
     case 'listItem':
-      return listItem(spec.listType, content, {
+      converted = listItem(spec.listType, content, {
         id: block.id,
         indent: block.type === 'listItem' ? block.indent : 0,
         checked: block.type === 'listItem' ? block.checked : false,
         start: block.type === 'listItem' && block.listType === spec.listType ? block.start : undefined,
-        quote: quoteKind(block),
       });
-    case 'quote':
-      if (block.type === 'listItem') return withQuote(block, spec.callout ?? (block.quote ? (block.callout ?? 'quote') : 'quote'));
-      return quote(content, block.id, spec.callout);
+      break;
     case 'code':
-      return codeBlock(spec.language ?? (block.type === 'code' ? block.language : ''), inlineText(toPlain(content)), block.id);
+      converted = codeBlock(spec.language ?? (block.type === 'code' ? block.language : ''), inlineText(toPlain(content)), block.id);
+      break;
     default:
       return block;
   }
+  return withQuote(converted, kind);
 }
 
 /** Text blocks whose type the block type commands change: all but raw source blocks. */
@@ -859,7 +865,7 @@ function mergeIntoCode(state: EditorState, start: number, range: readonly Block[
     const first = run[0];
     if (!first) return;
     const text = run.map((b) => inlineText(toPlain(b.content))).join('\n');
-    const code = codeBlock(language ?? (first.type === 'code' ? first.language : ''), text, first.id);
+    const code = withQuote(codeBlock(language ?? (first.type === 'code' ? first.language : ''), text, first.id), quoteKind(first));
     out.push(code);
     merged.push(code);
     run = [];
@@ -898,9 +904,7 @@ export function setCallout(state: EditorState, blockId: string, callout: Callout
   if (!run) return state;
   const blocks = state.doc.blocks.slice(run.start, run.end + 1);
   if (blocks.every((b) => quoteKind(b) === (callout ?? 'quote'))) return state;
-  const updated = blocks.map((b) =>
-    b.type === 'listItem' ? withQuote(b, callout ?? 'quote') : b.type === 'quote' ? keepQuoteStart(b, quote(b.content, b.id, callout ?? undefined)) : b,
-  );
+  const updated = blocks.map((b) => withQuote(b, callout ?? 'quote'));
   const doc = { blocks: splice(state, run.start, updated.length, ...updated) };
   return { doc, selection: state.selection, storedMarks: state.storedMarks };
 }
@@ -939,14 +943,10 @@ export function toggleBlockType(state: EditorState, spec: BlockTypeSpec): Editor
   if (text.length === 0) return state;
   const on = text.every((b) => hasType(b, spec));
   if (!on) return setBlockType(state, spec);
-  // Off: a quoted list item leaves the quote and stays a list item, and a
-  // list item in a quote becomes a paragraph of the quote.
+  // Off: a quoted block leaves the quote and keeps its type; a list item or
+  // heading in a quote becomes a paragraph of the quote.
   const off: BlockTypeSpec = { type: 'paragraph' };
-  return convertSelected(state, off, (b) => {
-    if (b.type === 'listItem' && spec.type === 'quote') return withQuote(b, null);
-    if (b.type === 'listItem' && b.quote && spec.type === 'listItem') return keepQuoteStart(b, quote(b.content, b.id, b.callout));
-    return convert(b, off);
-  });
+  return convertSelected(state, off, (b) => (spec.type === 'quote' ? withQuote(b, null) : convert(b, off)));
 }
 
 /**
@@ -961,14 +961,16 @@ export function insertBlock(state: EditorState, spec: BlockTypeSpec): EditorStat
   if (spec.type === 'details') return insertSection(state, index);
   if (spec.type !== 'table' && spec.type !== 'divider') return setBlockType(state, spec);
   const isEmpty = isTextBlock(current) && inlineLength(current.content) === 0;
-  const created = spec.type === 'table' ? emptyTable(spec.rows ?? 3, spec.cols ?? 3) : divider();
-  const blocks: Block[] = [created];
+  // A table or divider made in a quote is in the quote.
+  const kind = quoteKind(current);
+  const created = withQuote(spec.type === 'table' ? emptyTable(spec.rows ?? 3, spec.cols ?? 3) : divider(), kind);
+  const blocks: Block[] = [isEmpty ? keepQuoteStart(current, created) : created];
   let target: Block = created;
   if (created.type === 'divider') {
     const after = state.doc.blocks[index + 1];
     if (after && isTextBlock(after)) target = after;
     else {
-      target = paragraph();
+      target = withQuote(paragraph(), kind);
       blocks.push(target);
     }
   }
@@ -1291,15 +1293,18 @@ export function applyBlockInputRules(state: EditorState, dialect: { callouts?: b
   if (!isTextBlock(block) || pos.cell) return null;
   const before = inlineText(block.content).slice(0, pos.offset);
 
-  if (block.type === 'paragraph' && before === '---') {
+  if ((block.type === 'paragraph' || block.type === 'quote') && before === '---') {
+    // A divider in a quote is in the quote.
     const index = blockIndex(state.doc, block.id);
-    const rest = withContent(block, sliceInline(block.content, pos.offset));
-    return withBlocks(state, splice(state, index, 1, divider(), rest), caret(rest.id, 0));
+    const rest = withoutQuoteStart(withContent(block, sliceInline(block.content, pos.offset)));
+    const rule = keepQuoteStart(block, withQuote(divider(), quoteKind(block)));
+    return withBlocks(state, splice(state, index, 1, rule, rest), caret(rest.id, 0));
   }
 
-  // Only "[ ] " applies inside a bullet item (turning "- [ ] " into a task),
-  // and only list markers (a list in the quote) and a callout marker such as
-  // "[!note] " inside a quote.
+  // Only "[ ] " applies inside a bullet item (turning "- [ ] " into a task).
+  // In a quote, the block made stays in the quote; "> " makes no quote in a
+  // quote, ">>> " no section, and a callout marker such as "[!note] " makes
+  // the whole quote the callout.
   const allowed = block.type === 'paragraph' || block.type === 'quote' || (block.type === 'listItem' && block.listType === 'bullet');
   if (!allowed) return null;
   for (const [re, toSpec] of BLOCK_RULES) {
@@ -1308,10 +1313,9 @@ export function applyBlockInputRules(state: EditorState, dialect: { callouts?: b
     const spec = toSpec(m);
     if ((spec.type === 'quote' && spec.callout && dialect.callouts === false) || (spec.type === 'details' && dialect.details === false)) continue;
     if (block.type === 'listItem' && !(spec.type === 'listItem' && spec.listType === 'task')) continue;
-    if (block.type === 'quote' && spec.type !== 'listItem') {
-      if (spec.type !== 'quote' || !spec.callout) continue;
-      // The whole quote becomes the callout.
-      return setCallout(deleteRange(state, { blockId: block.id, offset: 0 }, pos), block.id, spec.callout);
+    if (block.type === 'quote') {
+      if (spec.type === 'quote' && spec.callout) return setCallout(deleteRange(state, { blockId: block.id, offset: 0 }, pos), block.id, spec.callout);
+      if (spec.type === 'quote' || spec.type === 'details') continue;
     }
     const stripped = deleteRange(state, { blockId: block.id, offset: 0 }, pos);
     let next = setBlockType(stripped, spec);
@@ -1708,9 +1712,6 @@ function insertAsBlocks(state: EditorState, fragment: readonly Block[], target: 
   const head = withContent(block, sliceInline(block.content, 0, target.offset));
   let tail: TextBlock = { ...withContent(block, sliceInline(block.content, target.offset)), id: createId() };
   if (tail.type === 'listItem' && tail.start !== undefined) tail = { ...tail, start: undefined };
-  if ((tail.type === 'quote' || tail.type === 'listItem') && tail.quoteStart) {
-    const { quoteStart: _start, ...rest } = tail;
-    tail = rest;
-  }
+  tail = withoutQuoteStart(tail);
   return end(splice(state, index, 1, head, ...fragment, tail), last, startOf(tail));
 }

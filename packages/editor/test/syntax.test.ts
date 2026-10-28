@@ -237,11 +237,22 @@ describe('blocks', () => {
   section('Structure kept as source', NONE, [
     ["- a\n\n  para2", ["raw(markdown) - a⏎⏎  para2"], SAME],
     ["- a\n  ```\n  code\n  ```", ["raw(markdown) - a⏎  ```⏎  code⏎  ```"], SAME],
-    ["> # h", ["raw(markdown) > # h"], SAME],
-    ["> - a\n>\n>   para2", ["raw(markdown) > - a⏎>⏎>   para2"], SAME],
-    ["> ```\n> code\n> ```", ["raw(markdown) > ```⏎> code⏎> ```"], SAME],
-    [">> nested", ["raw(markdown) >> nested"], SAME],
+    // In a quote, only the block the model cannot hold is kept as source, without the quote markers.
+    ["> - a\n>\n>   para2", ["quote/raw(markdown) - a⏎⏎  para2"], SAME],
+    [">> nested", ["quote/raw(markdown) > nested"], "> > nested\n"],
+    ["> a\n>\n> > nested\n>\n> b", ["quote a", "quote/raw(markdown) > nested", "quote b"], SAME],
     ["- a\n  - b\n    - c\n      - d\n        - e\n          - f\n            - g", ["raw(markdown) - a⏎  - b⏎    - c⏎      - d⏎        - e⏎          - f⏎            - g"], SAME],
+  ]);
+
+  section('Blocks in quotes', NONE, [
+    ["> # h", ["quote/h1 h"], SAME],
+    ["> ```\n> code\n> ```", ["quote/code() code"], SAME],
+    [">     code", ["quote/code() code"], "> ```\n> code\n> ```\n"],
+    ["> | a |\n> | - |\n> | b |", ["quote/table(-) [a] [b]"], "> | a |\n> | --- |\n> | b |\n"],
+    ["> ---", ["quote/hr"], SAME],
+    ["> <div>x</div>", ["quote/raw(html) <div>x</div>"], SAME],
+    ["> [!NOTE]\n> ## h\n> text", ["callout(note)/h2 h", "callout(note) text"], "> [!NOTE]\n> ## h\n>\n> text\n"],
+    ["> a\n\n> # h", ["quote a", "new quote/h1 h"], SAME],
   ]);
 
   section('Link reference definitions', NONE, [

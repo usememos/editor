@@ -145,8 +145,14 @@ export function serializeBlocks(blocks: readonly Block[], options?: MarkdownOpti
   return out;
 }
 
-/** False for a list item that cannot start a list right after a paragraph line: an empty one, or numbered from other than 1. */
-function interrupts(block: Block): boolean {
+/**
+ * False for a block that cannot start right after a paragraph line: a list
+ * item that cannot interrupt a paragraph (an empty one, or numbered from
+ * other than 1), and a divider, whose `---` would underline the line as a
+ * setext heading.
+ */
+export function interrupts(block: Block): boolean {
+  if (block.type === 'divider') return false;
   if (block.type !== 'listItem') return true;
   if (block.listType === 'task') return true;
   return block.content.length > 0 && (block.start ?? 1) === 1;
@@ -156,7 +162,7 @@ export function isEmptyParagraph(block: Block): boolean {
   return block.type === 'paragraph' && block.content.length === 0;
 }
 
-function prefixLines(text: string, prefix: string, emptyPrefix: string): string {
+export function prefixLines(text: string, prefix: string, emptyPrefix: string): string {
   return text
     .split('\n')
     .map((line) => (line ? prefix + line : emptyPrefix))

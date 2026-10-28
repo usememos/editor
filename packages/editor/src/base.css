@@ -61,11 +61,15 @@
    0 between the parts of a quote and padding makes the space, so the border
    stays unbroken and consecutive quote blocks read as one quote. A list in a
    quote is a run of blockquote list items (see renderBlock): its items sit
-   2px apart, as outside quotes, with the gap around the list. */
+   2px apart, as outside quotes, with the gap around the list. A heading,
+   code block, raw block, divider or table in a quote is a blockquote holding
+   the block's own element as its content; the element has no margin of its
+   own, the quote's padding spaces it. */
 :is(.mbe-root, .mbe-flow) > blockquote[data-quote-continued] { margin-bottom: 0; }
 :is(.mbe-root, .mbe-flow) > blockquote[data-quote-joined] { margin-top: 0; padding-top: var(--mbe-block-gap); }
 :is(.mbe-root, .mbe-flow) > blockquote.mbe-list-item[data-quote-joined] { margin-top: 0; }
 :is(.mbe-root, .mbe-flow) > blockquote.mbe-list-item[data-quote-joined]:not([data-list-start]) { padding-top: 2px; }
+:is(.mbe-root, .mbe-flow) > blockquote > .mbe-content { margin: 0; }
 
 /* Callouts: a padded box with the type's icon in a start column, level with
    the first line. Only the first block of a callout shows the icon; the
@@ -240,7 +244,8 @@
 }
 /* Code keeps its lines and scrolls sideways, as GitHub shows it; raw source wraps. */
 :is(.mbe-root, .mbe-flow) > .mbe-code pre { white-space: pre; overflow-x: auto; tab-size: 2; }
-:is(.mbe-root, .mbe-flow) > pre.mbe-raw { white-space: pre-wrap; tab-size: 2; }
+:is(.mbe-root, .mbe-flow) > pre.mbe-raw,
+:is(.mbe-root, .mbe-flow) > blockquote.mbe-raw > pre { white-space: pre-wrap; tab-size: 2; }
 /* Source mode: the document as plain text; theme.css sets its mono font. */
 .mbe-root > .mbe-source { white-space: pre-wrap; tab-size: 4; overflow-wrap: anywhere; }
 /* One block per line, so a keystroke lays out only its line. */
@@ -288,8 +293,9 @@
 .mbe-root .mbe-view-html :is(details, blockquote, li, td, th, div, section):not(.mbe-flow *) > :last-child,
 .mbe-root .mbe-view-block.mbe-view-html > :last-child { margin-bottom: 0; }
 
-/* Divider: the padding gives the line a larger click target. */
-:is(.mbe-root, .mbe-flow) > .mbe-divider.mbe-block { margin: 16px 0; padding: 4px 0; cursor: default; }
+/* Divider: the padding gives the line a larger click target. In a quote the block keeps the quote's spacing. */
+:is(.mbe-root, .mbe-flow) > .mbe-divider.mbe-block:not(blockquote) { margin: 16px 0; padding: 4px 0; cursor: default; }
+:is(.mbe-root, .mbe-flow) > blockquote.mbe-divider > .mbe-content { padding: 4px 0; cursor: default; }
 :is(.mbe-root, .mbe-flow) > .mbe-divider hr { margin: 0; }
 
 /* Table */
@@ -324,9 +330,8 @@
 .mbe-root .mbe-empty-content { position: relative; }
 .mbe-root > .mbe-paragraph.mbe-empty:only-child::before,
 .mbe-root > .mbe-paragraph.mbe-empty.mbe-show-hint::before,
-.mbe-root:not(.mbe-readonly) > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote:not(.mbe-list-item))::before,
-.mbe-root:not(.mbe-readonly) > .mbe-list-item.mbe-empty[data-hint] > .mbe-content::before,
-.mbe-root:not(.mbe-readonly) > .mbe-details.mbe-empty[data-hint] > .mbe-content::before,
+.mbe-root:not(.mbe-readonly) > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote.mbe-quote)::before,
+.mbe-root:not(.mbe-readonly) > :is(.mbe-list-item, .mbe-heading, .mbe-details).mbe-empty[data-hint] > .mbe-content::before,
 .mbe-root > .mbe-source.mbe-empty:only-child > .mbe-source-text::before {
   opacity: 0.5;
   pointer-events: none;
@@ -335,9 +340,8 @@
 .mbe-root > .mbe-paragraph.mbe-empty:only-child::before,
 .mbe-root > .mbe-source.mbe-empty:only-child > .mbe-source-text::before { content: var(--mbe-placeholder, ''); }
 .mbe-root > .mbe-paragraph.mbe-empty.mbe-show-hint::before { content: var(--mbe-slash-hint, ''); }
-.mbe-root:not(.mbe-readonly) > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote:not(.mbe-list-item))::before,
-.mbe-root:not(.mbe-readonly) > .mbe-list-item.mbe-empty[data-hint] > .mbe-content::before,
-.mbe-root:not(.mbe-readonly) > .mbe-details.mbe-empty[data-hint] > .mbe-content::before { content: attr(data-hint); }
+.mbe-root:not(.mbe-readonly) > .mbe-empty[data-hint]:is(h1, h2, h3, h4, h5, h6, blockquote.mbe-quote)::before,
+.mbe-root:not(.mbe-readonly) > :is(.mbe-list-item, .mbe-heading, .mbe-details).mbe-empty[data-hint] > .mbe-content::before { content: attr(data-hint); }
 
 /* Widgets: app UI between blocks, such as an upload placeholder. Not editable text. */
 .mbe-root > .mbe-widget { cursor: default; user-select: none; -webkit-user-select: none; white-space: normal; }

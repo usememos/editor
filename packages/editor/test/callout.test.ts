@@ -3,7 +3,7 @@
 import { Window } from 'happy-dom';
 import { describe, expect, it } from 'vitest';
 import * as cmd from '../src/commands';
-import { type Block, type Doc, type EditorState, caret, createState, inlineText, paragraph, plain, quote, withContent } from '../src/model';
+import { type Block, caret, createState, type Doc, type EditorState, inlineText, isQuotable, paragraph, plain, quote, withContent } from '../src/model';
 import { parseMarkdown } from '../src/markdown/parse';
 import { serializeMarkdown } from '../src/markdown/serialize';
 import { loadMarkdown } from '../src/markdown/source';
@@ -15,7 +15,8 @@ function show(blocks: readonly Block[]): string[] {
   return blocks.map((b) => {
     const text = 'content' in b ? inlineText(b.content) : '';
     if (b.type === 'quote') return `${b.callout ?? 'quote'}:${text}`;
-    return `${b.type === 'paragraph' ? 'p' : b.type}:${text}`;
+    const quoted = isQuotable(b) && b.quote ? `${b.callout ?? 'quote'}/` : '';
+    return `${quoted}${b.type === 'paragraph' ? 'p' : b.type === 'heading' ? `h${b.level}` : b.type}:${text}`;
   });
 }
 const parse = (md: string, options = {}) => show(parseMarkdown(md, options).blocks);
@@ -82,10 +83,10 @@ describe('saving with the source', () => {
     expect(save(edited, source)).toBe('> [!note]   \n> keep *this*\n\nchanged\n');
   });
 
-  it('rewrites a callout next to an edited quote of the same type, and not one of another type', () => {
+  it('keeps a callout as written when a block of the same type is added to it, and apart from a quote of another type', () => {
     const { doc, source } = loadMarkdown('> [!note]\n> a\n');
     const same = { blocks: [...doc.blocks, quote(plain('b'), undefined, 'note')] };
-    expect(save(same, source)).toBe('> [!NOTE]\n> a\n>\n> b\n');
+    expect(save(same, source)).toBe('> [!note]\n> a\n>\n> b\n');
     const other = { blocks: [...doc.blocks, quote(plain('b'))] };
     expect(save(other, source)).toBe('> [!note]\n> a\n\n> b\n');
   });
@@ -131,7 +132,7 @@ describe('commands', () => {
     };
     expect(shown(typed([paragraph(plain('x'))], 0, '[!warning] '))).toEqual(['warning:x']);
     expect(shown(typed([quote(plain('a')), quote(plain('b'))], 0, '[!TIP] '))).toEqual(['tip:a', 'tip:b']);
-    expect(typed([quote(plain('a'))], 0, '## ')).toBeNull();
+    expect(shown(typed([quote(plain('a'))], 0, '## '))).toEqual(['quote/h2:a']);
     expect(typed([paragraph(plain('x'))], 0, '[!nope] ')).toBeNull();
   });
 });
