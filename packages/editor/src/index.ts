@@ -18,7 +18,37 @@ export { TOOLBAR_ITEMS, type ToolbarItem } from './ui/toolbar';
 export type { Icon, IconName, Icons } from './icons';
 export * from './model';
 export * as commands from './commands';
-export { parseMarkdown } from './markdown/parse';
+export { parseMarkdown, parseAst } from './markdown/parse';
+export { inlineNodesText, pieceEnd } from './markdown/ast';
+export type {
+  BlockNode,
+  BlockQuoteNode,
+  CodeBlockNode,
+  CodeNode,
+  ContentLine,
+  ContentSource,
+  HeadingNode,
+  HtmlBlockNode,
+  ImageNode,
+  ImageNodeAlign,
+  InlineNode,
+  LinkNode,
+  ListItemNode,
+  ListNode,
+  ParagraphNode,
+  Positioned,
+  Range,
+  RawNode,
+  Root,
+  SourceLines,
+  SyntaxRange,
+  TableAlign,
+  TableNode,
+  TextNode,
+  TextPiece,
+} from './markdown/ast';
+export { visit, nodeChildren, sourceRange, type TreeNode, type Visitor } from './markdown/tree';
+export { lineTable, type LineTable } from './markdown/sourceMap';
 export { parseInline } from './markdown/inline';
 export { serializeMarkdown, serializeInline, type SerializeOptions } from './markdown/serialize';
 export { loadMarkdown, type MarkdownSource } from './markdown/source';

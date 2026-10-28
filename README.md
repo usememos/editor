@@ -128,6 +128,30 @@ function Composer() {
 
 `insertToken(text)` inserts a token such as `#tag` at the caret as a word of its own: a space before it unless the caret is at the start of the text or after whitespace, and a space after it, reusing one that is already there; the caret ends after that space. Selected text is kept, the token takes the format at the caret as typed text would (plain text in a code block), and it returns `false` without inserting while an input method is composing.
 
+### Syntax tree
+
+A host that reads a document as data, without an editor, uses the parser directly. `parseAst(markdown, options?)` returns the CommonMark and GFM syntax tree the editor itself loads from, with the same `markdown` options and extension syntax, so a walk over the tree sees the document the editor shows. Link and image references are resolved in it (`destination` and `title` are final), escapes and entities are decoded, and `Root.definitions` keeps the link reference definitions as source text. The tree is read-only: edits go through the document (`parseMarkdown`, `serializeMarkdown`) or through the source text at the positions below.
+
+```ts
+import { inlineNodesText, parseAst, sourceRange, visit } from '@usememos/editor';
+
+const root = parseAst(markdown, { breaks: true });
+const tasks: { checked: boolean; line: number }[] = [];
+const images: string[] = [];
+let excerpt = '';
+visit(root, (node) => {
+  if (node.type === 'listItem' && node.task) tasks.push({ checked: node.checked, line: node.lines!.start });
+  if (node.type === 'image') images.push(node.destination);
+  if (node.type === 'paragraph' && !excerpt) excerpt = inlineNodesText(node.children, '\n');
+});
+```
+
+- `visit(node, visitor)` calls the visitor for every node in document order with its ancestors, root first: list items, the blocks in them, a table's cells row by row, an image's description. Returning `false` skips a node's children. `nodeChildren(node)` gives one node's children in that order.
+- Every block the parser builds has `lines`, its 1-based inclusive source lines; a list item's first line holds its marker, so a task can be toggled by rewriting `[ ]` on that line. The root's `lines` has them by child index.
+- Every inline node the parser builds has `pos`, a range in its block's content as the block parser built it, after quote markers and list indentation were taken off. `sourceRange(markdown, block.source, node.pos)` maps it to offsets in the Markdown; for a table cell, the block's source is `table.sources[row][cell]`. Pass `lineTable(markdown)` instead of the text for many lookups in one document.
+- `inlineNodesText(nodes, soft)` is the text without markup, with `soft` for a soft line break (a space, or `"\n"` with `markdown.breaks`) and `"\n"` for a hard one, as in image alt text.
+- An HTML block's `value` is its source; an image inside one is read as HTML, not from the tree. Nodes also carry `syntax`, `pieces` and the details of `source`, which source mode uses; those may change between versions.
+
 ### Extensions
 
 An extension is a plain object. All fields except `name` are optional.
