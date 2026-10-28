@@ -2,7 +2,6 @@
 name: release
 description: Publish a new version of @usememos/editor to npm by running the Release workflow on main. Checks CI, shows what will ship and the expected version, asks for a go-ahead, dispatches the workflow and reports the published version.
 argument-hint: "[--dry-run | --yes]"
-disable-model-invocation: true
 allowed-tools: Bash(bash ${CLAUDE_SKILL_DIR}/scripts/preflight.sh*), Bash(gh run *), Bash(gh workflow run *), Bash(git fetch *), Bash(npm view *)
 ---
 
