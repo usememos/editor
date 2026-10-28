@@ -25,9 +25,11 @@ test('slash menu: converts a block that has text, like Linear', async ({ page })
   await page.keyboard.press('Enter');
   expect(await blocks(page)).toEqual(['h2:Release notes']);
   expect(await md(page)).toBe('## Release notes\n');
+  // Quote puts the heading into a quote and keeps it a heading, as it keeps a list item a list item.
   await page.keyboard.type(' /quo');
   await page.keyboard.press('Enter');
-  expect(await blocks(page)).toEqual(['quote:Release notes']);
+  expect(await blocks(page)).toEqual(['quote/h2:Release notes']);
+  expect(await md(page)).toBe('> ## Release notes\n');
 });
 
 test('slash menu: a late selectionchange keeps the highlighted item', async ({ page }) => {
