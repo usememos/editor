@@ -15,7 +15,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { Editor } from '../../src/editor';
-import type { Extension } from '../../src/extension';
 import { footnotes } from '../../src/extensions/footnotes';
 import { math } from '../../src/extensions/math';
 import { mentions, tags } from '../../src/extensions/tags';
@@ -37,16 +36,6 @@ const known: Record<string, string> = JSON.parse(readFileSync(join(dir, 'known-f
 
 /** memos' dialect (web/src/lib/memo-markdown.ts). */
 const MEMO: MarkdownOptions = { breaks: true, setext: false };
-/** Raw HTML as its source text: memos renders it with a view, which takes no decorations either. */
-const rawHtml: Extension = {
-  name: 'raw-html',
-  views: {
-    html(source, element) {
-      element.textContent = source;
-    },
-  },
-};
-
 /** The tags and mentions a reader sees highlighted, as written, in document order. */
 function highlighted(markdown: string): { tags: string[]; mentions: string[] } {
   const element = document.createElement('div');
@@ -56,8 +45,10 @@ function highlighted(markdown: string): { tags: string[]; mentions: string[] } {
     content: markdown,
     editable: false,
     markdown: MEMO,
-    extensions: [math(), footnotes(), tags(), mentions(), rawHtml],
+    extensions: [math(), footnotes(), tags(), mentions()],
     resolveUrl: (url) => url,
+    // Raw HTML renders as memos renders it, through a sanitizer; its tags take no decorations either.
+    sanitizeHtml: (tree) => tree,
   });
   // Read-only, a footnote definition hides where it is written and shows again in the collected section: count the one a reader sees.
   const read = (selector: string) => Array.from(element.querySelectorAll(selector), (el) => (el.closest('.mbe-footnote-collected') ? null : el.textContent!)).filter((t): t is string => t !== null);

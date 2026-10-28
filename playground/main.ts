@@ -154,10 +154,34 @@ function uploadInline(editor: Editor, file: File, at: Parameters<Editor['addWidg
   });
 }
 
+// Raw HTML in a note: the editor parses it and this decides what is shown.
+// A small allowlist for the playground; an app passes the tree to its own
+// sanitizer and keeps its policy (embed hosts, link targets) there.
+const HTML_ELEMENTS = new Set(
+  'a abbr b br code dd del details div dl dt em figcaption figure h1 h2 h3 h4 h5 h6 hr i img ins kbd li mark ol p pre q rp rt ruby s samp small span strong sub summary sup table tbody td tfoot th thead tr u ul var'.split(' '),
+);
+const HTML_ATTRIBUTES = new Set(['align', 'alt', 'colspan', 'height', 'href', 'open', 'rowspan', 'src', 'title', 'width']);
+const SAFE_URL = /^(?:https?:|mailto:|#|\/|\.)/i;
+const sanitizeHtml: core.SanitizeHtml = (tree) => {
+  for (const el of Array.from(tree.querySelectorAll('*'))) {
+    if (!HTML_ELEMENTS.has(el.localName)) {
+      el.remove();
+      continue;
+    }
+    for (const name of el.getAttributeNames()) {
+      const url = name === 'href' || name === 'src';
+      if (!HTML_ATTRIBUTES.has(name) || (url && !SAFE_URL.test(el.getAttribute(name)!.trim()))) el.removeAttribute(name);
+    }
+    if (el.localName === 'a') el.setAttribute('rel', 'noopener noreferrer');
+  }
+  return tree;
+};
+
 const composer: Partial<EditorOptions> = {
   markdown: { breaks: true, setext: false },
   // Uploaded images are blob: URLs here; the default policy would drop them.
   resolveUrl: (url, kind) => (kind === 'image' && url.startsWith('blob:') ? url : core.defaultResolveUrl(url, kind)),
+  sanitizeHtml,
   attributes: { autocorrect: 'on', autocapitalize: 'sentences', 'aria-label': 'Note' },
   extensions: [
     math({ render: (tex, el, options) => katex.render(tex, el, { ...options, throwOnError: false }) }),

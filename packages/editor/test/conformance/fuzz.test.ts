@@ -70,6 +70,25 @@ function random(seed: number): () => number {
 
 const known: Record<string, string> = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fuzz-known.json'), 'utf8'));
 
+/**
+ * Families of differences in what the editor shows, accepted as a whole by a
+ * pattern on the shrunk input, with the reason as in known-failures.json.
+ * The editor parses each HTML block and each inline run on its own (through
+ * `sanitizeHtml`), so an element with no closing tag ends there, and an
+ * unclosed comment, declaration, CDATA section or processing instruction
+ * swallows only its block; a browser reading the references' whole page
+ * lets them hold everything after them. A difference in a document with
+ * such a tag is not a difference a reader would see elsewhere, so these
+ * documents are skipped at the rendered layer.
+ */
+const ACCEPTED_RENDERED: readonly RegExp[] = [
+  // An opening tag with no closing tag for it anywhere after.
+  /<([a-z][a-z0-9]*)\b[^<>]*>(?![\s\S]*<\/\1\s*>)/i,
+  // A comment, CDATA section, declaration or processing instruction that never ends.
+  /<!--(?![\s\S]*-->)|<!\[CDATA\[(?![\s\S]*\]\]>)|<![a-z](?![\s\S]*>)|<\?(?![\s\S]*\?>)/i,
+];
+const accepted = (layer: string, md: string) => layer === 'rendered' && ACCEPTED_RENDERED.some((re) => re.test(md));
+
 const MICROMARK = { allowDangerousHtml: true, allowDangerousProtocol: true };
 const GFM = {
   ...MICROMARK,
@@ -118,7 +137,7 @@ it(`matches commonmark.js and micromark where they agree (${RUNS} documents, see
     for (const [layer, ours] of [['parser', parsed], ...(run % 10 === 0 ? [['rendered', shown] as const] : [])] as const) {
       if (!differs(md, ours)) continue;
       const small = shrink(parts, ours);
-      if (!found.has(small) && !(small in known)) found.set(small, `${layer}: ${JSON.stringify(small)}\n  references: ${references(small)}\n  ours:       ${ours(small)}`);
+      if (!found.has(small) && !(small in known) && !accepted(layer, small)) found.set(small, `${layer}: ${JSON.stringify(small)}\n  references: ${references(small)}\n  ours:       ${ours(small)}`);
       break;
     }
   }

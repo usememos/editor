@@ -1,10 +1,11 @@
-// Inline raw HTML rendered through the `html` view: runs pair an opening tag
+// Inline raw HTML rendered through `sanitizeHtml`: runs pair an opening tag
 // with its closing tag even when the parser's spans were merged or split.
 
 import { Window } from 'happy-dom';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Editor } from '../src/index';
+import { Editor, type SanitizeHtml } from '../src/index';
 import { type Span, containerContent } from '../src/model';
+import { htmlView } from '../src/view/html';
 import { htmlRuns, splitHtmlSpans, tokenKey } from '../src/view/dom';
 import { revealedViews } from '../src/view/reveal';
 
@@ -59,15 +60,16 @@ describe('rendering', () => {
   });
   afterAll(() => Object.assign(globalThis, saved));
 
-  const views = { html: (source: string, el: HTMLElement) => void (el.innerHTML = source) };
-  const create = (content: string, editable = false, html: (source: string, el: HTMLElement) => void | false = views.html) => {
+  /** A sanitizer that allows everything: a test stand-in for the host's. */
+  const allowAll: SanitizeHtml = (tree) => tree;
+  const create = (content: string, editable = false, sanitizeHtml: SanitizeHtml = allowAll) => {
     const element = window.document.createElement('div');
     window.document.body.appendChild(element);
-    return new Editor({ element: element as unknown as HTMLElement, content, editable, extensions: [{ name: 'views', views: { html } }] });
+    return new Editor({ element: element as unknown as HTMLElement, content, editable, sanitizeHtml });
   };
   const render = (content: string) => create(content).root;
 
-  it('renders ruby pairs through the html view in a paragraph and a table cell', () => {
+  it('renders ruby pairs through the sanitizer in a paragraph and a table cell', () => {
     const ruby = '<ruby>風<rt>か</rt></ruby><ruby>邪<rt>ぜ</rt></ruby>';
     const root = render(`| kanji | kana |\n| :--- | :--- |\n| ${ruby} | かぜ |\n\nsay ${ruby} here\n`);
     const cell = root.querySelector('td')!;
@@ -82,7 +84,7 @@ describe('rendering', () => {
     expect(paragraph.textContent).toBe('say 風か邪ぜ here');
   });
 
-  it('renders a run inside a link through the html view, in the link', () => {
+  it('renders a run inside a link through the sanitizer, in the link', () => {
     const ruby = '<ruby>風<rt>か</rt></ruby><ruby>邪<rt>ぜ</rt></ruby>';
     const root = render(`| kanji | translation |\n| :--- | :--- |\n| [${ruby}](https://example.org) | Cold |\n\nsee [${ruby}](https://example.org "cold") here\n`);
     const cell = root.querySelector('td')!;
@@ -133,8 +135,8 @@ describe('rendering', () => {
     expect(paragraph.textContent).toBe('x y');
   });
 
-  it('renders the tags as text when the view declines a run, inside or across a link', () => {
-    const declining = (source: string, el: HTMLElement): void | false => (source.includes('<kbd>') ? false : void (el.innerHTML = source));
+  it('renders the tags as text when the sanitizer returns nothing for a run, inside or across a link', () => {
+    const declining: SanitizeHtml = (tree) => (tree.querySelector('kbd') ? null : tree);
     const paragraph = create('[<i>a</i>](https://example.org) <kbd>b [c</kbd>](https://example.org) [<kbd>d</kbd>](https://example.org)\n', false, declining).root.querySelector('p')!;
     expect(paragraph.querySelectorAll('.mbe-view-html').length).toBe(1);
     expect(paragraph.querySelector('a > .mbe-view-html > i')!.textContent).toBe('a');
@@ -147,7 +149,7 @@ describe('rendering', () => {
     const editor = create('see [<ruby>風<rt>か</rt></ruby>](https://example.org) here\n', true);
     const block = editor.state.doc.blocks[0]!;
     const content = containerContent(block)!;
-    const htmlViews = new Map([['html', views.html]]);
+    const htmlViews = new Map([['html', htmlView(allowAll)]]);
     // The caret inside the run reveals it; outside, nothing is revealed.
     const inRun = { blockId: block.id, offset: 'see <ruby>風'.length };
     expect(revealedViews({ ...editor.state, selection: { anchor: inRun, focus: inRun } }, htmlViews, true).get(block.id)).toEqual(new Set([tokenKey(undefined, 4)]));

@@ -24,7 +24,7 @@ import { lowerTopLevel, sourceText } from './lower';
 import { DEFAULT_MARKDOWN, type MarkdownOptions } from './options';
 
 /** Elements that have no closing tag. */
-const VOID_ELEMENTS = new Set([
+export const VOID_ELEMENTS = new Set([
   'area',
   'base',
   'br',

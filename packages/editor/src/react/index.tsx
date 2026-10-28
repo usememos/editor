@@ -19,6 +19,7 @@ type EditorProps = Pick<
   | 'attributes'
   | 'resolveUrl'
   | 'referrerPolicy'
+  | 'sanitizeHtml'
   | 'headingIds'
   | 'onLinkClick'
   | 'theme'

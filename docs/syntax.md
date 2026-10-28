@@ -202,7 +202,7 @@ const x = 1;
 
 ### HTML blocks
 
-An HTML block (`<div>`, `<!-- comment -->` and the other CommonMark HTML block starts) loads as a raw block with `syntax: "html"`. It is edited as source and saved verbatim. The editor never renders HTML itself: with an `html` view (see [Extensions](../README.md)) it shows rendered, otherwise as source.
+An HTML block (`<div>`, `<!-- comment -->` and the other CommonMark HTML block starts) loads as a raw block with `syntax: "html"`. It is edited as source and saved verbatim. HTML renders only through the `sanitizeHtml` option (see the [README](../README.md)): the browser parses the block, the host's sanitizer decides what of the tree is shown, and without the option the block shows as its source. The same goes for inline HTML (`<kbd>`), one run at a time.
 
 An **HTML section**, an element whose opening and closing tags are in different HTML blocks, loads as **one** raw HTML block, from the line that opens the element to the line that closes it, including blank lines, Markdown and nested sections inside. Centered content is a common case:
 
@@ -219,7 +219,8 @@ CommonMark ends an HTML block at a blank line, so this example is three blocks t
 - `<details>` written as the editor saves it is a [collapsible section](#collapsible-sections) instead, edited as blocks. Any other element counts: `<details>` in other shapes or with `details: false`, `<div align="center">`, `<p align="center">`, a `<td>` with a list in it, `<blockquote>`, `<section>`.
 - A section opens at an HTML block that leaves an element open and ends at the HTML block that closes it. A closing tag closes the elements opened inside it too, as in a browser (`<div><span>` … `</div>`). Void elements (`<img>`, `<br>`), self-closing tags and comments leave nothing open.
 - Only HTML blocks count. A closing tag inside a paragraph (`text</div>`) is inline HTML, so it does not close a section. An element that is never closed is not joined.
-- Rendered, a section reads as on GitHub: the `html` view gets the section's HTML, and the Markdown between the tags renders as the editor's own blocks inside the element, with footnotes, tags, math and code highlighting as anywhere else. Clicking a section while editing shows its source.
+- Rendered, a section reads as on GitHub: the browser parses the section's HTML, `sanitizeHtml` decides what of it is shown, and the Markdown between the tags renders as the editor's own blocks inside the element, with footnotes, tags, math and code highlighting as anywhere else. The sanitizer never sees that Markdown. Clicking a section while editing shows its source.
+- Each HTML block is parsed on its own. An element a block never closes ends with the block; a renderer that joins every block into one HTML page would let it run on over the blocks after it. Likewise an inline tag with no closing tag in its paragraph (`<a href="x">` alone) renders as an empty element, where a browser reading the whole page would let it wrap the rest of the paragraph.
 - Markdown between tags on the same lines, without blank lines around it (`<td>**x**</td>`), is part of the HTML block and stays HTML, as in CommonMark.
 
 ### Collapsible sections

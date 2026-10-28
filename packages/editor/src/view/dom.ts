@@ -53,6 +53,8 @@ const CONTENT_ATTR = 'data-content';
 const SOURCE_TEXT = 'mbe-source-text';
 const SOURCE_LINE = 'mbe-source-line';
 const FILL_ATTR = 'data-mbe-fill';
+/** On a view's element while the promise it returned is pending; its slots are filled when it settles. */
+const PENDING_ATTR = 'data-mbe-pending';
 const ATOM_ATTR = 'data-atom';
 const LIST_START_ATTR = 'data-list-start';
 const QUOTE_JOINED_ATTR = 'data-quote-joined';
@@ -326,7 +328,7 @@ function renderBlock(block: Block, ctx: RenderContext, reveal?: BlockReveal): HT
     }
     case 'raw': {
       // Rendered, for example math as a formula, unless the selection is in the block.
-      // An HTML section renders its HTML through the view and the Markdown between its tags as blocks.
+      // An HTML section renders its HTML through the sanitizer (the `html` view) and the Markdown between its tags as blocks.
       // A footnote definition renders its label through the view and its text as inline Markdown.
       const source = inlineText(block.content);
       const revealed = reveal?.has(REVEAL_BLOCK) === true;
@@ -613,9 +615,8 @@ function copyButton(ctx: RenderContext): HTMLElement {
 
 /**
  * Replaces the slot markers in a rendered HTML view with their content (see
- * htmlSection.ts). A marker the view wrapped in a paragraph of its own, as a
- * Markdown renderer does, replaces the paragraph. Slots whose marker the view
- * dropped, such as inside an element its sanitizer removed, follow the rest.
+ * htmlSection.ts). Slots whose marker is gone, inside an element the
+ * sanitizer removed, follow the rest, so no Markdown the user wrote is lost.
  */
 function fillSlots(root: HTMLElement, count: number, content: (index: number) => Node, doc: Document): void {
   if (count === 0) return;
@@ -637,12 +638,10 @@ function fillSlots(root: HTMLElement, count: number, content: (index: number) =>
       last = m.index + m[0].length;
     }
     if (last < value.length) fragment.append(value.slice(last));
-    const parent = text.parentElement;
-    const alone = parent !== root && parent?.tagName === 'P' && parent.childNodes.length === 1 && !value.replace(SLOT_MARKER, '').trim();
-    (alone ? parent : text).replaceWith(fragment);
+    text.replaceWith(fragment);
   }
-  // Nothing rendered yet (a view still loading): the slots fill when it settles.
-  if (!root.hasChildNodes()) return;
+  // A view still loading: the slots fill when it settles. (Not an empty one, such as a sanitizer that removed everything: its slots follow here.)
+  if (root.hasAttribute(PENDING_ATTR)) return;
   for (let i = 0; i < count; i++) if (!placed.has(i)) root.appendChild(content(i));
 }
 
@@ -1283,7 +1282,10 @@ export class BlockRenderer {
         this.noteViewBlock(key);
         return null;
       }
-      if (result && typeof result.then === 'function') this.awaitView(key, result);
+      if (result && typeof result.then === 'function') {
+        el.setAttribute(PENDING_ATTR, '');
+        this.awaitView(key, result);
+      }
       if (this.viewCache.size >= 500) {
         const oldest = this.viewCache.keys().next().value!;
         this.viewCache.delete(oldest);
@@ -1388,6 +1390,7 @@ export class BlockRenderer {
       // Dropped by `dropViews` while pending: a later render of the same source owns the key now.
       if (this.pendingViews.get(key) !== blocks) return;
       this.pendingViews.delete(key);
+      this.viewCache.get(key)?.removeAttribute(PENDING_ATTR);
       if (!ok) {
         this.failedViews.add(key);
         this.viewCache.delete(key);

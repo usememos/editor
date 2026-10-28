@@ -21,7 +21,7 @@ import { parseMarkdown } from './markdown/parse';
 import { serializeBlocks, serializeMarkdown } from './markdown/serialize';
 import { type MarkdownSource, loadMarkdown } from './markdown/source';
 import { type MarkdownOptions, type ResolvedMarkdown, resolveMarkdown } from './markdown/options';
-import type { Extension } from './extension';
+import type { Extension, SyntaxView } from './extension';
 import { defaultKeymap } from './extensions/keymap';
 import { decorationContext } from './decorations';
 import type { SuggestionConfig, SuggestionItem } from './extensions/suggestion';
@@ -72,6 +72,7 @@ import { ResizeHandles, type ImageTarget } from './ui/resizeHandles';
 import { Menu, type MenuItem, type MenuSection, isMac, isSafari, isTouch, matches, setPopupContainer } from './ui/popup';
 import { BLOCK_ATTR, BlockRenderer, atomAt, calloutName, childIndex, contentElement, domText, MARKDOWN_VIEW, domToPosition, positionToDom, type ResolveUrl, defaultResolveUrl } from './view/dom';
 import { revealedViews, sameRevealed, viewEntry } from './view/reveal';
+import { type SanitizeHtml, htmlView } from './view/html';
 import { scrollRectIntoView } from './view/scroll';
 import { FONT_PROPERTIES, type Theme, mergeClasses, tokenProperties } from './theme';
 import { SourceHighlighter } from './sourceHighlight';
@@ -122,6 +123,13 @@ export interface EditorOptions {
   resolveUrl?: ResolveUrl;
   /** `referrerpolicy` for images, such as `no-referrer`. Fixed for the editor's lifetime. */
   referrerPolicy?: ReferrerPolicy;
+  /**
+   * Renders raw HTML: the editor parses an HTML block or an inline run with
+   * the browser's parser and this decides what of the tree reaches the page.
+   * Without it, HTML shows as its source. See `SanitizeHtml`. Fixed for the
+   * editor's lifetime.
+   */
+  sanitizeHtml?: SanitizeHtml;
   /** A copy button on code blocks, which copies the code. Default true. Fixed for the editor's lifetime. */
   codeCopy?: boolean;
   /**
@@ -520,8 +528,11 @@ export class Editor {
       const els = this.widgets.filter((w) => w.blockId === blockId).map((w) => w.element);
       return els.length ? els : undefined;
     };
-    // Raw Markdown blocks are rendered by the editor itself (see MARKDOWN_VIEW).
-    this.renderer.views = new Map([['markdown', MARKDOWN_VIEW], ...this.extensions.flatMap((e) => Object.entries(e.views ?? {}))]);
+    // Raw Markdown blocks are rendered by the editor itself (see MARKDOWN_VIEW), and
+    // raw HTML through the host's sanitizer (see htmlView); an extension's `html` view is ignored.
+    const views: [string, SyntaxView][] = [['markdown', MARKDOWN_VIEW]];
+    if (options.sanitizeHtml) views.push(['html', htmlView(options.sanitizeHtml)]);
+    this.renderer.views = new Map([...views, ...this.extensions.flatMap((e) => Object.entries(e.views ?? {}).filter(([name]) => name !== 'html'))]);
     this.renderer.viewContext = { editor: this };
     this.renderer.blockViews = this.extensions.flatMap((e) => (e.blockView ? [{ name: e.name, view: e.blockView }] : []));
     this.renderer.markdown = this.markdown;

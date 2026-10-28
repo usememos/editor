@@ -114,9 +114,11 @@ export interface Extension {
    * language (`code:mermaid`) renders code blocks of that language, such as
    * diagrams. While editing, a token shows its source when the caret touches
    * it, and a block when the selection is in it; clicking either does the
-   * same. Read-only always shows the rendered view.
+   * same. Read-only always shows the rendered view. Raw HTML is not a
+   * syntax an extension renders: the editor parses it and the `sanitizeHtml`
+   * option decides what is shown, so `html` is not a key here.
    */
-  readonly views?: Readonly<Record<string, SyntaxView>>;
+  readonly views?: Readonly<Record<string, SyntaxView>> & { readonly html?: never };
   /**
    * Draws the blocks `match` picks with `render`, in place of the editor's
    * own rendering; see `BlockView`. `editor.refreshViews(name)`, with this

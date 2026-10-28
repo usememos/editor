@@ -135,22 +135,30 @@ test('a code: view renders code blocks of its language; a pending view shows its
   expect(await md(page)).toBe('before\n\n```diagram\nA -> B\n```\n\n```diagram\nbad\n```\n\nafter');
 });
 
-test('an html view renders inline raw HTML a run at a time, and its source shows at the caret', async ({ page }) => {
+test('inline raw HTML renders a run at a time through sanitizeHtml, and its source shows at the caret', async ({ page }) => {
   await page.goto('/?empty');
   await page.evaluate(() => {
     const { Editor } = (window as any).core;
     const w = window as any;
     w.editor.destroy();
+    w.trees = [] as string[];
     w.editor = new Editor({
       element: document.getElementById('editor'),
       content: 'Press <kbd>**Ctrl**</kbd> now<br>next <span>open',
-      extensions: [{ name: 'html', views: { html: (source: string, el: HTMLElement) => void (el.textContent = `[${source}]`) } }],
+      sanitizeHtml: (tree: DocumentFragment) => {
+        const holder = document.createElement('div');
+        holder.append(tree.cloneNode(true));
+        w.trees.push(holder.innerHTML);
+        return tree;
+      },
     });
   });
   const views = page.locator('#editor .mbe-view-html');
-  // The view gets the tags; the Markdown between them renders as the editor's own.
-  await expect(views).toHaveText(['[<kbd>Ctrl</kbd>]', '[<br>]', '[<span>]']);
-  await expect(views.first().locator('strong')).toHaveText('Ctrl');
+  // The sanitizer gets each run parsed, with a marker where the Markdown between the tags goes; the editor renders that itself.
+  expect(await page.evaluate(() => (window as any).trees)).toEqual(['<kbd>\uE0000\uE001</kbd>', '<br>', '<span></span>']);
+  await expect(views).toHaveCount(3);
+  await expect(views.first().locator('kbd > strong')).toHaveText('Ctrl');
+  await expect(views.nth(1).locator('br')).toHaveCount(1);
   await expect(page.locator('#editor .mbe-raw-html')).toHaveCount(0);
   // Typing after a run keeps it rendered; the saved Markdown never changes.
   await page.locator('#editor').click();
@@ -244,41 +252,40 @@ const SECTION = [
   '[^1]: very important',
 ].join('\n');
 
-/** An editor whose `html` view parses HTML as is: a test stand-in for a sanitizing renderer. */
-const sectionEditor = (page: import('@playwright/test').Page, content: string, options: { editable?: boolean; markdownView?: boolean } = {}) =>
+/** An editor whose sanitizer allows everything and records what it saw: a test stand-in for the host's. */
+const sectionEditor = (page: import('@playwright/test').Page, content: string, options: { editable?: boolean } = {}) =>
   page.evaluate(
     ({ content, options }) => {
       const { Editor, footnotes, tags } = (window as any).core;
       const w = window as any;
       w.editor.destroy();
       w.views = [] as string[];
-      const html = (source: string, el: HTMLElement) => {
-        w.views.push(source);
-        const template = document.createElement('template');
-        // A Markdown renderer wraps a line of its own in a paragraph, as memos' remark pipeline does.
-        template.innerHTML = options.markdownView ? source.replace(/\n\n(\uE000\d+\uE001)\n\n/g, '<p>$1</p>') : source;
-        el.append(template.content);
-      };
       w.editor = new Editor({
         element: document.getElementById('editor'),
         content,
         editable: options.editable ?? true,
-        // <details> as an HTML section, not a collapsible section of blocks, so the view renders it.
+        // <details> as an HTML section, not a collapsible section of blocks, so the sanitizer renders it.
         markdown: { breaks: true, details: false },
-        extensions: [footnotes(), tags(), { name: 'html', views: { html } }],
+        extensions: [footnotes(), tags()],
+        sanitizeHtml: (tree: DocumentFragment) => {
+          const holder = document.createElement('div');
+          holder.append(tree.cloneNode(true));
+          w.views.push(holder.innerHTML);
+          return tree;
+        },
       });
     },
     { content, options },
   );
 
-test('an HTML section renders its HTML through the view and the Markdown inside as blocks', async ({ page }) => {
+test('an HTML section renders its HTML through the sanitizer and the Markdown inside as blocks', async ({ page }) => {
   await page.goto('/?empty');
   await sectionEditor(page, SECTION, { editable: false });
   const editor = page.locator('#editor');
   const details = editor.locator('.mbe-view-html > details');
   await expect(details).toHaveCount(1);
   await expect(details.locator('summary')).toHaveText('Test');
-  // The view never sees the Markdown, only the HTML around it.
+  // The sanitizer sees the HTML parsed, with a marker where the Markdown goes, and never the Markdown.
   expect(await page.evaluate(() => (window as any).views)).toEqual(['<details><summary>Test</summary>\n\n\uE0000\uE001\n\n</details>']);
   // The quote, code block, footnote reference and tag inside render as they do anywhere else.
   await details.locator('summary').click();
@@ -309,14 +316,6 @@ test('a reference inside a section leads to its note, and the section stays open
   await expect(details).toHaveAttribute('open', '');
   await details.locator('.mbe-footnote-ref').click();
   await expect(page.locator('#editor .mbe-footnotes .mbe-footnote')).toBeInViewport();
-});
-
-test('a section reads the same through a view that renders Markdown, which wraps a slot in a paragraph', async ({ page }) => {
-  await page.goto('/?empty');
-  await sectionEditor(page, SECTION, { editable: false, markdownView: true });
-  const details = page.locator('#editor details');
-  await expect(details.locator(':scope > .mbe-flow > blockquote')).toHaveCount(1);
-  await expect(details.locator('p:has(.mbe-flow)')).toHaveCount(0);
 });
 
 test('any HTML element can hold Markdown: centered text, table cells and nested sections', async ({ page }) => {

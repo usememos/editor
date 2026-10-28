@@ -7,38 +7,16 @@
 // into the HTML a Markdown renderer would give for the same rendering, so a
 // difference is a difference a reader would see, not a difference in markup.
 //
-// Raw HTML renders through a test `html` view that keeps the source as
-// tokens, which `editorHtml` writes back unescaped. The browser's HTML parser
-// then builds it together with the content around it, as it does for the
-// other renderers' output.
+// Raw HTML renders through a `sanitizeHtml` that allows everything, so the
+// editor's own parse of it is what `editorHtml` writes back, element by
+// element. Each HTML block is parsed on its own: an element the block never
+// closes ends with the block, where a renderer that concatenates all blocks
+// into one HTML document would let it run on.
 
 import { Editor } from '../../src/editor';
 import type { Extension } from '../../src/extension';
-import { SLOT_MARKER } from '../../src/markdown/htmlSection';
+import { VOID_ELEMENTS } from '../../src/markdown/htmlSection';
 import type { MarkdownOptions } from '../../src/markdown/options';
-
-const OPEN = '⟦H:';
-const CLOSE = '⟧';
-const reToken = /⟦H:([^⟧]*)⟧/g;
-
-/** Shows raw HTML as tokens of its source, around the slot markers that fillSlots replaces with Markdown content. */
-const rawHtml: Extension = {
-  name: 'conformance-html',
-  views: {
-    html(source, element) {
-      const marker = new RegExp(SLOT_MARKER.source, 'g');
-      let text = '';
-      let last = 0;
-      for (const m of source.matchAll(marker)) {
-        if (m.index > last) text += OPEN + encodeURIComponent(source.slice(last, m.index)) + CLOSE;
-        text += m[0];
-        last = m.index + m[0].length;
-      }
-      if (last < source.length) text += OPEN + encodeURIComponent(source.slice(last)) + CLOSE;
-      element.textContent = text;
-    },
-  },
-};
 
 export interface RenderOptions {
   readonly markdown?: MarkdownOptions;
@@ -54,9 +32,11 @@ export function renderEditor(markdown: string, options: RenderOptions = {}): str
     content: markdown,
     editable: false,
     markdown: options.markdown,
-    extensions: [...(options.extensions ?? []), rawHtml],
+    extensions: options.extensions ?? [],
     // Every URL as written: URL policy is tested separately.
     resolveUrl: (url) => url,
+    // Everything the user wrote: sanitizing is the host's.
+    sanitizeHtml: (tree) => tree,
   });
   try {
     return editorHtml(element);
@@ -69,18 +49,25 @@ export function renderEditor(markdown: string, options: RenderOptions = {}): str
 const escapeText = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const escapeAttr = (s: string) => escapeText(s).replace(/"/g, '&quot;');
 
-/** A text node's text, with raw HTML tokens written back as HTML and line breaks as <br>. */
-function text(value: string, verbatim = false): string {
-  let out = '';
-  let last = 0;
-  for (const m of value.matchAll(reToken)) {
-    out += plain(value.slice(last, m.index), verbatim) + decodeURIComponent(m[1]!);
-    last = m.index + m[0].length;
-  }
-  return out + plain(value.slice(last), verbatim);
+/** A text node's text, with line breaks as <br> unless `verbatim`. */
+const text = (s: string, verbatim = false) => (verbatim ? escapeText(s) : escapeText(s).replace(/\n/g, '<br>'));
+
+/**
+ * Raw HTML content: `'block'` for an HTML block, whose text is the user's
+ * HTML text, or `'inline'` for a run in a paragraph, whose text is the
+ * editor's own (a run hands the sanitizer only its tags).
+ */
+type Raw = false | 'block' | 'inline';
+
+/** An element of raw HTML as the sanitizer let it through, with its attributes. */
+function rawElement(el: HTMLElement, raw: Raw): string {
+  const tag = el.tagName.toLowerCase();
+  const attrs = Array.from(el.attributes, (a) => ` ${a.name}="${escapeAttr(a.value)}"`).join('');
+  return VOID_ELEMENTS.has(tag) ? `<${tag}${attrs}>` : `<${tag}${attrs}>${inline(el, raw)}</${tag}>`;
 }
 
-const plain = (s: string, verbatim: boolean) => (verbatim ? escapeText(s) : escapeText(s).replace(/\n/g, '<br>'));
+/** Whether the editor made this element: its classes are its own, raw HTML's are the user's. */
+const editorMade = (el: Element) => /(^|\s)mbe-/.test(el.className);
 
 const has = (el: Element, name: string) => el.classList.contains(name);
 
@@ -186,7 +173,7 @@ function block(el: HTMLElement): string {
   const quoted = el.tagName === 'BLOCKQUOTE' && !has(el, 'mbe-quote') && !has(el, 'mbe-list-item') ? el.querySelector<HTMLElement>(':scope > .mbe-content') : null;
   const own = quoted ?? el;
   if (has(own, 'mbe-view-markdown')) return flow(Array.from(own.querySelector(':scope > .mbe-flow')!.children) as HTMLElement[]);
-  if (own.dataset.syntax === 'html') return has(own, 'mbe-view-html') ? inline(own) : `<pre>${escapeText(own.textContent ?? '')}</pre>`;
+  if (own.dataset.syntax === 'html') return has(own, 'mbe-view-html') ? inline(own, 'block') : `<pre>${escapeText(own.textContent ?? '')}</pre>`;
   if (own.dataset.syntax) return `<pre data-raw="${escapeAttr(own.dataset.syntax)}">${escapeText(own.textContent ?? '')}</pre>`;
   if (el.tagName === 'BLOCKQUOTE' && el.querySelector(':scope > .mbe-flow')) {
     // A quote the model cannot hold, such as one inside a quote.
@@ -220,12 +207,17 @@ function block(el: HTMLElement): string {
 
 const MARKS: Record<string, string> = { STRONG: 'strong', EM: 'em', S: 'del', CODE: 'code' };
 
-/** Inline content: text, marks, links, images, and raw HTML from the view, with any Markdown its slots hold. */
-function inline(parent: Element): string {
+/**
+ * Inline content: text, marks, links, images, and raw HTML the sanitizer
+ * let through, with any Markdown its slots hold. In `raw` content, an
+ * element the editor did not make is the user's HTML, written as it is.
+ */
+function inline(parent: Element, raw: Raw = false): string {
   let out = '';
   for (const node of Array.from(parent.childNodes)) {
     if (node.nodeType === 3) {
-      out += text((node as Text).data);
+      // A line break in the editor's text is a <br>; in an HTML block's own text it is whitespace, as the browser read it.
+      out += text((node as Text).data, raw === 'block');
       continue;
     }
     if (node.nodeType !== 1) continue;
@@ -233,6 +225,8 @@ function inline(parent: Element): string {
     if (el.tagName === 'BR' && el.hasAttribute('data-mbe-fill')) continue;
     if (el.tagName === 'BR') out += '<br>';
     else if (has(el, 'mbe-flow')) out += flow(Array.from(el.children) as HTMLElement[]);
+    else if (has(el, 'mbe-view-html')) out += inline(el, raw || 'inline');
+    else if (raw && !editorMade(el)) out += rawElement(el, raw);
     else if (el.tagName === 'IMG') {
       const title = el.getAttribute('title');
       out += `<img src="${escapeAttr(el.getAttribute('src') ?? '')}" alt="${escapeAttr(el.getAttribute('alt') ?? '')}"${title !== null ? ` title="${escapeAttr(title)}"` : ''}>`;
@@ -246,7 +240,7 @@ function inline(parent: Element): string {
     // Raw HTML shown as source (no view, or a run that crosses a link): the reader sees its text.
     else if (has(el, 'mbe-raw-html')) out += escapeText(el.textContent ?? '');
     // Decorations, tokens and views add no meaning of their own.
-    else out += inline(el);
+    else out += inline(el, raw);
   }
   return out;
 }

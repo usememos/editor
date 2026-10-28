@@ -38,7 +38,19 @@
   "realistic#35": "accepted: two lists that differ only in their marker show as one list (only the spacing differs)",
   "realistic#36": "accepted: two lists that differ only in their marker show as one list (only the spacing differs)",
   "realistic#43": "accepted: an empty quote (`>`) shows nothing; other renderers draw a quote with no lines and no height, which shows only as spacing",
-  "realistic#48": "accepted: `&#10;` shows as a line break where other renderers show a space (the editor saves a line break inside a heading as `&#10;`, so it must load back as one)"
+  "realistic#48": "accepted: `&#10;` shows as a line break where other renderers show a space (the editor saves a line break inside a heading as `&#10;`, so it must load back as one)",
+  "commonmark#155": "accepted: an element its HTML block never closes ends with the block; a renderer that joins every block into one page would let it hold the blocks after it (each block is parsed on its own)",
+  "commonmark#184": "accepted: an element its HTML block never closes ends with the block; a renderer that joins every block into one page would let it hold the blocks after it (each block is parsed on its own)",
+  "commonmark#187": "accepted: an inline tag with no closing tag in its paragraph renders as an empty element; a browser reading the whole page would let it wrap the rest of the paragraph (each run is parsed on its own)",
+  "commonmark#201": "accepted: an inline tag with no closing tag in its paragraph renders as an empty element; a browser reading the whole page would let it wrap the rest of the paragraph (each run is parsed on its own)",
+  "commonmark#344": "accepted: an inline tag with no closing tag in its paragraph renders as an empty element; a browser reading the whole page would let it wrap the rest of the paragraph (each run is parsed on its own)",
+  "commonmark#491": "accepted: an inline tag with no closing tag in its paragraph renders as an empty element; a browser reading the whole page would let it wrap the rest of the paragraph (each run is parsed on its own)",
+  "commonmark#494": "accepted: an inline tag with no closing tag in its paragraph renders as an empty element; a browser reading the whole page would let it wrap the rest of the paragraph (each run is parsed on its own)",
+  "cmark-gfm-spec#652": "accepted: an inline tag with no closing tag in its paragraph renders as an empty element; a browser reading the whole page would let it wrap the rest of the paragraph (each run is parsed on its own)",
+  "cmark-gfm-extensions#22": "accepted: an inline tag with no closing tag in its paragraph renders as an empty element; a browser reading the whole page would let it wrap the rest of the paragraph (each run is parsed on its own)",
+  "markdown-it-commonmark-extras#27": "accepted: an inline tag with no closing tag in its paragraph renders as an empty element; a browser reading the whole page would let it wrap the rest of the paragraph (each run is parsed on its own)",
+  "commonmark#616": "accepted: a tag with `<` inside an attribute value is split at the `<`, so its text shows (rare)",
+  "commonmark#626": "harness: happy-dom reads `<!-->` as the start of a comment, so the reference's second paragraph is swallowed; the editor's two paragraphs are what a browser shows"
  },
  "saved": {
   "markdown-it-commonmark-extras#12": "accepted: a paragraph of only links with no text loads as an empty line, and empty lines at the end of the document are not saved (see docs/syntax.md, Empty lines)",
@@ -48,7 +60,10 @@
  "memos": {
   "cmark-regression#15": "accepted: where an unclosed <script> ends inside a list (script text is never shown)",
   "commonmark#148": "accepted: inside a raw `<pre>`, the blank line before Markdown content and the line ending after it show; other renderers drop them (Markdown inside `<pre>` is rare)",
-  "github-task-list-item#1": "accepted: `- [ ]` with nothing after it is an empty task item, as in the memos server (goldmark); GitHub shows `[ ]` as text. It is how the editor saves an empty task item. Also, two lists that differ only in their marker show as one list (only the spacing differs)"
+  "github-task-list-item#1": "accepted: `- [ ]` with nothing after it is an empty task item, as in the memos server (goldmark); GitHub shows `[ ]` as text. It is how the editor saves an empty task item. Also, two lists that differ only in their marker show as one list (only the spacing differs)",
+  "commonmark#187": "accepted: an inline tag with no closing tag in its paragraph renders as an empty element; a browser reading the whole page would let it wrap the rest of the paragraph (each run is parsed on its own)",
+  "commonmark#494": "accepted: an inline tag with no closing tag in its paragraph renders as an empty element; a browser reading the whole page would let it wrap the rest of the paragraph (each run is parsed on its own)",
+  "cmark-gfm-extensions#22": "accepted: an inline tag with no closing tag in its paragraph renders as an empty element; a browser reading the whole page would let it wrap the rest of the paragraph (each run is parsed on its own)"
  },
  "elsewhere": {
   "cmark-gfm-spec#631": "accepted: the `_` the serializer escapes after an e-mail address (`a.b\\_`) ends the address for micromark, which links it; cmark-gfm (GitHub) does not",

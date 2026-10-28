@@ -63,6 +63,7 @@ The same names work in `new Editor(options)` and as React props, except that Rea
 | `headingIds` | `(headings) => (string \| undefined)[]` | Element ids for headings, for in-page links and an outline. Called with every heading's `{ text, level }` in order, again when the document changes. |
 | `codeCopy` | `boolean` | A copy button at the end of each code block's bar, shown on hover or focus, that copies the code. Default `true`. Its text is `labels.copyCode` and `labels.copied`, its icons `icons.copyCode` and `icons.copied`. |
 | `referrerPolicy` | `ReferrerPolicy` | `referrerpolicy` for images, such as `no-referrer`. Images always load lazily. |
+| `sanitizeHtml` | `(tree, { kind, editor }) => Node \| null \| Promise` | Renders raw HTML. Without it, HTML blocks and inline HTML show as their source: the editor renders no HTML on its own. See [Raw HTML](#raw-html). |
 | `onLinkClick` | `({ editor, href, event }) => boolean` | Called when a link is clicked to be opened: a plain click while read-only, Mod+click while editing, or Open on the link card. Return `true` to handle it, for example to route an in-app link or scroll to an anchor; otherwise the editor opens `href` in a new tab. |
 | `theme` | `{ classes?, tokens?, colorScheme? }` | Your own classes on rendered elements, colors and fonts, and light or dark. See [Theming](#theming). |
 | `toolbar` | `boolean \| { items? }` | Shows the formatting toolbar on selection, and the image toolbar on a selected image (see [Images](#images)). Default `true`. `items` lists the formatting toolbar's controls; they keep the built-in order: `textStyle`, `bold`, `italic`, `strike`, `inlineCode`, `link`, `quote`, `codeBlock`, `list` (exported as `TOOLBAR_ITEMS`). For example, `{ items: ['bold', 'italic', 'strike', 'inlineCode', 'link'] }` keeps it to inline formatting. `false` turns both toolbars off. |
@@ -243,7 +244,7 @@ Options: `limit` (default 8), `minLength`, the letters typed before the popup op
 
 `markdown` adds syntax; see `math()`, `footnotes()`, [docs/syntax.md](docs/syntax.md) and [docs/architecture.md](docs/architecture.md).
 
-`views` shows a syntax rendered instead of as source, keyed by syntax name. A key of `code:` and a language (`code:mermaid`) renders code blocks of that language, such as diagrams. The key `html` renders raw HTML: HTML blocks (`kind` `'block'`), and inline HTML (`'inline'`) one run at a time, an opening tag through its closing tag (`<kbd>**Ctrl**</kbd>`), or a single tag (`<br>`). The view gets HTML only: the editor renders the Markdown between the tags itself, inline text and the blocks inside an HTML section such as `<details>` (see [HTML blocks](docs/syntax.md#html-blocks)), and puts it in place of a marker it leaves in the HTML, so parse the source as HTML and keep its text. The editor never renders HTML itself, so sanitize it in the view. While editing, a token shows its source when the caret touches it, and a block when the selection is in it; clicking either does the same. Read-only always shows the rendered view. A view that finishes later, such as a diagram library that loads on demand, fills in a placeholder and returns a promise: the editor shows the placeholder, then the finished element; a promise that rejects or resolves to `false` shows the source. A view's element is not in the page yet, so a view that lays out text, such as a diagram, measures it with its fourth argument, the editor: `getComputedStyle(ctx.editor.root)` gives the font, for a canvas `measureText`. Rendered views are cached by source; `editor.refreshViews(syntax?)` renders them again when what they show depends on something else that changed, such as a renderer that finished loading, and the editor calls it itself when the theme's font tokens change. `math()` uses this when given a render function; the core has no math renderer of its own, so pass one such as KaTeX. A render function may return a promise, for a renderer loaded on demand; the formula's source shows until it resolves:
+`views` shows a syntax rendered instead of as source, keyed by syntax name. A key of `code:` and a language (`code:mermaid`) renders code blocks of that language, such as diagrams. Raw HTML is not a view an extension provides: the editor parses it and the `sanitizeHtml` option decides what is shown (see [Raw HTML](#raw-html)), so `html` is not a key here. While editing, a token shows its source when the caret touches it, and a block when the selection is in it; clicking either does the same. Read-only always shows the rendered view. A view that finishes later, such as a diagram library that loads on demand, fills in a placeholder and returns a promise: the editor shows the placeholder, then the finished element; a promise that rejects or resolves to `false` shows the source. A view's element is not in the page yet, so a view that lays out text, such as a diagram, measures it with its fourth argument, the editor: `getComputedStyle(ctx.editor.root)` gives the font, for a canvas `measureText`. Rendered views are cached by source; `editor.refreshViews(syntax?)` renders them again when what they show depends on something else that changed, such as a renderer that finished loading, and the editor calls it itself when the theme's font tokens change. `math()` uses this when given a render function; the core has no math renderer of its own, so pass one such as KaTeX. A render function may return a promise, for a renderer loaded on demand; the formula's source shows until it resolves:
 
 ```ts
 import katex from 'katex';
@@ -437,6 +438,31 @@ The title is plain text. The blocks inside are ordinary blocks, edited in place,
 Make one with Collapsible section in the slash menu, Mod+Shift+6, or `>>> ` at the start of a paragraph; a paragraph with text becomes the title. In the title, Enter moves to the first line of the section, or, in a collapsed section, adds a line after it. Enter on an empty last line of a section moves the line out of it. Arrow keys pass over a collapsed section, and a caret that lands inside one (from undo, for example) expands it. Backspace at the start of the line after a section moves into its last line. A block selection that includes a title or an end includes the whole section, so copying, cutting and deleting take it whole. Removing a title, with Backspace at its start or Mod+Shift+6, keeps the blocks inside as ordinary blocks.
 
 Only a `<details>` written the way the editor saves it loads as a section: the opening tag and a `<summary>` of plain text, a blank line, Markdown, and `</details>` at the start of a line. Other `<details>`, such as one on a single line, stay raw HTML.
+
+## Raw HTML
+
+Markdown may hold HTML: an HTML block such as `<div align="center">` or `<!-- comment -->`, an HTML section whose tags enclose Markdown across blank lines (see [HTML blocks](docs/syntax.md#html-blocks)), and inline HTML such as `<kbd>Ctrl</kbd>`. All of it is edited as source and saved verbatim. The editor renders none of it on its own: without `sanitizeHtml`, HTML shows as its source.
+
+`sanitizeHtml` renders it. The editor parses each HTML block and each inline run (an opening tag through its closing tag, or a single tag) with the browser's parser into a `DocumentFragment` that is not in the page, so nothing in it has run or loaded, and calls the function with the fragment and `{ kind, editor }`, where `kind` is `'block'` or `'inline'`. Return the tree to attach, after removing what your policy does not allow, or `null` to show the source instead. The function may return a promise, for a sanitizer loaded on demand: the HTML shows nothing until it settles, then the tree, and a rejection shows the source. Results are cached by source; `editor.refreshViews('html')` runs the sanitizer again.
+
+```ts
+// A small allowlist. An app with richer HTML passes the tree to a sanitizer library and returns the result.
+const ALLOWED = new Set(['details', 'summary', 'kbd', 'sup', 'sub', 'br', 'div', 'p', 'span']);
+const editor = new Editor({
+  element,
+  sanitizeHtml: (tree) => {
+    for (const el of Array.from(tree.querySelectorAll('*'))) {
+      if (!ALLOWED.has(el.localName)) el.remove();
+      else for (const name of el.getAttributeNames()) if (name !== 'align') el.removeAttribute(name);
+    }
+    return tree;
+  },
+});
+```
+
+The Markdown between the tags is the editor's. The fragment holds a marker (private-use characters) in the text where it goes; keep the text, and the editor renders that Markdown itself, as blocks inside a section or inline text inside a run, with footnotes, tags, math and code highlighting as anywhere else, and puts it in place of the marker after the sanitizer has run. A sanitizer that removes the element around a marker loses nothing: that Markdown follows the rest.
+
+The sanitizer is also the place for product policy: which hosts an `<iframe>` may load from, `target` and `rel` on links, `referrerpolicy` on images, classes. The editor keeps no such policy of its own. While editing, an HTML block shows its source when the selection is in it, and an inline run when the caret touches it; a click does the same. Read-only always shows the rendered HTML. The rendered element has the class `mbe-view-html`.
 
 ## Source mode
 

@@ -53,3 +53,4 @@ export type { SuggestionState } from './suggest/controller';
 export type { Widget, WidgetRender } from './widgets';
 export { fileHandler, type FileHandlerOptions } from './extensions/fileHandler';
 export { defaultResolveUrl, type ResolveUrl, type UrlKind } from './view/dom';
+export type { SanitizeHtml, SanitizeHtmlContext, SanitizedHtml } from './view/html';
