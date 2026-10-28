@@ -128,16 +128,18 @@ function shrink(parts: string[], ours: (md: string) => string): string {
   return md;
 }
 
-it(`matches commonmark.js and micromark where they agree (${RUNS} documents, seed ${SEED})`, () => {
+it(`matches commonmark.js and micromark where they agree (${RUNS} documents, seed ${SEED})`, async () => {
   const next = random(SEED);
   const found = new Map<string, string>();
   for (let run = 0; run < RUNS && found.size < 20; run++) {
+    // Let the worker answer vitest between batches: a long synchronous loop starves its RPC, which fails the run on a slow machine.
+    if (run % 500 === 0) await new Promise((resolve) => setImmediate(resolve));
     const parts = Array.from({ length: 1 + Math.floor(next() * 8) }, () => FRAGMENTS[Math.floor(next() * FRAGMENTS.length)]!);
     const md = parts.join('');
     for (const [layer, ours] of [['parser', parsed], ...(run % 10 === 0 ? [['rendered', shown] as const] : [])] as const) {
-      if (!differs(md, ours)) continue;
+      if (!differs(md, ours) || accepted(layer, md)) continue;
       const small = shrink(parts, ours);
-      if (!found.has(small) && !(small in known) && !accepted(layer, small)) found.set(small, `${layer}: ${JSON.stringify(small)}\n  references: ${references(small)}\n  ours:       ${ours(small)}`);
+      if (!found.has(small) && !(small in known)) found.set(small, `${layer}: ${JSON.stringify(small)}\n  references: ${references(small)}\n  ours:       ${ours(small)}`);
       break;
     }
   }
