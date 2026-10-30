@@ -1290,10 +1290,7 @@ export class Editor {
     const rects = range.getClientRects();
     const rect = rects.length ? (isCollapsed(this.current.selection) ? rects[rects.length - 1]! : range.getBoundingClientRect()) : null;
     if (rect && (rect.width > 0 || rect.height > 0)) return rect;
-    // An empty block has no text to measure.
-    const el = this.renderer.elementFor(this.current.selection.focus.blockId);
-    const content = el ? contentElement(el, this.current.selection.focus.cell) : null;
-    return (content ?? el)?.getBoundingClientRect() ?? null;
+    return this.emptyRect(this.current.selection.focus, sel.focusNode);
   }
 
   /** @internal The caret at the model's selection focus. Unlike `selectionRect`, works while the editor is not focused. */
@@ -1307,9 +1304,25 @@ export class Editor {
       const rect = rects[rects.length - 1];
       if (rect && rect.height > 0) return rect;
     }
-    // An empty block, or a caret next to an atom, has no text to measure.
+    return this.emptyRect(pos, point?.node ?? null);
+  }
+
+  /**
+   * The rectangle for a selection with no text to measure (an empty block, or
+   * a caret next to an atom): the box of the content at `pos`. In source mode
+   * an empty line is an element of its own inside the text, so the box of the
+   * element at `node` stands in when it is one: the whole text's box would put
+   * the caret at the top of the document and scroll the view there.
+   */
+  private emptyRect(pos: Position, node: Node | null): DOMRect | null {
     const el = this.renderer.elementFor(pos.blockId);
-    return ((el && contentElement(el, pos.cell)) ?? el)?.getBoundingClientRect() ?? null;
+    const content = (el && contentElement(el, pos.cell)) ?? el;
+    const near = node?.nodeType === 1 ? (node as Element) : (node?.parentElement ?? null);
+    if (content && near && near !== content && content.contains(near)) {
+      const rect = near.getBoundingClientRect();
+      if (rect.height > 0) return rect;
+    }
+    return content?.getBoundingClientRect() ?? null;
   }
 
   /** @internal The viewport rectangle of the text from `from` to `to` in one block or cell (its first line), and whether that text is right-to-left. */

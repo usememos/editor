@@ -639,3 +639,30 @@ test('typing keeps the highlighting current, and the shown text stays the Markdo
   expect(await shown(page)).toBe('one **two** three\n');
   expect(await page.locator('#editor .mbe-source .mbe-src-strong').allTextContents()).toEqual(['two']);
 });
+
+test('Enter at the bottom of a scrolled editor keeps the view where it was', async ({ page }) => {
+  await open(page, Array.from({ length: 80 }, (_, i) => `line ${i}`).join('\n\n'));
+  const editor = page.locator('#editor');
+  const scrollTop = () => editor.evaluate((el) => el.scrollTop);
+  const inView = () =>
+    page.evaluate(() => {
+      const caret = (window as any).editor.selectionRect() as DOMRect;
+      const box = document.getElementById('editor')!.getBoundingClientRect();
+      return caret.top >= box.top && caret.bottom <= box.bottom;
+    });
+  await select(page, (await md(page)).length);
+  await editor.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  const before = await scrollTop();
+  expect(before).toBeGreaterThan(100);
+  // The new line is empty, so the caret has no text to measure; the view used to jump to the top of the text.
+  await page.keyboard.press('Enter');
+  await frame(page);
+  expect(await scrollTop()).toBeGreaterThanOrEqual(before);
+  expect(await inView()).toBe(true);
+  await page.keyboard.type('```');
+  await page.keyboard.press('Enter');
+  await frame(page);
+  expect(await scrollTop()).toBeGreaterThanOrEqual(before);
+  expect(await inView()).toBe(true);
+  expect(await md(page)).toBe(`${Array.from({ length: 80 }, (_, i) => `line ${i}`).join('\n\n')}\n\`\`\`\n`);
+});
