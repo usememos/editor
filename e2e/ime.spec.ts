@@ -88,6 +88,45 @@ test.describe('input method through the DevTools Protocol', () => {
     expect(await blocks(page)).toEqual(['p:', 'p:你好']);
   });
 
+  // WebKit dispatches each composition input with the DOM selection spanning
+  // the composed text, and collapses it to the caret only afterwards, on a
+  // selectionchange the editor ignores while composing. When the word is the
+  // block's whole text, the commit replaces the <p>, so nothing re-reads the
+  // selection before the settle render, which once wrote the stale range back
+  // to the DOM and selected the word (usememos/memos#6517).
+  test('a DOM range during composition input never reaches the model (WebKit order)', async ({ page }) => {
+    await page.evaluate(() => {
+      (window as any).imeRanges = true;
+      // A capturing listener on the document runs before the editor's own input handler.
+      document.addEventListener(
+        'input',
+        (e) => {
+          if (!(window as any).imeRanges || (e as InputEvent).inputType !== 'insertCompositionText') return;
+          const text = document.querySelector('#editor > p')?.firstChild;
+          if (!text) return;
+          getSelection()!.setBaseAndExtent(text, 0, text, text.textContent!.length);
+          setTimeout(() => getSelection()!.collapse(text, text.textContent!.length));
+        },
+        true,
+      );
+    });
+    const ime = await startComposing(page, ['あ', 'あか', 'あかさ']);
+    // The model never holds the range: the caret is at the end of the composed text.
+    // This is the check that sees the bug. Chromium collapses the selection itself on
+    // commit, and that selectionchange corrected the model before the settle render.
+    expect(await page.evaluate(() => (window as any).editor.getSelection())).toMatchObject({
+      anchor: { offset: 3 },
+      focus: { offset: 3 },
+    });
+    // On commit, WebKit's selection is not readable at all (the text node is outside any block).
+    await page.evaluate(() => ((window as any).imeRanges = false));
+    await ime.commit('あかさ');
+    await expect.poll(() => page.evaluate(() => getSelection()!.isCollapsed)).toBe(true);
+    await expect(page.locator('.mbe-toolbar')).toBeHidden();
+    await page.keyboard.type('x');
+    expect(await md(page)).toBe('あかさx\n');
+  });
+
   test('composition in a list item and in a table cell', async ({ page }) => {
     await page.keyboard.type('- ');
     await compose(page, ['に'], 'にほん');

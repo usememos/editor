@@ -27,24 +27,25 @@ The last column names the automated test that covers the same behavior in Chromi
 | 4 | Compose inside bold text, and after Mod+B in an empty spot. The committed text is bold in the output. | composition inside bold text; marks chosen before composing |
 | 5 | Select text across two paragraphs, then start composing. The selection is replaced and the two paragraphs join. | composition over a selection spanning blocks |
 | 6 | Compose in an empty paragraph, a heading, a list item, a quote, a code block, and a table cell. | composition starting in an empty block; in a list item and a table cell; in a heading, a quote and a code block |
-| 7 | Korean: type a syllable, then a second one that takes the final consonant of the first (가, then ㄴ, then ㅏ). Both syllables are correct, and fast typing does not drop or double a syllable. | Korean: a syllable that takes the next consonant |
-| 8 | Press Enter to commit a composition. No new block is created by that same Enter (on macOS Japanese, Enter commits; a second Enter splits). Repeat with the slash menu open: the commit does not pick an item. | Enter that commits a composition |
-| 9 | Press Backspace during a composition. Only the composition text changes. | No (the keyboard handles it) |
-| 10 | Undo right after a commit removes the committed text in one step. | a composition is one undo step |
-| 11 | Japanese: type a full-width slash (`／`). The slash menu opens. Keep composing: the menu filters. | full-width slash; an open suggestion menu filters by the composed text |
-| 12 | Select text: the formatting toolbar shows. Start composing: it hides. | the formatting toolbar hides while composing |
-| 13 | Android: type with autocorrect on, accept a suggestion, then backspace through it. The output matches the screen. | autocorrect and word suggestions replace the word (events only) |
-| 14 | Android: type a word and, while it is still underlined, tap Save. The saved text includes the word. | saving while composing keeps the composed text |
-| 15 | Android: type `/` and then `tab` (underlined), then Enter. The table is inserted and no empty line is added. Repeat with `#` and a tag if the tag menu is on. | an open suggestion menu filters; Enter from a keyboard that sends keyCode 229 |
-| 16 | iOS: type with autocorrect on (for example "teh "), and tap a QuickType suggestion. The output matches the screen. | autocorrect and word suggestions replace the word (events only) |
-| 17 | iOS: use dictation for one sentence. The output matches the screen. | No |
-| 18 | macOS: hold a letter key and pick an accented letter from the menu (é). The output shows only the accented letter. | No |
-| 19 | Firefox: compose and commit a word with a candidate that differs from the reading (Japanese かんじ → 漢字). Undo removes it in one step. | the last input after compositionend (Firefox order, events only) |
-| 20 | Japanese: type a full-width `＃` after a space. The tag popup opens. Pick a tag: the output has an ASCII `#`. | a full-width ＃ opens the popup and a pick writes # |
-| 21 | Pinyin: type `#`, then `riji` and convert it to `日记`. The tag list stays shown while the reading is underlined, then shows `#日记`. | a reading that matches nothing keeps the list until it is converted |
-| 22 | With the tag popup open, compose a word and commit it with Enter. The commit does not pick an item; a second Enter does. On Safari, also press the second Enter quickly. | the Enter that commits a composition does not pick |
-| 23 | Android and iOS: with the tag popup open and a word still underlined, tap an item. The output has the picked tag once, and the underlined word is not added again. | a click on an item while composing commits the composed text once, then picks |
-| 24 | Android: type `#wor` in a word that already exists (`#wor` then `k`, all underlined by the keyboard). The popup opens as you type. | composed text in a token opens the popup and filters it |
+| 7 | Compose a word as the only text of an empty paragraph and commit it. The word is not selected afterwards, and the toolbar does not open. Korean: the second syllable does not replace the first. | a DOM range during composition input never reaches the model (WebKit order) |
+| 8 | Korean: type a syllable, then a second one that takes the final consonant of the first (가, then ㄴ, then ㅏ). Both syllables are correct, and fast typing does not drop or double a syllable. | Korean: a syllable that takes the next consonant |
+| 9 | Press Enter to commit a composition. No new block is created by that same Enter (on macOS Japanese, Enter commits; a second Enter splits). Repeat with the slash menu open: the commit does not pick an item. | Enter that commits a composition |
+| 10 | Press Backspace during a composition. Only the composition text changes. | No (the keyboard handles it) |
+| 11 | Undo right after a commit removes the committed text in one step. | a composition is one undo step |
+| 12 | Japanese: type a full-width slash (`／`). The slash menu opens. Keep composing: the menu filters. | full-width slash; an open suggestion menu filters by the composed text |
+| 13 | Select text: the formatting toolbar shows. Start composing: it hides. | the formatting toolbar hides while composing |
+| 14 | Android: type with autocorrect on, accept a suggestion, then backspace through it. The output matches the screen. | autocorrect and word suggestions replace the word (events only) |
+| 15 | Android: type a word and, while it is still underlined, tap Save. The saved text includes the word. | saving while composing keeps the composed text |
+| 16 | Android: type `/` and then `tab` (underlined), then Enter. The table is inserted and no empty line is added. Repeat with `#` and a tag if the tag menu is on. | an open suggestion menu filters; Enter from a keyboard that sends keyCode 229 |
+| 17 | iOS: type with autocorrect on (for example "teh "), and tap a QuickType suggestion. The output matches the screen. | autocorrect and word suggestions replace the word (events only) |
+| 18 | iOS: use dictation for one sentence. The output matches the screen. | No |
+| 19 | macOS: hold a letter key and pick an accented letter from the menu (é). The output shows only the accented letter. | No |
+| 20 | Firefox: compose and commit a word with a candidate that differs from the reading (Japanese かんじ → 漢字). Undo removes it in one step. | the last input after compositionend (Firefox order, events only) |
+| 21 | Japanese: type a full-width `＃` after a space. The tag popup opens. Pick a tag: the output has an ASCII `#`. | a full-width ＃ opens the popup and a pick writes # |
+| 22 | Pinyin: type `#`, then `riji` and convert it to `日记`. The tag list stays shown while the reading is underlined, then shows `#日记`. | a reading that matches nothing keeps the list until it is converted |
+| 23 | With the tag popup open, compose a word and commit it with Enter. The commit does not pick an item; a second Enter does. On Safari, also press the second Enter quickly. | the Enter that commits a composition does not pick |
+| 24 | Android and iOS: with the tag popup open and a word still underlined, tap an item. The output has the picked tag once, and the underlined word is not added again. | a click on an item while composing commits the composed text once, then picks |
+| 25 | Android: type `#wor` in a word that already exists (`#wor` then `k`, all underlined by the keyboard). The popup opens as you type. | composed text in a token opens the popup and filters it |
 
 ## Not handled yet
 

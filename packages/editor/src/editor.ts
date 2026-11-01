@@ -2231,8 +2231,13 @@ export class Editor {
     }
     const block = read.doc.blocks.find((b) => b.id === composition.blockId);
     if (block) this.renderer.adopt(block);
-    const selection = this.readDomSelection();
-    this.commit(selection ? { ...read, selection: clampSelection(read.doc, selection) } : read);
+    // WebKit dispatches composition input with the DOM selection spanning the
+    // composed text and collapses it only afterwards, which the model never
+    // sees while composing. The caret is at the focus. A range must not reach
+    // the model here: when the committed word is the block's whole text, the
+    // settle render would write it back to the DOM and select the word.
+    const focus = this.readDomSelection()?.focus;
+    this.commit(focus ? { ...read, selection: clampSelection(read.doc, { anchor: focus, focus }) } : read);
   }
 
   /**
