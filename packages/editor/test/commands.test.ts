@@ -519,17 +519,19 @@ describe('tables', () => {
 });
 
 describe('block shortcuts', () => {
-  const typed = (text: string) => {
+  const typedState = (text: string) => {
     let s = at(state(paragraph()), 0, 0);
     for (const ch of text) {
       s = cmd.insertText(s, ch);
-      if (ch === ' ' || ch === '-') s = cmd.applyBlockInputRules(s) ?? s;
+      if (ch === ' ' || ch === '-' || ch === '|') s = cmd.applyBlockInputRules(s) ?? s;
     }
-    return show(s);
+    return s;
   };
+  const typed = (text: string) => show(typedState(text));
 
   it.each([
     ['## Hi', ['h2:Hi']],
+    ['| h1 | h2 |\n| :--- | ---: |\n| a | b |', ['table:h1|h2/a|b']],
     ['- item', ['ul0:item']],
     ['* item', ['ul0:item']],
     ['1. item', ['ol0:item']],
@@ -541,6 +543,22 @@ describe('block shortcuts', () => {
     ['---', ['hr', 'p:']],
   ])('%s', (input, expected) => {
     expect(typed(input)).toEqual(expected);
+  });
+
+  it('keeps the caret at the end of the typed table', () => {
+    const s = typedState('| h1 | h2 |\n| --- | --- |\n| a | b |');
+
+    expect(show(s)).toEqual(['table:h1|h2/a|b']);
+    expect(s.selection.focus).toEqual({ blockId: s.doc.blocks[0]!.id, offset: 1, cell: { row: 1, col: 1 } });
+  });
+
+  it.each([
+    ['an unfinished delimiter', '| h1 | h2 |\n| :--- | ---:'],
+    ['a table without a body row', '| h1 | h2 |\n| :--- | ---: |'],
+    ['a standalone delimiter', '| --- | --- |'],
+    ['fewer delimiter cells than header cells', '| h1 | h2 |\n| --- |'],
+  ])('keeps %s as a paragraph', (_name, markdown) => {
+    expect(typed(markdown)).toEqual([`p:${markdown}`]);
   });
 
   it('keeps the start number of an ordered list', () => {

@@ -1014,6 +1014,11 @@ function splitRow(text: string, line = 0, offset = 0, pad = 0): Cell[] {
   return cells;
 }
 
+/** Number of cells written in a table row, before short rows are padded. */
+export function tableRowWidth(text: string): number {
+  return splitRow(text).length;
+}
+
 /** A cell from the text between its pipes and the pieces of it written as such: the whitespace around the text is trimmed off, and so are the pieces in it. */
 function cell(value: string, pieces: readonly ContentLine[]): Cell {
   let lead = 0;

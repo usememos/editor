@@ -2095,7 +2095,7 @@ export class Editor {
     } else {
       // Shortcuts are separate undo steps, so undo restores the typed characters.
       const typed = this.state;
-      if (text === ' ' || text === '-') this.run((s) => cmd.applyBlockInputRules(s, this.markdown));
+      if (text === ' ' || text === '-' || text === '|') this.run((s) => cmd.applyBlockInputRules(s, this.markdown));
       if (text.length === 1 && '*_`~'.includes(text)) this.run((s) => cmd.applyInlineInputRules(s));
       if (this.markdown.inline.length > 0) this.run((s) => cmd.applyTokenInputRules(s, this.markdown.inline) ?? s);
       if (text === ' ' && this.markdown.autolinks) this.run((s) => cmd.applyAutolinkInputRule(s) ?? s);

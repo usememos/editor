@@ -75,7 +75,9 @@ import {
   keepQuoteStart,
 } from './model';
 import { emailLiterals, isLiteralBoundary, urlLiteralAt } from './markdown/autolink';
+import { tableRowWidth } from './markdown/blocks';
 import type { InlineSyntax } from './markdown/options';
+import { parseMarkdown } from './markdown/parse';
 import { isExcluded } from './decorations';
 
 export type Command = (state: EditorState) => EditorState;
@@ -1267,7 +1269,7 @@ export function moveCell(state: EditorState, delta: 1 | -1): EditorState {
 
 /**
  * Block shortcuts typed at the start of a paragraph, e.g. "## " turns it into
- * a level 2 heading. Runs after a space or "-" is typed. Returns null when no
+ * a level 2 heading. Runs after a space, "-" or "|" is typed. Returns null when no
  * rule applies.
  */
 const BLOCK_RULES: [RegExp, (m: RegExpExecArray) => BlockTypeSpec][] = [
@@ -1292,6 +1294,22 @@ export function applyBlockInputRules(state: EditorState, dialect: { callouts?: b
   const block = getBlock(state.doc, pos.blockId);
   if (!isTextBlock(block) || pos.cell) return null;
   const before = inlineText(block.content).slice(0, pos.offset);
+
+  if (
+    block.type === 'paragraph' &&
+    pos.offset === inlineLength(block.content) &&
+    before.endsWith('|') &&
+    before.lastIndexOf('\n') > before.indexOf('\n')
+  ) {
+    const parsed = parseMarkdown(before).blocks;
+    const parsedTable = parsed.length === 1 && parsed[0]?.type === 'table' && parsed[0].rows.length > 1 ? parsed[0] : null;
+    const lastLine = before.slice(before.lastIndexOf('\n') + 1);
+    if (parsedTable && tableRowWidth(lastLine) === parsedTable.align.length) {
+      const next = { ...parsedTable, id: block.id };
+      const cell = { row: next.rows.length - 1, col: next.align.length - 1 };
+      return replaceBlock(state, next, caret(next.id, inlineLength(next.rows[cell.row]![cell.col]!), cell));
+    }
+  }
 
   if ((block.type === 'paragraph' || block.type === 'quote') && before === '---') {
     // A divider in a quote is in the quote.
