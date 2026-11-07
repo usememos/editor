@@ -2790,10 +2790,15 @@ export class Editor {
     return internalMarkdown(html) ?? (serializeMarkdown({ blocks: htmlToDoc(html).blocks }, this.markdown).replace(/\n$/, '') || text);
   }
 
-  /** The URL a paste makes a link of: the text, when it is one URL and the paste is not plain. */
+  /** The URL a paste over selected text makes a link of, when the paste is not plain. */
   private pastedUrl(text: string, plainOnly: boolean): string | null {
+    return !plainOnly && !isCollapsed(this.state.selection) ? this.linkableUrl(text) : null;
+  }
+
+  /** The text as a link's URL: one URL whose scheme the URL policy allows, such as `https://` or `obsidian://`, else null. */
+  private linkableUrl(text: string): string | null {
     const url = text.trim();
-    return !plainOnly && !isCollapsed(this.state.selection) && PASTED_LINK.test(url) ? url : null;
+    return PASTED_LINK.test(url) && this.renderer.resolveUrl(url, 'link') !== null ? url : null;
   }
 
   /** Clipboard content as blocks: the editor's own Markdown, other HTML, or text as Markdown. */
@@ -2806,6 +2811,14 @@ export class Editor {
     else if (html) fragment = htmlToDoc(html).blocks;
     else fragment = parseMarkdown(text, this.markdown).blocks;
     if (fragment.length === 0 && text) fragment = parseMarkdown(text, this.markdown).blocks;
+    // Markdown links only `www.`, `http`, `https` and `ftp` URLs on their own,
+    // so a lone URL with another scheme the policy allows, such as
+    // `obsidian://…`, is made a link here. It saves as `<obsidian://…>`.
+    const url = html ? null : this.linkableUrl(text);
+    const only = fragment.length === 1 ? fragment[0]! : null;
+    if (url !== null && only?.type === 'paragraph' && !only.content.some((s) => s.link !== undefined)) {
+      fragment = [paragraph([{ text: url, marks: [], link: url }])];
+    }
     return fragment;
   }
 
@@ -3647,8 +3660,8 @@ function writeClipboard(data: DataTransfer, doc: Doc, markdown: string, plain = 
   data.setData('text/html', `<meta charset="utf-8"><div data-mbe-markdown="${encodeURIComponent(markdown)}">${docToHtml(doc)}</div>`);
 }
 
-/** A URL pasted over a selection, which becomes a link. */
-const PASTED_LINK = /^(https?:\/\/|mailto:)\S+$/i;
+/** A pasted URL that can become a link: a scheme followed by `//`, or `mailto:`, and no spaces. */
+const PASTED_LINK = /^(?:[a-z][a-z0-9+.-]*:\/\/|mailto:)\S+$/i;
 
 /** The Markdown the editor's own copied HTML carries (see `writeClipboard`), or null for other HTML. */
 function internalMarkdown(html: string): string | null {

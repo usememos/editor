@@ -56,6 +56,38 @@ test('pasting Markdown copied from a code editor reads the text as Markdown', as
   expect(await blocks(page)).toEqual(['h1:Title', 'p:Some bold text', 'ul0:one', 'ul0:two']);
 });
 
+test('a pasted URL with any scheme the URL policy allows becomes a link', async ({ page }) => {
+  // The default policy drops obsidian: and slack:, so the URL stays text.
+  await paste(page, { 'text/plain': 'obsidian://open?vault=x' });
+  expect(await md(page)).toBe('obsidian://open?vault=x\n');
+  await page.evaluate(() => {
+    const { defaultResolveUrl } = (window as any).core;
+    (window as any).editor.setOptions({
+      resolveUrl: (url: string, kind: string) => (/^(obsidian|slack):/.test(url) ? url : defaultResolveUrl(url, kind)),
+    });
+  });
+  await page.evaluate(() => (window as any).editor.setMarkdown(''));
+  await page.locator('#editor').click();
+  // On its own: a link that saves as an autolink and can be opened.
+  await paste(page, { 'text/plain': ' obsidian://open?vault=x\n' });
+  expect(await md(page)).toBe('<obsidian://open?vault=x>\n');
+  await expect(page.locator('#editor a.mbe-link')).toHaveAttribute('href', 'obsidian://open?vault=x');
+  // Over selected text: the text becomes the link's text.
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('chat');
+  for (let i = 0; i < 4; i++) await page.keyboard.press('Shift+ArrowLeft');
+  await paste(page, { 'text/plain': 'slack://open' });
+  expect(await md(page)).toBe('<obsidian://open?vault=x>\n\n[chat](slack://open)\n');
+  // A scheme the policy still drops, and text that only looks like one, stay text.
+  for (const text of ['javascript://alert(1)', 'note: obsidian://x']) {
+    await page.evaluate(() => (window as any).editor.setMarkdown(''));
+    await page.locator('#editor').click();
+    await paste(page, { 'text/plain': text });
+    expect(await md(page)).toBe(text + '\n');
+    expect(await page.locator('#editor a.mbe-link').count()).toBe(0);
+  }
+});
+
 test('Ctrl+Shift+V pastes plain text without parsing Markdown', async ({ page }) => {
   // Simulate the keystroke without triggering the browser's own paste, then the paste event.
   await page.evaluate(() =>

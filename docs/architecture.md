@@ -295,7 +295,7 @@ Paragraphs, headings, quotes, list items and table cells have `dir="auto"`, so e
 ## Clipboard
 
 - **Copy and cut** write `text/plain` as Markdown and `text/html` as rendered HTML. With a block selection they copy the whole blocks. The HTML carries the Markdown in a `data-mbe-markdown` attribute, so copying between editors is lossless.
-- **Paste** tries, in order: the editor's own HTML, other `text/html` (`htmlToDoc`, which reads tags and inline styles, including Google Docs' wrapper), then `text/plain` as Markdown. HTML from a code editor or terminal, which only colors the source (VS Code's has its own `vscode-editor-data` type; others are `<div>`s and `<span>`s with no formatting, see `isStyledText`), is skipped, so Markdown copied from them pastes formatted, not as `# Title` text. Mod+Shift+V pastes plain text. A URL pasted over a selection becomes a link.
+- **Paste** tries, in order: the editor's own HTML, other `text/html` (`htmlToDoc`, which reads tags and inline styles, including Google Docs' wrapper), then `text/plain` as Markdown. HTML from a code editor or terminal, which only colors the source (VS Code's has its own `vscode-editor-data` type; others are `<div>`s and `<span>`s with no formatting, see `isStyledText`), is skipped, so Markdown copied from them pastes formatted, not as `# Title` text. Mod+Shift+V pastes plain text. A URL pasted over a selection becomes a link. A URL is a scheme with `//`, such as `https://` or `obsidian://`, or `mailto:`, that `resolveUrl` allows (`linkableUrl`). Pasted on its own, such a URL that Markdown does not autolink, like `obsidian://…`, becomes a link too, saved as `<obsidian://…>`.
 
 ## Markdown
 

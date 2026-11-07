@@ -326,7 +326,7 @@ Marks combine freely, except that text in a code span takes no other mark. The s
 - Reference labels are not kept: an edited block saves `[text][ref]` as `[text](url "title")`, with the definition's title. Link and image titles are kept, in double quotes, and show as a tooltip. Changing a link's URL keeps its title.
 - An image is one inline atom. Its alt text is plain text. `resolveUrl` can change or drop the displayed `src` without changing the saved Markdown.
 - Typing `[text](url)` or `![alt](src)` does not make a link or an image. The characters stay plain text and are saved escaped, so they read back as text: `\[text\](url)`.
-- To add a link, select text and press Mod+K, or paste a URL over it. Pasting Markdown, such as `[text](url)` or `![alt](src)`, makes links and images.
+- To add a link, select text and press Mod+K, or paste a URL over it. A URL pasted on its own becomes a link when the app's URL policy allows its scheme, including schemes such as `obsidian://` that Markdown does not autolink. Pasting Markdown, such as `[text](url)` or `![alt](src)`, makes links and images.
 - Images also come from the app: `insertMarkdown`, for example after a `fileHandler()` upload.
 
 ### Image size and alignment
