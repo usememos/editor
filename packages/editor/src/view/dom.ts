@@ -1156,6 +1156,8 @@ function wrapMarks(span: Span, node: Node, ctx: RenderContext): Node {
  */
 export class BlockRenderer {
   private rendered = new Map<string, { block: Block; el: HTMLElement; reveal?: BlockReveal }>();
+  /** What the last render put in the root. Anything else there is the browser's (see `strayText`). */
+  private placed: readonly Node[] = [];
   /** Last number written into each ordered item's marker, keyed by element. */
   private readonly numbers = new WeakMap<HTMLElement, number>();
 
@@ -1524,7 +1526,22 @@ export class BlockRenderer {
       }
     }
     this.rendered = next;
+    this.placed = nodes;
     updateNeighborMarks(doc, (id) => next.get(id)?.el, this.numbers, this.collapsed, this.labels);
+  }
+
+  /**
+   * The text the browser left in the root, outside what the last render put
+   * there. WebKit, on committing a composition that is a block's whole text,
+   * removes the block's element and inserts the committed text in the root:
+   * as a text node for a paragraph, and inside elements that keep the block's
+   * look for others (`<span style="font-size: …"><b>` for a heading).
+   */
+  strayText(): string {
+    const placed = new Set(this.placed);
+    let text = '';
+    for (let node = this.root.firstChild; node; node = node.nextSibling) if (!placed.has(node)) text += node.textContent ?? '';
+    return text;
   }
 
   /**
@@ -1797,18 +1814,6 @@ export function domText(contentEl: HTMLElement): string {
   return leaves(contentEl)
     .map(leafText)
     .join('');
-}
-
-/**
- * The text the browser left directly in the root, outside every block. The
- * renderer puts only elements there. WebKit, on committing a composition that
- * is a block's whole text, removes the block's element and inserts the
- * committed text as a text node of the root.
- */
-export function strayText(root: HTMLElement): string {
-  let text = '';
-  for (let node = root.firstChild; node; node = node.nextSibling) if (node.nodeType === 3) text += (node as Text).data;
-  return text;
 }
 
 /** The text before `child` of source mode's content element (or before its end): each line before it with its line ending. */

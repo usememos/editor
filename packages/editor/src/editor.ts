@@ -70,7 +70,7 @@ import { BlockHandle } from './ui/blockHandle';
 import { LinkCard, type LinkTarget } from './ui/linkCard';
 import { ResizeHandles, type ImageTarget } from './ui/resizeHandles';
 import { Menu, type MenuItem, type MenuSection, isMac, isSafari, isTouch, matches, setPopupContainer } from './ui/popup';
-import { BLOCK_ATTR, BlockRenderer, atomAt, calloutName, childIndex, contentElement, domText, strayText, MARKDOWN_VIEW, domToPosition, positionToDom, type ResolveUrl, defaultResolveUrl } from './view/dom';
+import { BLOCK_ATTR, BlockRenderer, atomAt, calloutName, childIndex, contentElement, domText, MARKDOWN_VIEW, domToPosition, positionToDom, type ResolveUrl, defaultResolveUrl } from './view/dom';
 import { revealedViews, sameRevealed, viewEntry } from './view/reveal';
 import { type SanitizeHtml, htmlView } from './view/html';
 import { scrollRectIntoView } from './view/scroll';
@@ -2223,6 +2223,8 @@ export class Editor {
     const composition = this.composition;
     if (!composition || this.readOnly) return;
     const before = this.state;
+    const el = this.renderer.elementFor(composition.blockId);
+    const replaced = !!el && !el.isConnected;
     const read = this.readDom(before, composition.marks, composition.blockId, ended);
     if (!read) return;
     if (!composition.recorded) {
@@ -2238,6 +2240,12 @@ export class Editor {
     // settle render would write it back to the DOM and select the word.
     const focus = this.readDomSelection()?.focus;
     this.commit(focus ? { ...read, selection: clampSelection(read.doc, { anchor: focus, focus }) } : read);
+    // The block the browser removed (see readDom) is rendered again by that
+    // commit, and the node that held the caret is gone: the browser put the
+    // caret at the end of the root, which a selectionchange would read as the
+    // last block. The browser is done with this composition, so the caret
+    // goes back into the block now.
+    if (replaced) this.syncDomSelection();
   }
 
   /**
@@ -2274,9 +2282,10 @@ export class Editor {
       // WebKit commits a composition by deleting the composed text and then
       // inserting the committed text. When the composed text is the block's
       // whole text, the delete removes the block's element, and the committed
-      // text lands in the root, outside every block: that is the block's text
-      // now. Without it the model keeps the text composed before the commit
-      // (the pinyin, not the word picked), and the next render writes it back.
+      // text lands in the root, outside every block (see `strayText`): that is
+      // the block's text now. Without it the model keeps the text composed
+      // before the commit (the pinyin, not the word picked), and the next
+      // render writes it back.
       // Between the two steps the root holds no text. The block keeps its text
       // until the composition has ended, so nothing renders mid-commit.
       const replaced = !el.isConnected;
@@ -2292,7 +2301,7 @@ export class Editor {
         const content = containerContent(getBlock(state.doc, block.id), cell);
         if ((!contentEl && !replaced) || !content) continue;
         const oldText = inlineText(content);
-        const newText = contentEl ? domText(contentEl) : strayText(this.root);
+        const newText = contentEl ? domText(contentEl) : this.renderer.strayText();
         if (oldText === newText || (replaced && !newText && !ended)) continue;
         let start = 0;
         while (start < oldText.length && start < newText.length && oldText[start] === newText[start]) start++;

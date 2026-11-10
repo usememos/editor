@@ -530,14 +530,20 @@ for (const [order, browsers] of [['end last', 'Chromium, Safari'], ['end first',
 
 // WebKit commits a composition by deleting the composed text and then inserting
 // the committed text. When the composed text is the block's whole text, the
-// delete removes the block's element, and the committed text becomes a text
-// node of the root, outside every block. Desktop Safari goes from the reading
+// delete removes the block's element, and the committed text lands in the
+// root, outside every block: a text node for a paragraph, and for a heading
+// `<span style="font-size: …"><b>` before the line break it left. Desktop Safari goes from the reading
 // straight to this commit, so the word picked is only ever in that text node:
 // the editor kept the reading and rendered it back (usememos/memos#6547).
 test.describe('a composition that is the whole text of a block the browser removes on commit (WebKit order)', () => {
-  /** The delete step of the commit, then the committed text if there is any, then compositionend. */
-  async function commitReplacingBlock(page: Page, text: string) {
-    await page.evaluate((text) => {
+  /**
+   * The delete step of the commit, then the committed text if there is any, then compositionend.
+   * Returns where the browser's caret is right after: the block's index in the root and the
+   * offset, or null outside every block. Read before anything else runs: a selectionchange for
+   * a caret left outside the blocks would move the editor's caret to another block.
+   */
+  async function commitReplacingBlock(page: Page, text: string, styled = false) {
+    const caret = await page.evaluate(({ text, styled }) => {
       const root = document.getElementById('editor')!;
       const send = (type: string, inputType: string, data: string | null) =>
         root.dispatchEvent(new InputEvent(type, { bubbles: true, cancelable: false, inputType, data, isComposing: true }));
@@ -549,13 +555,24 @@ test.describe('a composition that is the whole text of a block the browser remov
       if (text) {
         send('beforeinput', 'insertFromComposition', text);
         const node = document.createTextNode(text);
-        filler.replaceWith(node);
+        if (styled) {
+          const span = document.createElement('span');
+          span.style.fontSize = '20px';
+          span.appendChild(document.createElement('b')).appendChild(node);
+          filler.before(span);
+        } else {
+          filler.replaceWith(node);
+        }
         getSelection()!.collapse(node, text.length);
         send('input', 'insertFromComposition', text);
       }
       root.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: text }));
-    }, text);
+      const { focusNode, focusOffset } = getSelection()!;
+      const block = (focusNode instanceof Element ? focusNode : focusNode!.parentElement)!.closest('#editor > *');
+      return block?.hasAttribute('data-block-id') ? [Array.prototype.indexOf.call(root.children, block), focusOffset] : null;
+    }, { text, styled });
     await frame(page);
+    return caret;
   }
 
   test.beforeEach(async ({ page }) => installIme(page));
@@ -565,7 +582,7 @@ test.describe('a composition that is the whole text of a block the browser remov
     await ime.update(page, 'ce');
     await ime.update(page, "ce'shi");
     expect(await md(page)).toBe("ce'shi\n");
-    await commitReplacingBlock(page, '测试');
+    expect(await commitReplacingBlock(page, '测试')).toEqual([0, 2]);
     expect(await md(page)).toBe('测试\n');
     expect(await blocks(page)).toEqual(['p:测试']);
     await expect(page.locator('#editor')).toHaveText('测试');
@@ -587,20 +604,23 @@ test.describe('a composition that is the whole text of a block the browser remov
     await page.keyboard.press('Control+b');
     await ime.start(page);
     await ime.update(page, "ce'shi");
-    await commitReplacingBlock(page, '测试');
+    // The caret goes back into the block at once, not to the block after it.
+    expect(await commitReplacingBlock(page, '测试', true)).toEqual([1, 2]);
     expect(await md(page)).toBe('one\n\n## **测试**\n\nthree\n');
     await page.keyboard.type('x');
     expect(await md(page)).toBe('one\n\n## **测试x**\n\nthree\n');
   });
 
   test('a composition deleted without a commit leaves the block empty', async ({ page }) => {
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('two');
+    await page.keyboard.press('ArrowUp');
     await ime.start(page);
     await ime.update(page, 'ce');
-    await commitReplacingBlock(page, '');
-    expect(await md(page)).toBe('');
-    expect(await blocks(page)).toEqual(['p:']);
+    expect(await commitReplacingBlock(page, '')).toEqual([0, 0]);
+    expect(await blocks(page)).toEqual(['p:', 'p:two']);
     await page.keyboard.type('x');
-    expect(await md(page)).toBe('x\n');
+    expect(await blocks(page)).toEqual(['p:x', 'p:two']);
   });
 });
 
