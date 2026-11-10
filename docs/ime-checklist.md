@@ -46,6 +46,7 @@ The last column names the automated test that covers the same behavior in Chromi
 | 23 | With the tag popup open, compose a word and commit it with Enter. The commit does not pick an item; a second Enter does. On Safari, also press the second Enter quickly. | the Enter that commits a composition does not pick |
 | 24 | Android and iOS: with the tag popup open and a word still underlined, tap an item. The output has the picked tag once, and the underlined word is not added again. | a click on an item while composing commits the composed text once, then picks |
 | 25 | Android: type `#wor` in a word that already exists (`#wor` then `k`, all underlined by the keyboard). The popup opens as you type. | composed text in a token opens the popup and filters it |
+| 26 | Safari, Pinyin: in an empty paragraph, type a reading (`ceshi`) and pick a candidate with Space or a number. The output has the word picked (`测试`), not the reading. Then type a reading in another empty paragraph and delete it with Backspace: the paragraph stays empty. | the committed word replaces the reading; a composition deleted without a commit leaves the block empty (events only) |
 
 ## Not handled yet
 

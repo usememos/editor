@@ -1799,6 +1799,18 @@ export function domText(contentEl: HTMLElement): string {
     .join('');
 }
 
+/**
+ * The text the browser left directly in the root, outside every block. The
+ * renderer puts only elements there. WebKit, on committing a composition that
+ * is a block's whole text, removes the block's element and inserts the
+ * committed text as a text node of the root.
+ */
+export function strayText(root: HTMLElement): string {
+  let text = '';
+  for (let node = root.firstChild; node; node = node.nextSibling) if (node.nodeType === 3) text += (node as Text).data;
+  return text;
+}
+
 /** The text before `child` of source mode's content element (or before its end): each line before it with its line ending. */
 function lengthBefore(contentEl: HTMLElement, child: Node | null): number {
   let acc = 0;

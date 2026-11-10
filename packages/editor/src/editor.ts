@@ -70,7 +70,7 @@ import { BlockHandle } from './ui/blockHandle';
 import { LinkCard, type LinkTarget } from './ui/linkCard';
 import { ResizeHandles, type ImageTarget } from './ui/resizeHandles';
 import { Menu, type MenuItem, type MenuSection, isMac, isSafari, isTouch, matches, setPopupContainer } from './ui/popup';
-import { BLOCK_ATTR, BlockRenderer, atomAt, calloutName, childIndex, contentElement, domText, MARKDOWN_VIEW, domToPosition, positionToDom, type ResolveUrl, defaultResolveUrl } from './view/dom';
+import { BLOCK_ATTR, BlockRenderer, atomAt, calloutName, childIndex, contentElement, domText, strayText, MARKDOWN_VIEW, domToPosition, positionToDom, type ResolveUrl, defaultResolveUrl } from './view/dom';
 import { revealedViews, sameRevealed, viewEntry } from './view/reveal';
 import { type SanitizeHtml, htmlView } from './view/html';
 import { scrollRectIntoView } from './view/scroll';
@@ -2143,7 +2143,7 @@ export class Editor {
       return;
     }
     // Read the committed text while still composing, so nothing moves the browser selection yet.
-    this.syncComposition();
+    this.syncComposition(true);
     this.composing = false;
     if (isSafari) this.compositionEndedAt = Date.now();
     this.unsettled.add(this.composition.blockId);
@@ -2219,11 +2219,11 @@ export class Editor {
    * Reads the composed text into the model while composing. The browser's
    * DOM for the block already shows it, so the block is not re-rendered.
    */
-  private syncComposition(): void {
+  private syncComposition(ended = false): void {
     const composition = this.composition;
     if (!composition || this.readOnly) return;
     const before = this.state;
-    const read = this.readDom(before, composition.marks, composition.blockId);
+    const read = this.readDom(before, composition.marks, composition.blockId, ended);
     if (!read) return;
     if (!composition.recorded) {
       this.history.record(before, 'other');
@@ -2261,15 +2261,26 @@ export class Editor {
   /**
    * The model with the text the DOM shows: one delete and one insert per
    * changed text container, inserted text getting `marks` when set. Only
-   * `blockId` when given. Null when the text is the same.
+   * `blockId` when given: the composition's block, with `ended` once the
+   * composition has ended. Null when the text is the same.
    */
-  private readDom(from: EditorState, marks: EditorState['storedMarks'], blockId?: string): EditorState | null {
+  private readDom(from: EditorState, marks: EditorState['storedMarks'], blockId?: string, ended = false): EditorState | null {
     let state = from;
     let changed = false;
     for (const block of from.doc.blocks) {
       if (blockId !== undefined && block.id !== blockId) continue;
       const el = this.renderer.elementFor(block.id);
-      if (!el || !el.isConnected) continue;
+      if (!el) continue;
+      // WebKit commits a composition by deleting the composed text and then
+      // inserting the committed text. When the composed text is the block's
+      // whole text, the delete removes the block's element, and the committed
+      // text lands in the root, outside every block: that is the block's text
+      // now. Without it the model keeps the text composed before the commit
+      // (the pinyin, not the word picked), and the next render writes it back.
+      // Between the two steps the root holds no text. The block keeps its text
+      // until the composition has ended, so nothing renders mid-commit.
+      const replaced = !el.isConnected;
+      if (replaced && (blockId === undefined || block.type === 'table')) continue;
       const containers: { cell?: { row: number; col: number } }[] =
         block.type === 'table'
           ? block.rows.flatMap((row, r) => row.map((_, c) => ({ cell: { row: r, col: c } })))
@@ -2277,12 +2288,12 @@ export class Editor {
             ? []
             : [{}];
       for (const { cell } of containers) {
-        const contentEl = contentElement(el, cell);
+        const contentEl = replaced ? null : contentElement(el, cell);
         const content = containerContent(getBlock(state.doc, block.id), cell);
-        if (!contentEl || !content) continue;
+        if ((!contentEl && !replaced) || !content) continue;
         const oldText = inlineText(content);
-        const newText = domText(contentEl);
-        if (oldText === newText) continue;
+        const newText = contentEl ? domText(contentEl) : strayText(this.root);
+        if (oldText === newText || (replaced && !newText && !ended)) continue;
         let start = 0;
         while (start < oldText.length && start < newText.length && oldText[start] === newText[start]) start++;
         let endOld = oldText.length;

@@ -528,6 +528,82 @@ for (const [order, browsers] of [['end last', 'Chromium, Safari'], ['end first',
   });
 }
 
+// WebKit commits a composition by deleting the composed text and then inserting
+// the committed text. When the composed text is the block's whole text, the
+// delete removes the block's element, and the committed text becomes a text
+// node of the root, outside every block. Desktop Safari goes from the reading
+// straight to this commit, so the word picked is only ever in that text node:
+// the editor kept the reading and rendered it back (usememos/memos#6547).
+test.describe('a composition that is the whole text of a block the browser removes on commit (WebKit order)', () => {
+  /** The delete step of the commit, then the committed text if there is any, then compositionend. */
+  async function commitReplacingBlock(page: Page, text: string) {
+    await page.evaluate((text) => {
+      const root = document.getElementById('editor')!;
+      const send = (type: string, inputType: string, data: string | null) =>
+        root.dispatchEvent(new InputEvent(type, { bubbles: true, cancelable: false, inputType, data, isComposing: true }));
+      send('beforeinput', 'deleteCompositionText', null);
+      const filler = document.createElement('br');
+      getSelection()!.focusNode!.parentElement!.closest('#editor > *')!.replaceWith(filler);
+      getSelection()!.collapse(root, Array.prototype.indexOf.call(root.childNodes, filler));
+      send('input', 'deleteCompositionText', null);
+      if (text) {
+        send('beforeinput', 'insertFromComposition', text);
+        const node = document.createTextNode(text);
+        filler.replaceWith(node);
+        getSelection()!.collapse(node, text.length);
+        send('input', 'insertFromComposition', text);
+      }
+      root.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: text }));
+    }, text);
+    await frame(page);
+  }
+
+  test.beforeEach(async ({ page }) => installIme(page));
+
+  test('the committed word replaces the reading', async ({ page }) => {
+    await ime.start(page);
+    await ime.update(page, 'ce');
+    await ime.update(page, "ce'shi");
+    expect(await md(page)).toBe("ce'shi\n");
+    await commitReplacingBlock(page, '测试');
+    expect(await md(page)).toBe('测试\n');
+    expect(await blocks(page)).toEqual(['p:测试']);
+    await expect(page.locator('#editor')).toHaveText('测试');
+    // The caret is after the word, and the commit is one undo step.
+    await page.keyboard.type('x');
+    expect(await md(page)).toBe('测试x\n');
+    await page.keyboard.press('Control+z');
+    await page.keyboard.press('Control+z');
+    expect(await md(page)).toBe('');
+  });
+
+  test('between other blocks, in a heading, and with a mark chosen before composing', async ({ page }) => {
+    await page.keyboard.type('one');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('three');
+    await page.keyboard.press('ArrowUp');
+    await page.keyboard.type('## ');
+    await page.keyboard.press('Control+b');
+    await ime.start(page);
+    await ime.update(page, "ce'shi");
+    await commitReplacingBlock(page, '测试');
+    expect(await md(page)).toBe('one\n\n## **测试**\n\nthree\n');
+    await page.keyboard.type('x');
+    expect(await md(page)).toBe('one\n\n## **测试x**\n\nthree\n');
+  });
+
+  test('a composition deleted without a commit leaves the block empty', async ({ page }) => {
+    await ime.start(page);
+    await ime.update(page, 'ce');
+    await commitReplacingBlock(page, '');
+    expect(await md(page)).toBe('');
+    expect(await blocks(page)).toEqual(['p:']);
+    await page.keyboard.type('x');
+    expect(await md(page)).toBe('x\n');
+  });
+});
+
 // Mobile keyboards
 
 /** Sends input the way an Android keyboard can: a beforeinput that cannot be cancelled, then the DOM change. */
