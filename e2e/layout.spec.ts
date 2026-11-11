@@ -33,6 +33,25 @@ for (const font of ['', 'DejaVu Sans']) {
   });
 }
 
+test('a numbered list keeps each number on one line past 9 and 99', async ({ page }) => {
+  const list = Array.from({ length: 101 }, (_, i) => `${i + 1}. item`).join('\n');
+  await page.goto(`/?md=${encodeURIComponent(list)}`);
+  const markers = await page.evaluate(() => {
+    return Array.from(document.querySelectorAll('#editor .mbe-list-item > .mbe-marker'), (marker) => {
+      const range = document.createRange();
+      range.selectNodeContents(marker);
+      return { text: marker.textContent, lines: range.getClientRects().length, width: marker.getBoundingClientRect().width };
+    });
+  });
+  expect(markers.map((marker) => marker.text).slice(-2)).toEqual(['100.', '101.']);
+  expect(markers.filter((marker) => marker.lines !== 1)).toEqual([]);
+  // Short numbers keep the indent's width, so the text of items 1 to 9 lines up; longer ones take what they need.
+  expect(markers[0].width).toBe(24);
+  expect(markers[8].width).toBe(24);
+  expect(markers[9].width).toBeGreaterThan(24);
+  expect(markers[100].width).toBeGreaterThan(markers[9].width);
+});
+
 /** WCAG contrast ratio between an element's text color and the first opaque background behind it. */
 const contrast = (page: Page, selector: string) =>
   page.evaluate((selector) => {

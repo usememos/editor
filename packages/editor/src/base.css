@@ -157,17 +157,20 @@
 :is(.mbe-root, .mbe-flow) > blockquote.mbe-list-item[data-indent='3'] > .mbe-marker { margin-inline-start: calc(3 * var(--mbe-indent-size)); }
 :is(.mbe-root, .mbe-flow) > blockquote.mbe-list-item[data-indent='4'] > .mbe-marker { margin-inline-start: calc(4 * var(--mbe-indent-size)); }
 :is(.mbe-root, .mbe-flow) > blockquote.mbe-list-item[data-indent='5'] > .mbe-marker { margin-inline-start: calc(5 * var(--mbe-indent-size)); }
+/* The marker is one indent wide, and wider for a number that needs the room
+   ("10."). It stays on one line: the root wraps anywhere. */
 .mbe-root .mbe-marker {
   flex: none;
   box-sizing: border-box;
-  width: var(--mbe-indent-size);
+  min-width: var(--mbe-indent-size);
   padding-inline-end: 6px;
   text-align: end;
+  white-space: nowrap;
   user-select: none;
   font-variant-numeric: tabular-nums;
 }
 .mbe-root .mbe-list-item[data-list-type='bullet'] > .mbe-marker::before { content: '•'; }
-.mbe-root .mbe-list-item[data-list-type='task'] > .mbe-marker { width: auto; padding-inline-end: 8px; display: flex; }
+.mbe-root .mbe-list-item[data-list-type='task'] > .mbe-marker { padding-inline-end: 8px; display: flex; }
 .mbe-root .mbe-list-item > .mbe-content { flex: 1; min-width: 0; }
 .mbe-root .mbe-checkbox {
   box-sizing: border-box;
