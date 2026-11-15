@@ -57,6 +57,7 @@ import {
   isTextless,
   isTextBlock,
   linkAt,
+  orderedRange,
   paragraph,
   plain,
   samePosition,
@@ -1570,6 +1571,9 @@ export class Editor {
 
   private onSelectionChange(): void {
     if (this.composing || this.destroyed) return;
+    // An IME's last clause selection may arrive before the settle frame.
+    // Explicit pointer and caret-key moves still belong to the user.
+    if (this.composition?.ended && !this.pointerDown && !this.caretKey) return;
     const selection = this.readDomSelection();
     if (!selection) {
       if (!this.hasFocus()) this.updateUi();
@@ -1958,6 +1962,8 @@ export class Editor {
     if (this.composing || e.isComposing) return;
     const type = e.inputType;
     if (COMPOSITION_INPUT.has(type)) return;
+    const clause = this.composition?.ended ? this.readDomSelection() : null;
+    if (this.composition?.ended) this.syncDomSelection();
     // Input that cannot be cancelled (from some Android keyboards) changes the
     // DOM anyway, and `input` reads it back. Applying it here too would apply it twice.
     if (!e.cancelable && this.browserApplies(e)) return;
@@ -1981,7 +1987,13 @@ export class Editor {
         const text = e.data ?? '';
         // Mobile autocorrect and word suggestions replace the word before the
         // caret: the target range covers it while the selection is a caret.
-        const range = isCollapsed(this.state.selection) ? this.targetRange(e) : null;
+        let range = isCollapsed(this.state.selection) ? this.targetRange(e) : null;
+        // Ignore only the old clause selection, keeping autocorrect ranges
+        // over words before a collapsed caret or beyond that clause.
+        if (range && clause) {
+          const { from, to } = orderedRange(this.state.doc, clause);
+          if (samePosition(range.anchor, from) && samePosition(range.focus, to)) range = null;
+        }
         if (range && !isCollapsed(range)) this.current = { ...this.state, selection: range };
         if (text) this.typeText(text);
         else if (range && !isCollapsed(range)) this.run(cmd.deleteSelection, 'typing');
@@ -2358,6 +2370,7 @@ export class Editor {
     this.caretKey = null;
     if (this.fromControl(e)) return;
     if (e.isComposing || e.keyCode === 229) return;
+    if (this.composition?.ended) this.syncDomSelection();
     // Moving the caret, even back to where it was, ends the chance to undo a shortcut with Backspace.
     if (CARET_KEY.test(e.key)) this.shortcut = null;
     const mod = isMac ? e.metaKey : e.ctrlKey;

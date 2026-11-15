@@ -72,16 +72,25 @@ test.describe('input method through the DevTools Protocol', () => {
     expect(await md(page)).toBe('**a한b**\n');
   });
 
-  for (const [start, end] of [[3, 3], [0, 3], [3, 5]]) {
-    test(`committing a Japanese clause selection ${start}:${end} leaves the caret after the word`, async ({ page }) => {
-      await page.evaluate(() => {
+  for (const [start, end, notify] of [[3, 3, false], [0, 3, false], [3, 5, false], [3, 3, true], [0, 3, true], [3, 5, true]] as const) {
+    test(`committing a Japanese clause selection ${start}:${end}, selectionchange ${notify ? 'before settle' : 'missing'}, leaves the caret after the word`, async ({ page }) => {
+      await page.evaluate(({ start, end, notify }) => {
+        if (notify) {
+          const root = document.querySelector('#editor')!;
+          root.addEventListener('compositionend', () => {
+            const text = document.createTreeWalker(root, NodeFilter.SHOW_TEXT).nextNode()!;
+            document.getSelection()!.setBaseAndExtent(text, start, text, end);
+            document.dispatchEvent(new Event('selectionchange'));
+          });
+          return;
+        }
         let hold = false;
         window.addEventListener('compositionend', () => {
           hold = true;
           requestAnimationFrame(() => { hold = false; });
         }, true);
         document.addEventListener('selectionchange', (e) => { if (hold) e.stopImmediatePropagation(); }, true);
-      });
+      }, { start, end, notify });
       const cdp = await page.context().newCDPSession(page);
       for (const text of ['き', 'きょう', 'きょうはいいてんき']) {
         await frame(page);
@@ -459,6 +468,65 @@ const ime = {
     await frame(page);
   },
 };
+
+test('typing before the settle frame does not replace the last IME clause', async ({ page }) => {
+  await installIme(page);
+  await page.evaluate(() => {
+    (window as any).ime.compose(['日本語'], '日本語', 'end last');
+    const root = document.querySelector('#editor')!;
+    const text = document.createTreeWalker(root, NodeFilter.SHOW_TEXT).nextNode()!;
+    getSelection()!.setBaseAndExtent(text, 0, text, 2);
+    document.dispatchEvent(new Event('selectionchange'));
+    const input = new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: 'X' });
+    Object.defineProperty(input, 'getTargetRanges', { value: () => [new StaticRange({ startContainer: text, startOffset: 0, endContainer: text, endOffset: 2 })] });
+    root.dispatchEvent(input);
+  });
+  await frame(page);
+  expect(await md(page)).toBe('日本語X\n');
+});
+
+for (const inputType of ['insertText', 'insertReplacementText'] as const) {
+  test(`${inputType} autocorrect before the settle frame keeps its target range`, async ({ page }) => {
+    await installIme(page);
+    await page.evaluate((inputType) => {
+      (window as any).ime.compose(['teh'], 'teh', 'end last');
+      const root = document.querySelector('#editor')!;
+      const text = document.createTreeWalker(root, NodeFilter.SHOW_TEXT).nextNode()!;
+      const input = new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType, data: 'the' });
+      Object.defineProperty(input, 'getTargetRanges', { value: () => [new StaticRange({ startContainer: text, startOffset: 0, endContainer: text, endOffset: 3 })] });
+      root.dispatchEvent(input);
+    }, inputType);
+    await frame(page);
+    expect(await md(page)).toBe('the\n');
+    await page.keyboard.type('!');
+    expect(await md(page)).toBe('the!\n');
+  });
+}
+
+for (const move of ['caret key', 'pointer'] as const) {
+  test(`a ${move} move before the settle frame keeps the chosen caret`, async ({ page }) => {
+    await installIme(page);
+    await page.evaluate((move) => {
+      (window as any).ime.compose(['日本語'], '日本語', 'end last');
+      const root = document.querySelector('#editor')!;
+      const text = document.createTreeWalker(root, NodeFilter.SHOW_TEXT).nextNode()!;
+      getSelection()!.setBaseAndExtent(text, 0, text, 2);
+      document.dispatchEvent(new Event('selectionchange'));
+      if (move === 'caret key') root.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowLeft' }));
+      else {
+        root.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        root.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      }
+      getSelection()!.collapse(text, 2);
+      document.dispatchEvent(new Event('selectionchange'));
+      if (move === 'caret key') root.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'ArrowLeft' }));
+      else document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    }, move);
+    await frame(page);
+    await page.keyboard.type('X');
+    expect(await md(page)).toBe('日本X語\n');
+  });
+}
 
 test('leaving an unfinished table composition keeps later typing in saved Markdown', async ({ page }) => {
   await page.evaluate(() => {
