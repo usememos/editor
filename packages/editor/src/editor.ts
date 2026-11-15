@@ -420,7 +420,14 @@ export class Editor {
    * The current composition, kept until its block is rendered again: its
    * block, the marks for composed text, and whether it has an undo step yet.
    */
-  private composition: { blockId: string; marks: EditorState['storedMarks']; recorded: boolean } | null = null;
+  private composition: {
+    blockId: string;
+    cell?: Position['cell'];
+    trailing: number;
+    ended: boolean;
+    marks: EditorState['storedMarks'];
+    recorded: boolean;
+  } | null = null;
   /** When the last composition ended (Safari only): the next key may be the Enter that committed it. */
   private compositionEndedAt = 0;
   /**
@@ -639,6 +646,14 @@ export class Editor {
     this.listen(root, 'compositionstart', (e) => this.onCompositionStart(e));
     this.listen(root, 'compositionend', this.typed((e) => this.onCompositionEnd(e)));
     this.listen(root, 'keydown', this.typed((e) => this.onKeyDown(e as KeyboardEvent)));
+    // WebKit can normalize a caret beside a divider without notifying selectionchange.
+    this.listen(root, 'keyup', (e) => {
+      if (!CARET_KEY.test((e as KeyboardEvent).key) || this.composing || this.blockSel || this.fromControl(e)) return;
+      const selection = this.readDomSelection();
+      if (selection && (!samePosition(selection.anchor, this.state.selection.anchor) || !samePosition(selection.focus, this.state.selection.focus))) {
+        this.onSelectionChange();
+      }
+    });
     this.listen(root, 'copy', (e) => this.onCopy(e as ClipboardEvent, false));
     this.listen(root, 'cut', this.typed((e) => this.onCopy(e as ClipboardEvent, true)));
     this.listen(root, 'paste', this.typed((e) => this.onPaste(e as ClipboardEvent)));
@@ -2129,7 +2144,12 @@ export class Editor {
     if (!isCollapsed(this.state.selection)) this.run(cmd.deleteSelection);
     this.composing = true;
     // Marks chosen before composing (Mod-B, then compose) apply to all of the composed text.
-    this.composition = { blockId: this.state.selection.focus.blockId, marks: this.state.storedMarks, recorded: false };
+    const pos = this.state.selection.focus;
+    const content = containerContent(getBlock(this.state.doc, pos.blockId), pos.cell);
+    this.composition = {
+      blockId: pos.blockId, cell: pos.cell, trailing: (content ? inlineLength(content) : 0) - pos.offset,
+      ended: false, marks: this.state.storedMarks, recorded: false,
+    };
     this.toolbar?.hide();
     this.imageToolbar?.hide();
   }
@@ -2143,6 +2163,7 @@ export class Editor {
       return;
     }
     // Read the committed text while still composing, so nothing moves the browser selection yet.
+    this.composition.ended = true;
     this.syncComposition(true);
     this.composing = false;
     if (isSafari) this.compositionEndedAt = Date.now();
@@ -2207,6 +2228,7 @@ export class Editor {
    */
   private endComposition(): void {
     if (!this.composing || !this.composition) return;
+    this.composition.ended = true;
     this.syncComposition();
     this.composing = false;
     this.unsettled.add(this.composition.blockId);
@@ -2226,7 +2248,19 @@ export class Editor {
     const el = this.renderer.elementFor(composition.blockId);
     const replaced = !!el && !el.isConnected;
     const read = this.readDom(before, composition.marks, composition.blockId, ended);
-    if (!read) return;
+    if (!read && !composition.ended) return;
+    const content = containerContent(getBlock((read ?? before).doc, composition.blockId), composition.cell);
+    // A committed word ends before the unchanged suffix, even when the IME
+    // left the DOM caret on an active clause or sent compositionend before input.
+    const focus = composition.ended && content
+      ? { blockId: composition.blockId, cell: composition.cell, offset: Math.max(0, inlineLength(content) - composition.trailing) }
+      : this.readDomSelection()?.focus;
+    const next = read ?? before;
+    const selected = focus ? { ...next, selection: clampSelection(next.doc, { anchor: focus, focus }) } : next;
+    if (!read) {
+      this.current = selected;
+      return;
+    }
     if (!composition.recorded) {
       this.history.record(before, 'other');
       composition.recorded = true;
@@ -2238,8 +2272,7 @@ export class Editor {
     // sees while composing. The caret is at the focus. A range must not reach
     // the model here: when the committed word is the block's whole text, the
     // settle render would write it back to the DOM and select the word.
-    const focus = this.readDomSelection()?.focus;
-    this.commit(focus ? { ...read, selection: clampSelection(read.doc, { anchor: focus, focus }) } : read);
+    this.commit(selected);
     // The block the browser removed (see readDom) is rendered again by that
     // commit, and the node that held the caret is gone: the browser put the
     // caret at the end of the root, which a selectionchange would read as the
@@ -3284,6 +3317,12 @@ export class Editor {
    */
   private onDocumentPointerDown(e: Event): void {
     const target = e.target as Node | null;
+    if (this.composing && this.composition) {
+      const block = this.renderer.elementFor(this.composition.blockId);
+      const content = block && contentElement(block, this.composition.cell);
+      // A suggestion commits in pick(), after its menu has received the click.
+      if (target && !content?.contains(target) && !this.suggestions.contains(target)) this.endComposition();
+    }
     if (this.toolbar?.menu && !(target && this.toolbar.contains(target))) this.toolbar.closeMenu();
     if (!this.blockMenu.isOpen) return;
     if (target && (this.blockMenu.contains(target) || this.blockHandle.contains(target))) return;

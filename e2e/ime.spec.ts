@@ -72,6 +72,33 @@ test.describe('input method through the DevTools Protocol', () => {
     expect(await md(page)).toBe('**a한b**\n');
   });
 
+  for (const [start, end] of [[3, 3], [0, 3], [3, 5]]) {
+    test(`committing a Japanese clause selection ${start}:${end} leaves the caret after the word`, async ({ page }) => {
+      await page.evaluate(() => {
+        let hold = false;
+        window.addEventListener('compositionend', () => {
+          hold = true;
+          requestAnimationFrame(() => { hold = false; });
+        }, true);
+        document.addEventListener('selectionchange', (e) => { if (hold) e.stopImmediatePropagation(); }, true);
+      });
+      const cdp = await page.context().newCDPSession(page);
+      for (const text of ['き', 'きょう', 'きょうはいいてんき']) {
+        await frame(page);
+        await cdp.send('Input.imeSetComposition', { text, selectionStart: text.length, selectionEnd: text.length });
+      }
+      await frame(page);
+      await cdp.send('Input.imeSetComposition', { text: '今日はいい天気', selectionStart: start, selectionEnd: end });
+      await frame(page);
+      await cdp.send('Input.insertText', { text: '今日はいい天気' });
+      await frame(page);
+      await page.keyboard.type('X');
+      expect(await md(page)).toBe('今日はいい天気X\n');
+      await page.evaluate(() => (window as any).editor.setMarkdown((window as any).editor.getMarkdown()));
+      expect(await md(page)).toBe('今日はいい天気X\n');
+    });
+  }
+
   test('composition over a selection spanning blocks', async ({ page }) => {
     await page.keyboard.type('one');
     await page.keyboard.press('Enter');
@@ -432,6 +459,30 @@ const ime = {
     await frame(page);
   },
 };
+
+test('leaving an unfinished table composition keeps later typing in saved Markdown', async ({ page }) => {
+  await page.evaluate(() => {
+    const editor = (window as any).editor;
+    editor.setMarkdown('outside\n\n| Feature | State |\n| --- | --- |\n| task | open |\n');
+    const pos = { block: 1, offset: 0, cell: { row: 0, col: 0 } };
+    editor.setSelection({ anchor: pos, focus: pos });
+  });
+  await installIme(page);
+  await ime.start(page);
+  await ime.update(page, '漢');
+  await page.locator('#editor > p').click();
+  await page.keyboard.press('End');
+  await page.keyboard.type('X');
+  const saved = await md(page);
+  expect(saved).toContain('outsideX');
+  expect(saved).toContain('漢Feature');
+  await page.keyboard.press('Control+z');
+  expect(await md(page)).not.toContain('outsideX');
+  await page.keyboard.press('Control+Shift+z');
+  expect(await md(page)).toBe(saved);
+  await page.evaluate((text) => (window as any).editor.setMarkdown(text), saved);
+  expect(await md(page)).toBe(saved);
+});
 
 for (const [order, browsers] of [['end last', 'Chromium, Safari'], ['end first', 'Firefox']] as const) {
   test.describe(`composition events, compositionend ${order.slice(4)} (${browsers})`, () => {

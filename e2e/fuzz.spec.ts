@@ -6,7 +6,7 @@
 //
 // Each run is seeded. A failure prints the seed and the steps; rerun one seed with
 // FUZZ_SEED=<seed>, and run longer with FUZZ_RUNS and FUZZ_STEPS. Every push runs
-// the same two seeds; a nightly workflow (fuzz.yml) runs many new ones from
+// fixed seeds plus previously failing seeds; a nightly workflow (fuzz.yml) runs many new ones from
 // FUZZ_FIRST, so the search keeps finding new paths without slowing each push.
 
 import { expect, md, type Page, test, viewProblems } from './helpers';
@@ -15,7 +15,10 @@ import { SAMPLE } from '../playground/sample';
 const RUNS = Number(process.env.FUZZ_RUNS ?? 2);
 const STEPS = Number(process.env.FUZZ_STEPS ?? 120);
 const FIRST = Number(process.env.FUZZ_FIRST ?? 1000);
-const SEEDS = process.env.FUZZ_SEED ? [Number(process.env.FUZZ_SEED)] : Array.from({ length: RUNS }, (_, i) => FIRST + i);
+const SEEDS = process.env.FUZZ_SEED ? [Number(process.env.FUZZ_SEED)] : [
+  ...Array.from({ length: RUNS }, (_, i) => FIRST + i),
+  ...(!process.env.FUZZ_FIRST && !process.env.FUZZ_RUNS ? [2026111219, 2026111304, 2026111309, 2026111316, 2026111422] : []),
+];
 
 /** mulberry32: a small seeded generator, so a failing run can be replayed. */
 function random(seed: number) {
