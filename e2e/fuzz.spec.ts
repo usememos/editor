@@ -17,7 +17,7 @@ const STEPS = Number(process.env.FUZZ_STEPS ?? 120);
 const FIRST = Number(process.env.FUZZ_FIRST ?? 1000);
 const SEEDS = process.env.FUZZ_SEED ? [Number(process.env.FUZZ_SEED)] : [
   ...Array.from({ length: RUNS }, (_, i) => FIRST + i),
-  ...(!process.env.FUZZ_FIRST && !process.env.FUZZ_RUNS ? [2026111219, 2026111304, 2026111309, 2026111316, 2026111422] : []),
+  ...(!process.env.FUZZ_FIRST && !process.env.FUZZ_RUNS ? [2026111219, 2026111304, 2026111309, 2026111316, 2026111422, 2026111522, 2026111526] : []),
 ];
 
 /** mulberry32: a small seeded generator, so a failing run can be replayed. */
@@ -110,14 +110,15 @@ const ACTIONS: Action[] = [
       const n = await els.count();
       if (!n) return;
       const i = rng.int(n);
+      await els.nth(i).evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'center' }));
       const box = await els.nth(i).boundingBox();
       if (!box) return;
-      await els.nth(i).scrollIntoViewIfNeeded();
-      const b = (await els.nth(i).boundingBox())!;
-      const x = b.x + rng.next() * b.width;
-      const y = b.y + Math.min(b.height - 1, rng.next() * b.height);
-      await page.mouse.click(x, y);
-      return `${i}`;
+      const x = box.x + rng.next() * box.width;
+      const y = box.y + Math.min(box.height - 1, rng.next() * box.height);
+      // A random point may be clipped or covered by the playground's sticky controls.
+      const inside = await page.evaluate(({ x, y }) => document.getElementById('editor')!.contains(document.elementFromPoint(x, y)), { x, y });
+      if (inside) await page.mouse.click(x, y);
+      return `${i}${inside ? '' : ' (outside editor)'}`;
     },
   },
 ];
@@ -213,6 +214,7 @@ for (const seed of SEEDS) {
       log.push(detail === undefined ? action.name : `${action.name} ${detail}`);
       await frame(page);
       expect(errors, fail('page errors')).toEqual([]);
+      expect(await page.evaluate(() => (window as any).editor.isEditable), fail('the editing run entered read-only mode')).toBe(true);
       expect(await viewProblems(page), fail('view out of sync with the model')).toEqual([]);
     }
     const edited = await md(page);
