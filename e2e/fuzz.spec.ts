@@ -17,7 +17,7 @@ const STEPS = Number(process.env.FUZZ_STEPS ?? 120);
 const FIRST = Number(process.env.FUZZ_FIRST ?? 1000);
 const SEEDS = process.env.FUZZ_SEED ? [Number(process.env.FUZZ_SEED)] : [
   ...Array.from({ length: RUNS }, (_, i) => FIRST + i),
-  ...(!process.env.FUZZ_FIRST && !process.env.FUZZ_RUNS ? [2026111219, 2026111304, 2026111309, 2026111316, 2026111422] : []),
+  ...(!process.env.FUZZ_FIRST && !process.env.FUZZ_RUNS ? [2026111219, 2026111304, 2026111309, 2026111316, 2026111422, 2026111522] : []),
 ];
 
 /** mulberry32: a small seeded generator, so a failing run can be replayed. */
@@ -112,11 +112,10 @@ const ACTIONS: Action[] = [
       const i = rng.int(n);
       const box = await els.nth(i).boundingBox();
       if (!box) return;
-      await els.nth(i).scrollIntoViewIfNeeded();
-      const b = (await els.nth(i).boundingBox())!;
-      const x = b.x + rng.next() * b.width;
-      const y = b.y + Math.min(b.height - 1, rng.next() * b.height);
-      await page.mouse.click(x, y);
+      // Locator clicks scroll past sticky chrome and verify the point hits this content.
+      const x = rng.next() * box.width;
+      const y = Math.min(box.height - 1, rng.next() * box.height);
+      await els.nth(i).click({ position: { x, y } });
       return `${i}`;
     },
   },
