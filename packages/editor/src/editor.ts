@@ -47,6 +47,7 @@ import {
   containerContent,
   createState,
   endOf,
+  formatAt,
   getBlock,
   imageBlockOffset,
   inlineLength,
@@ -2838,6 +2839,16 @@ export class Editor {
     const block = getBlock(this.state.doc, this.state.selection.focus.blockId);
     if (isPlainTextBlock(block)) {
       this.run((s) => cmd.insertText(s, text));
+      return;
+    }
+    if (cmd.isMarkActive(this.state, 'code')) {
+      this.run((s) => {
+        const { from } = orderedRange(s.doc, s.selection);
+        const content = containerContent(getBlock(s.doc, from.blockId), from.cell)!;
+        // Capture the marks before replacing a whole code span removes them.
+        const marks = s.storedMarks ?? formatAt(content, from.offset + (isCollapsed(s.selection) ? 0 : 1)).marks;
+        return cmd.insertText({ ...s, storedMarks: marks }, text);
+      });
       return;
     }
     // A URL pasted over selected text makes it a link.
