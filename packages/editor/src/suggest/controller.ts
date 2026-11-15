@@ -165,6 +165,12 @@ export class SuggestionController {
     return session.entry.menu ? session.entry.menu.isOpen : true;
   }
 
+  /** Whether a node belongs to the open popup, including one rendered by the app. */
+  contains(node: Node): boolean {
+    const id = this.session?.entry.listboxId;
+    return !!id && !!this.host.root.ownerDocument.getElementById(id)?.contains(node);
+  }
+
   /** The ID of the highlighted option while the popup is open. */
   get activeDescendant(): string | null {
     return this.isOpen && this.active >= 0 ? `${this.session!.entry.listboxId}-${this.active}` : null;

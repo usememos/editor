@@ -3320,7 +3320,8 @@ export class Editor {
     if (this.composing && this.composition) {
       const block = this.renderer.elementFor(this.composition.blockId);
       const content = block && contentElement(block, this.composition.cell);
-      if (target && !content?.contains(target)) this.endComposition();
+      // A suggestion commits in pick(), after its menu has received the click.
+      if (target && !content?.contains(target) && !this.suggestions.contains(target)) this.endComposition();
     }
     if (this.toolbar?.menu && !(target && this.toolbar.contains(target))) this.toolbar.closeMenu();
     if (!this.blockMenu.isOpen) return;
