@@ -88,6 +88,89 @@ test('a pasted URL with any scheme the URL policy allows becomes a link', async 
   }
 });
 
+for (const url of ['https://example.com/', 'obsidian://open?vault=notes']) {
+  for (const [name, from, to] of [['caret', 3, 3], ['selection', 2, 5], ['whole span', 0, 7]] as const) {
+    test(`pasting ${url} in inline code at ${name} keeps it literal`, async ({ page }) => {
+      await page.evaluate(({ from, to }) => {
+        const editor = (window as any).editor;
+        editor.setOptions({ resolveUrl: (url: string) => url });
+        editor.setMarkdown('`literal`\n');
+        editor.setSelection({ anchor: { block: 0, offset: from }, focus: { block: 0, offset: to } });
+      }, { from, to });
+      await paste(page, { 'text/plain': url });
+      const text = 'literal'.slice(0, from) + url + 'literal'.slice(to);
+      expect(await md(page)).toBe('`' + text + '`\n');
+      await expect(page.locator('#editor code')).toHaveText(text);
+      await expect(page.locator('#editor a.mbe-link')).toHaveCount(0);
+      await page.keyboard.press('ControlOrMeta+z');
+      expect(await md(page)).toBe('`literal`\n');
+    });
+  }
+}
+
+for (const start of ['divider', 'paragraph end', 'empty paragraph', 'table cell'] as const) {
+  test(`pasting from ${start} through inline code keeps the selected format`, async ({ page }) => {
+    await page.evaluate((start) => {
+      const editor = (window as any).editor;
+      if (start === 'table cell') {
+        editor.setMarkdown('| before | `literal` |\n| --- | --- |\n');
+        editor.setSelection({
+          anchor: { block: 0, cell: { row: 0, col: 0 }, offset: 6 },
+          focus: { block: 0, cell: { row: 0, col: 1 }, offset: 7 },
+        });
+      } else {
+        editor.setMarkdown((start === 'divider' ? '---' : 'before') + '\n\n`literal`\n');
+        if (start === 'empty paragraph') {
+          editor.setSelection({ anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 6 } });
+          editor.commands.insertText('');
+        }
+        editor.setSelection({
+          anchor: { block: 0, offset: start === 'paragraph end' ? 6 : 0 },
+          focus: { block: 1, offset: 7 },
+        });
+      }
+    }, start);
+    await paste(page, { 'text/plain': 'https://example.com/' });
+    await expect(page.locator('#editor code')).toHaveText('https://example.com/');
+    await expect(page.locator('#editor a.mbe-link')).toHaveCount(0);
+    expect(await md(page)).not.toContain('literal');
+  });
+}
+
+test('pasting over an inline code span preserves the surrounding prose', async ({ page }) => {
+  await page.evaluate(() => {
+    const editor = (window as any).editor;
+    editor.setMarkdown('before `literal` after\n');
+    editor.setSelection({ anchor: { block: 0, offset: 7 }, focus: { block: 0, offset: 14 } });
+  });
+  await paste(page, { 'text/plain': 'https://example.com/' });
+  expect(await md(page)).toBe('before `https://example.com/` after\n');
+  await expect(page.locator('#editor code')).toHaveText('https://example.com/');
+  await expect(page.locator('#editor a.mbe-link')).toHaveCount(0);
+});
+
+test('pasting rich content into inline code inserts its plain text', async ({ page }) => {
+  await page.evaluate(() => {
+    const editor = (window as any).editor;
+    editor.setMarkdown('**`literal`**\n');
+    editor.setSelection({ anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 7 } });
+  });
+  await paste(page, { 'text/plain': '**bold** https://example.com/', 'text/html': '<b>bold</b> <a href="https://example.com/">https://example.com/</a>' });
+  expect(await md(page)).toBe('**`**bold** https://example.com/`**\n');
+  await expect(page.locator('#editor strong code')).toHaveText('**bold** https://example.com/');
+  await expect(page.locator('#editor a.mbe-link')).toHaveCount(0);
+});
+
+test('inline code paste follows the active mark toggle', async ({ page }) => {
+  await page.evaluate(() => (window as any).editor.commands.toggleCode());
+  await paste(page, { 'text/plain': 'https://example.com/' });
+  expect(await md(page)).toBe('`https://example.com/`\n');
+  await page.evaluate(() => (window as any).editor.commands.toggleCode());
+  await paste(page, { 'text/plain': 'https://other.example/' });
+  await expect(page.locator('#editor a.mbe-link')).toHaveAttribute('href', 'https://other.example/');
+  await expect(page.locator('#editor code')).toHaveText('https://example.com/');
+});
+
 test('Ctrl+Shift+V pastes plain text without parsing Markdown', async ({ page }) => {
   // Simulate the keystroke without triggering the browser's own paste, then the paste event.
   await page.evaluate(() =>

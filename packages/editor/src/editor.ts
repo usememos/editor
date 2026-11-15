@@ -31,6 +31,7 @@ import { type Binding, matchesKey, parseKeyName } from './keymap';
 import {
   type Block,
   CALLOUT_TYPES,
+  MARK_ORDER,
   type CalloutType,
   type Doc,
   type EditorState,
@@ -2838,6 +2839,12 @@ export class Editor {
     const block = getBlock(this.state.doc, this.state.selection.focus.blockId);
     if (isPlainTextBlock(block)) {
       this.run((s) => cmd.insertText(s, text));
+      return;
+    }
+    if (cmd.isMarkActive(this.state, 'code')) {
+      // Capture the selection's marks before replacing a whole code span removes them.
+      const marks = MARK_ORDER.filter((mark) => cmd.isMarkActive(this.state, mark));
+      this.run((s) => cmd.insertText({ ...s, storedMarks: marks }, text));
       return;
     }
     // A URL pasted over selected text makes it a link.
