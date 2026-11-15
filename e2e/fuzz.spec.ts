@@ -110,13 +110,15 @@ const ACTIONS: Action[] = [
       const n = await els.count();
       if (!n) return;
       const i = rng.int(n);
-      const box = await els.nth(i).evaluate((el) => ({ width: el.clientWidth, height: el.clientHeight }));
-      if (!box.width || !box.height) return;
-      // Locator clicks scroll past sticky chrome and verify the point hits this content.
-      const x = Math.min(box.width - 1, rng.next() * box.width);
-      const y = Math.min(box.height - 1, rng.next() * box.height);
-      await els.nth(i).click({ position: { x, y } });
-      return `${i}`;
+      await els.nth(i).evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'center' }));
+      const box = await els.nth(i).boundingBox();
+      if (!box) return;
+      const x = box.x + rng.next() * box.width;
+      const y = box.y + Math.min(box.height - 1, rng.next() * box.height);
+      // A random point may be clipped or covered by the playground's sticky controls.
+      const inside = await page.evaluate(({ x, y }) => document.getElementById('editor')!.contains(document.elementFromPoint(x, y)), { x, y });
+      if (inside) await page.mouse.click(x, y);
+      return `${i}${inside ? '' : ' (outside editor)'}`;
     },
   },
 ];
@@ -212,6 +214,7 @@ for (const seed of SEEDS) {
       log.push(detail === undefined ? action.name : `${action.name} ${detail}`);
       await frame(page);
       expect(errors, fail('page errors')).toEqual([]);
+      expect(await page.evaluate(() => (window as any).editor.isEditable), fail('the editing run entered read-only mode')).toBe(true);
       expect(await viewProblems(page), fail('view out of sync with the model')).toEqual([]);
     }
     const edited = await md(page);
