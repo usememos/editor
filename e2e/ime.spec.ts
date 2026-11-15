@@ -72,16 +72,25 @@ test.describe('input method through the DevTools Protocol', () => {
     expect(await md(page)).toBe('**a한b**\n');
   });
 
-  for (const [start, end] of [[3, 3], [0, 3], [3, 5]]) {
-    test(`committing a Japanese clause selection ${start}:${end} leaves the caret after the word`, async ({ page }) => {
-      await page.evaluate(() => {
+  for (const [start, end, notify] of [[3, 3, false], [0, 3, false], [3, 5, false], [3, 3, true], [0, 3, true], [3, 5, true]] as const) {
+    test(`committing a Japanese clause selection ${start}:${end}, selectionchange ${notify ? 'before settle' : 'missing'}, leaves the caret after the word`, async ({ page }) => {
+      await page.evaluate(({ start, end, notify }) => {
+        if (notify) {
+          const root = document.querySelector('#editor')!;
+          root.addEventListener('compositionend', () => {
+            const text = document.createTreeWalker(root, NodeFilter.SHOW_TEXT).nextNode()!;
+            document.getSelection()!.setBaseAndExtent(text, start, text, end);
+            document.dispatchEvent(new Event('selectionchange'));
+          });
+          return;
+        }
         let hold = false;
         window.addEventListener('compositionend', () => {
           hold = true;
           requestAnimationFrame(() => { hold = false; });
         }, true);
         document.addEventListener('selectionchange', (e) => { if (hold) e.stopImmediatePropagation(); }, true);
-      });
+      }, { start, end, notify });
       const cdp = await page.context().newCDPSession(page);
       for (const text of ['き', 'きょう', 'きょうはいいてんき']) {
         await frame(page);

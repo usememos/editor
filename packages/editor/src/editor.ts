@@ -1570,6 +1570,9 @@ export class Editor {
 
   private onSelectionChange(): void {
     if (this.composing || this.destroyed) return;
+    // An IME's last clause selection may arrive before the settle frame.
+    // Explicit pointer and caret-key moves still belong to the user.
+    if (this.composition?.ended && !this.pointerDown && !this.caretKey) return;
     const selection = this.readDomSelection();
     if (!selection) {
       if (!this.hasFocus()) this.updateUi();
@@ -1958,6 +1961,7 @@ export class Editor {
     if (this.composing || e.isComposing) return;
     const type = e.inputType;
     if (COMPOSITION_INPUT.has(type)) return;
+    if (this.composition?.ended) this.syncDomSelection();
     // Input that cannot be cancelled (from some Android keyboards) changes the
     // DOM anyway, and `input` reads it back. Applying it here too would apply it twice.
     if (!e.cancelable && this.browserApplies(e)) return;
@@ -2358,6 +2362,7 @@ export class Editor {
     this.caretKey = null;
     if (this.fromControl(e)) return;
     if (e.isComposing || e.keyCode === 229) return;
+    if (this.composition?.ended) this.syncDomSelection();
     // Moving the caret, even back to where it was, ends the chance to undo a shortcut with Backspace.
     if (CARET_KEY.test(e.key)) this.shortcut = null;
     const mod = isMac ? e.metaKey : e.ctrlKey;
