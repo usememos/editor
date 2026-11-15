@@ -485,6 +485,24 @@ test('typing before the settle frame does not replace the last IME clause', asyn
   expect(await md(page)).toBe('日本語X\n');
 });
 
+for (const inputType of ['insertText', 'insertReplacementText'] as const) {
+  test(`${inputType} autocorrect before the settle frame keeps its target range`, async ({ page }) => {
+    await installIme(page);
+    await page.evaluate((inputType) => {
+      (window as any).ime.compose(['teh'], 'teh', 'end last');
+      const root = document.querySelector('#editor')!;
+      const text = document.createTreeWalker(root, NodeFilter.SHOW_TEXT).nextNode()!;
+      const input = new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType, data: 'the' });
+      Object.defineProperty(input, 'getTargetRanges', { value: () => [new StaticRange({ startContainer: text, startOffset: 0, endContainer: text, endOffset: 3 })] });
+      root.dispatchEvent(input);
+    }, inputType);
+    await frame(page);
+    expect(await md(page)).toBe('the\n');
+    await page.keyboard.type('!');
+    expect(await md(page)).toBe('the!\n');
+  });
+}
+
 for (const move of ['caret key', 'pointer'] as const) {
   test(`a ${move} move before the settle frame keeps the chosen caret`, async ({ page }) => {
     await installIme(page);

@@ -57,6 +57,7 @@ import {
   isTextless,
   isTextBlock,
   linkAt,
+  orderedRange,
   paragraph,
   plain,
   samePosition,
@@ -1961,6 +1962,7 @@ export class Editor {
     if (this.composing || e.isComposing) return;
     const type = e.inputType;
     if (COMPOSITION_INPUT.has(type)) return;
+    const clause = this.composition?.ended ? this.readDomSelection() : null;
     if (this.composition?.ended) this.syncDomSelection();
     // Input that cannot be cancelled (from some Android keyboards) changes the
     // DOM anyway, and `input` reads it back. Applying it here too would apply it twice.
@@ -1985,8 +1987,13 @@ export class Editor {
         const text = e.data ?? '';
         // Mobile autocorrect and word suggestions replace the word before the
         // caret: the target range covers it while the selection is a caret.
-        // Until settling, a target range can still describe the IME's last clause.
-        const range = isCollapsed(this.state.selection) && !this.composition?.ended ? this.targetRange(e) : null;
+        let range = isCollapsed(this.state.selection) ? this.targetRange(e) : null;
+        // Ignore only the old clause selection, keeping autocorrect ranges
+        // over words before a collapsed caret or beyond that clause.
+        if (range && clause) {
+          const { from, to } = orderedRange(this.state.doc, clause);
+          if (samePosition(range.anchor, from) && samePosition(range.focus, to)) range = null;
+        }
         if (range && !isCollapsed(range)) this.current = { ...this.state, selection: range };
         if (text) this.typeText(text);
         else if (range && !isCollapsed(range)) this.run(cmd.deleteSelection, 'typing');
