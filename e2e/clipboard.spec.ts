@@ -108,6 +108,35 @@ for (const url of ['https://example.com/', 'obsidian://open?vault=notes']) {
   }
 }
 
+for (const start of ['divider', 'paragraph end', 'empty paragraph', 'table cell'] as const) {
+  test(`pasting from ${start} through inline code keeps the selected format`, async ({ page }) => {
+    await page.evaluate((start) => {
+      const editor = (window as any).editor;
+      if (start === 'table cell') {
+        editor.setMarkdown('| before | `literal` |\n| --- | --- |\n');
+        editor.setSelection({
+          anchor: { block: 0, cell: { row: 0, col: 0 }, offset: 6 },
+          focus: { block: 0, cell: { row: 0, col: 1 }, offset: 7 },
+        });
+      } else {
+        editor.setMarkdown((start === 'divider' ? '---' : 'before') + '\n\n`literal`\n');
+        if (start === 'empty paragraph') {
+          editor.setSelection({ anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 6 } });
+          editor.commands.insertText('');
+        }
+        editor.setSelection({
+          anchor: { block: 0, offset: start === 'paragraph end' ? 6 : 0 },
+          focus: { block: 1, offset: 7 },
+        });
+      }
+    }, start);
+    await paste(page, { 'text/plain': 'https://example.com/' });
+    await expect(page.locator('#editor code')).toHaveText('https://example.com/');
+    await expect(page.locator('#editor a.mbe-link')).toHaveCount(0);
+    expect(await md(page)).not.toContain('literal');
+  });
+}
+
 test('pasting over an inline code span preserves the surrounding prose', async ({ page }) => {
   await page.evaluate(() => {
     const editor = (window as any).editor;

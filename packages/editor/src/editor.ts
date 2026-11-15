@@ -31,6 +31,7 @@ import { type Binding, matchesKey, parseKeyName } from './keymap';
 import {
   type Block,
   CALLOUT_TYPES,
+  MARK_ORDER,
   type CalloutType,
   type Doc,
   type EditorState,
@@ -47,7 +48,6 @@ import {
   containerContent,
   createState,
   endOf,
-  formatAt,
   getBlock,
   imageBlockOffset,
   inlineLength,
@@ -2842,13 +2842,9 @@ export class Editor {
       return;
     }
     if (cmd.isMarkActive(this.state, 'code')) {
-      this.run((s) => {
-        const { from } = orderedRange(s.doc, s.selection);
-        const content = containerContent(getBlock(s.doc, from.blockId), from.cell)!;
-        // Capture the marks before replacing a whole code span removes them.
-        const marks = s.storedMarks ?? formatAt(content, from.offset + (isCollapsed(s.selection) ? 0 : 1)).marks;
-        return cmd.insertText({ ...s, storedMarks: marks }, text);
-      });
+      // Capture the selection's marks before replacing a whole code span removes them.
+      const marks = MARK_ORDER.filter((mark) => cmd.isMarkActive(this.state, mark));
+      this.run((s) => cmd.insertText({ ...s, storedMarks: marks }, text));
       return;
     }
     // A URL pasted over selected text makes it a link.
