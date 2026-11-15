@@ -48,6 +48,9 @@ The last column names the automated test that covers the same behavior in Chromi
 | 25 | Android: type `#wor` in a word that already exists (`#wor` then `k`, all underlined by the keyboard). The popup opens as you type. | composed text in a token opens the popup and filters it |
 | 26 | Safari, Pinyin: in an empty paragraph, type a reading (`ceshi`) and pick a candidate with Space or a number. The output has the word picked (`测试`), not the reading. Then type a reading in another empty paragraph and delete it with Backspace: the paragraph stays empty. | the committed word replaces the reading; a composition deleted without a commit leaves the block empty (events only) |
 
+| 27 | Japanese: convert a sentence with several clauses, select a clause in the middle, then commit and type another character. It appears after the committed sentence. | committing a Japanese clause selection leaves the caret after the word (Chromium CDP) |
+| 28 | Compose in a table cell, click a paragraph, type more text, then save and reload. Both the composed word and the later text remain. | leaving an unfinished table composition keeps later typing in saved Markdown |
+
 ## Not handled yet
 
 - A composition that starts over a selection inside one block deletes the selection first. Japanese reconversion (select text, then press the conversion key) may lose the selected text as the reading. Check on Windows (Microsoft IME, 変換 key) and macOS (Kana key twice).

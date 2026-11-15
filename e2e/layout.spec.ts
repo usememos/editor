@@ -38,13 +38,13 @@ test('a numbered list keeps each number on one line past 9 and 99', async ({ pag
   await page.goto(`/?md=${encodeURIComponent(list)}`);
   const markers = await page.evaluate(() => {
     return Array.from(document.querySelectorAll('#editor .mbe-list-item > .mbe-marker'), (marker) => {
-      const range = document.createRange();
-      range.selectNodeContents(marker);
-      return { text: marker.textContent, lines: range.getClientRects().length, width: marker.getBoundingClientRect().width };
+      const { width, height } = marker.getBoundingClientRect();
+      return { text: marker.textContent, width, height };
     });
   });
   expect(markers.map((marker) => marker.text).slice(-2)).toEqual(['100.', '101.']);
-  expect(markers.filter((marker) => marker.lines !== 1)).toEqual([]);
+  // A number that wraps makes its marker taller. The box says so for items below the fold too, where WebKit gives a range no rects.
+  expect(markers.filter((marker) => marker.height !== markers[0].height)).toEqual([]);
   // Short numbers keep the indent's width, so the text of items 1 to 9 lines up; longer ones take what they need.
   expect(markers[0].width).toBe(24);
   expect(markers[8].width).toBe(24);

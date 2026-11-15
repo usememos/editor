@@ -1,8 +1,25 @@
-import { blocks, expect, md, test } from './helpers';
+import { blocks, expect, md, test, viewProblems } from './helpers';
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/?empty');
   await page.locator('#editor').click();
+});
+
+test('a caret key reconciles a browser-normalized position beside a divider', async ({ page, browserName }) => {
+  test.skip(browserName !== 'webkit', 'WebKit normalizes a caret beside a divider into the preceding text');
+  await page.evaluate(() => {
+    const editor = (window as any).editor;
+    editor.setMarkdown('- before\n\n---\n\n[^1]: note\n');
+    editor.setSelection({ anchor: { block: 1, offset: 0 }, focus: { block: 1, offset: 0 } });
+  });
+  await page.keyboard.press('Shift+End');
+  await expect.poll(() => viewProblems(page)).toEqual([]);
+  await page.keyboard.type('X');
+  const saved = await md(page);
+  expect(saved).toContain('before');
+  expect(saved).toContain('X');
+  await page.evaluate((text) => (window as any).editor.setMarkdown(text), saved);
+  expect(await md(page)).toBe(saved);
 });
 
 test('typing, Enter and Backspace', async ({ page }) => {
