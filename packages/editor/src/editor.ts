@@ -1985,7 +1985,8 @@ export class Editor {
         const text = e.data ?? '';
         // Mobile autocorrect and word suggestions replace the word before the
         // caret: the target range covers it while the selection is a caret.
-        const range = isCollapsed(this.state.selection) ? this.targetRange(e) : null;
+        // Until settling, a target range can still describe the IME's last clause.
+        const range = isCollapsed(this.state.selection) && !this.composition?.ended ? this.targetRange(e) : null;
         if (range && !isCollapsed(range)) this.current = { ...this.state, selection: range };
         if (text) this.typeText(text);
         else if (range && !isCollapsed(range)) this.run(cmd.deleteSelection, 'typing');
