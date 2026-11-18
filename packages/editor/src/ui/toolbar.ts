@@ -1,5 +1,6 @@
 // The floating formatting toolbar shown over selected text, and the link input.
 
+import { isCompositionKey } from '../keymap';
 import type { Editor } from '../editor';
 import { type BlockTypeSpec, convertibleBlocks, setBlockType, toggleBlockType, toggleMark } from '../commands';
 import { type IconName, iconNode } from '../icons';
@@ -407,6 +408,7 @@ export class InputPopover {
     this.popup.el.append(this.input, this.removeButton);
 
     this.input.addEventListener('keydown', (e) => {
+      if (isCompositionKey(e)) return;
       if (e.key === 'Enter') {
         e.preventDefault();
         this.finish(this.input.value.trim());

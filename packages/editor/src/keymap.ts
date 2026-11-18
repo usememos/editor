@@ -3,6 +3,11 @@
 
 import type { KeyHandler } from './extension';
 
+/** WebKit can send the confirming key after compositionend with only keyCode 229. */
+export function isCompositionKey(event: KeyboardEvent): boolean {
+  return event.isComposing || event.keyCode === 229;
+}
+
 interface Binding {
   readonly key: string;
   readonly ctrl: boolean;

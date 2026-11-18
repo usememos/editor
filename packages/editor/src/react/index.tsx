@@ -71,8 +71,6 @@ export const MarkdownEditor = forwardRef(function MarkdownEditor(props: Markdown
   // first. While the user keeps typing, React may hand back an older one;
   // those echoes must not reset the document.
   const pending = useRef<string[]>([]);
-  // An outside value that arrived during IME composition.
-  const deferred = useRef<string | null>(null);
   // Callbacks are read through a ref so changing them does not recreate the editor.
   const latest = useRef(props);
   latest.current = props;
@@ -101,19 +99,7 @@ export const MarkdownEditor = forwardRef(function MarkdownEditor(props: Markdown
     editorRef.current = editor;
     pending.current = [];
     assignRef(ref, editor);
-    const root = container.current!;
-    const onCompositionEnd = () => {
-      // Runs after the editor's own compositionend handler, which was added first.
-      const value = deferred.current;
-      deferred.current = null;
-      if (value !== null && value !== editor.getMarkdown()) {
-        pending.current = [];
-        editor.setMarkdown(value);
-      }
-    };
-    root.addEventListener('compositionend', onCompositionEnd);
     return () => {
-      root.removeEventListener('compositionend', onCompositionEnd);
       editor.destroy();
       if (editorRef.current === editor) editorRef.current = null;
       assignRef(ref, null);
@@ -131,13 +117,8 @@ export const MarkdownEditor = forwardRef(function MarkdownEditor(props: Markdown
       pending.current.splice(0, echo + 1);
       return;
     }
-    if (props.value === editor.getMarkdown()) return;
-    if (editor.isComposing) {
-      deferred.current = props.value;
-      return;
-    }
     pending.current = [];
-    editor.setMarkdown(props.value);
+    editor.syncControlledMarkdown(props.value);
   }, [props.value]);
 
   useLiveOptions(editorRef, props);

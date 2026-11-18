@@ -27,7 +27,7 @@ import { decorationContext } from './decorations';
 import type { SuggestionConfig, SuggestionItem } from './extensions/suggestion';
 import { SuggestionController, type SuggestionState } from './suggest/controller';
 import { type Widget, WidgetImpl, type WidgetRender } from './widgets';
-import { type Binding, matchesKey, parseKeyName } from './keymap';
+import { type Binding, isCompositionKey, matchesKey, parseKeyName } from './keymap';
 import {
   type Block,
   CALLOUT_TYPES,
@@ -61,6 +61,7 @@ import {
   orderedRange,
   paragraph,
   plain,
+  sameCell,
   samePosition,
   sliceInline,
   startOf,
@@ -71,7 +72,7 @@ import { ImageToolbar } from './ui/imageToolbar';
 import { BlockHandle } from './ui/blockHandle';
 import { LinkCard, type LinkTarget } from './ui/linkCard';
 import { ResizeHandles, type ImageTarget } from './ui/resizeHandles';
-import { Menu, type MenuItem, type MenuSection, isMac, isSafari, isTouch, matches, setPopupContainer } from './ui/popup';
+import { Menu, type MenuItem, type MenuSection, isMac, isTouch, matches, setPopupContainer } from './ui/popup';
 import { BLOCK_ATTR, BlockRenderer, atomAt, calloutName, childIndex, contentElement, domText, MARKDOWN_VIEW, domToPosition, positionToDom, type ResolveUrl, defaultResolveUrl } from './view/dom';
 import { revealedViews, sameRevealed, viewEntry } from './view/reveal';
 import { type SanitizeHtml, htmlView } from './view/html';
@@ -426,12 +427,12 @@ export class Editor {
     blockId: string;
     cell?: Position['cell'];
     trailing: number;
+    clauseBeforeKey?: Selection | null;
     ended: boolean;
     marks: EditorState['storedMarks'];
     recorded: boolean;
   } | null = null;
-  /** When the last composition ended (Safari only): the next key may be the Enter that committed it. */
-  private compositionEndedAt = 0;
+  private pendingMarkdown: { markdown: string; history?: 'clear' | 'keep' } | null = null;
   /**
    * The last Markdown shortcut that typing applied: the state with the typed
    * characters, and the state the shortcut made. Backspace right after it
@@ -696,9 +697,17 @@ export class Editor {
   /**
    * Replaces the whole document. Does not emit `change`. By default clears
    * undo history; with `history: 'keep'` the replacement is one undo step.
+   * During IME composition the latest replacement waits for the final input.
    */
   setMarkdown(markdown: string, options: { history?: 'clear' | 'keep' } = {}): void {
     if (this.destroyed) return;
+    if (this.composition) {
+      this.pendingMarkdown = { markdown, history: options.history };
+      return;
+    }
+    // A change queued for the old document must not emit the replacement.
+    if (this.changeFrame !== null) cancelAnimationFrame(this.changeFrame);
+    this.changeFrame = null;
     if (options.history === 'keep') this.history.record(this.current, 'other');
     else this.history.clear();
     if (this.modeValue === 'source') {
@@ -722,6 +731,11 @@ export class Editor {
     this.paint(true, true);
     this.afterRender();
     this.emit('selectionChange', { editor: this });
+  }
+
+  /** @internal Compare a controlled value with the latest requested document, including a deferred replacement. */
+  syncControlledMarkdown(markdown: string): void {
+    if (markdown !== (this.pendingMarkdown?.markdown ?? this.getMarkdown())) this.setMarkdown(markdown);
   }
 
   /** True when the document holds only empty paragraphs. */
@@ -937,6 +951,7 @@ export class Editor {
     const toggle = options.taskToggle !== undefined && options.taskToggle !== this.taskToggle;
     if (toggle) this.taskToggle = options.taskToggle === true;
     if (options.editable !== undefined && options.editable === this.readOnly) {
+      this.endComposition();
       this.readOnly = !options.editable;
       // Footnote definitions are collected at the end only when read-only, so the change renders.
       if (this.renderer.views?.has('footnote')) this.paint();
@@ -1073,13 +1088,14 @@ export class Editor {
       for (const [name, value] of Object.entries(options.attributes ?? {})) root.setAttribute(name, value);
       this.runtime = { ...this.runtime, attributes: options.attributes };
     }
-    if ('resolveUrl' in options && options.resolveUrl !== this.runtime.resolveUrl) {
+    const urlChanged = 'resolveUrl' in options && options.resolveUrl !== this.runtime.resolveUrl;
+    if (urlChanged) {
       this.runtime = { ...this.runtime, resolveUrl: options.resolveUrl };
       this.renderer.resolveUrl = options.resolveUrl ?? defaultResolveUrl;
-      this.paint(true);
     }
     if ('onLinkClick' in options) this.runtime = { ...this.runtime, onLinkClick: options.onLinkClick };
-    if ('theme' in options && this.applyTheme(options.theme)) this.paint(true);
+    const classesChanged = 'theme' in options && this.applyTheme(options.theme);
+    if (urlChanged || classesChanged) this.redecorate();
   }
 
   /** Sets the theme. Returns true when every block must re-render, for new classes. */
@@ -1111,6 +1127,7 @@ export class Editor {
   /** Applies a command (a pure function of the state), records history, re-renders, and emits events. */
   run(command: (state: EditorState) => EditorState | null, kind: ChangeKind = 'other'): boolean {
     if (this.readOnly || this.destroyed) return false;
+    if (this.composing) this.endComposition();
     let next = command(this.current);
     if (!next || next === this.current) return false;
     next = cmd.dropBrokenTokens(next, this.current, this.markdown.inline);
@@ -1251,7 +1268,12 @@ export class Editor {
     // that finishes after the editor closed) cannot render into the element.
     for (const name of Object.keys(commands) as (keyof EditorCommands)[]) {
       const fn = commands[name] as (...args: unknown[]) => boolean;
-      (commands as unknown as Record<string, (...args: unknown[]) => boolean>)[name] = (...args) => !this.destroyed && fn(...args);
+      (commands as unknown as Record<string, (...args: unknown[]) => boolean>)[name] = (...args) => {
+        if (this.destroyed) return false;
+        // A pending mode switch must settle before choosing the command implementation.
+        if (this.composing && name !== 'insertToken' && name !== 'scrollIntoView' && name !== 'blur') this.endComposition();
+        return fn(...args);
+      };
     }
     return commands;
   }
@@ -1282,6 +1304,7 @@ export class Editor {
 
   private undo(): boolean {
     if (this.readOnly) return false;
+    this.endComposition();
     const next = this.history.undo(this.current);
     if (!next) return false;
     this.commit(this.restore(next));
@@ -1290,6 +1313,7 @@ export class Editor {
 
   private redo(): boolean {
     if (this.readOnly) return false;
+    this.endComposition();
     const next = this.history.redo(this.current);
     if (!next) return false;
     this.commit(this.restore(next));
@@ -1451,6 +1475,7 @@ export class Editor {
   }
 
   private emitChange(): void {
+    if (this.pendingMarkdown) return;
     if (this.options.onChange) this.options.onChange(this.getMarkdown(), this);
     this.emit('change', { editor: this });
   }
@@ -1958,13 +1983,22 @@ export class Editor {
     return e.target instanceof HTMLInputElement || !!(e.target as Element | null)?.closest?.(APP_UI);
   }
 
+  private restoreCommittedCaret(): void {
+    if (!this.composition?.ended) return;
+    if (this.pendingMarkdown) this.endComposition();
+    else this.syncDomSelection();
+  }
+
   private onBeforeInput(e: InputEvent): void {
     if (this.fromControl(e)) return;
     if (this.composing || e.isComposing) return;
     const type = e.inputType;
     if (COMPOSITION_INPUT.has(type)) return;
-    const clause = this.composition?.ended ? this.readDomSelection() : null;
-    if (this.composition?.ended) this.syncDomSelection();
+    const composition = this.composition;
+    const live = composition?.ended ? this.readDomSelection() : null;
+    const clause = live && !isCollapsed(live) ? live : composition?.clauseBeforeKey;
+    if (composition) composition.clauseBeforeKey = null;
+    this.restoreCommittedCaret();
     // Input that cannot be cancelled (from some Android keyboards) changes the
     // DOM anyway, and `input` reads it back. Applying it here too would apply it twice.
     if (!e.cancelable && this.browserApplies(e)) return;
@@ -2149,19 +2183,22 @@ export class Editor {
   }
 
   private onCompositionStart(e: Event): void {
-    if (this.fromControl(e)) return;
+    if (this.readOnly || this.fromControl(e)) return;
     this.dropBlockSelection();
     this.refreshSelection();
-    // Replace a non-collapsed selection before the browser starts composing,
-    // so the composition always happens inside one block.
-    if (!isCollapsed(this.state.selection)) this.run(cmd.deleteSelection);
+    const { from, to } = orderedRange(this.state.doc, this.state.selection);
+    // Keep a native selection for reconversion. Only ranges across editing
+    // containers need to be joined before handing the DOM to the IME.
+    const crossesContainer =
+      from.blockId !== to.blockId || !sameCell(from.cell, to.cell) ||
+      (from.offset !== to.offset && this.modeValue === 'source' && this.getMarkdown().slice(from.offset, to.offset).includes('\n'));
+    const joined = crossesContainer && this.run(cmd.deleteSelection);
     this.composing = true;
-    // Marks chosen before composing (Mod-B, then compose) apply to all of the composed text.
-    const pos = this.state.selection.focus;
+    const pos = joined ? this.state.selection.focus : to;
     const content = containerContent(getBlock(this.state.doc, pos.blockId), pos.cell);
     this.composition = {
       blockId: pos.blockId, cell: pos.cell, trailing: (content ? inlineLength(content) : 0) - pos.offset,
-      ended: false, marks: this.state.storedMarks, recorded: false,
+      ended: false, marks: this.state.storedMarks, recorded: joined,
     };
     this.toolbar?.hide();
     this.imageToolbar?.hide();
@@ -2179,7 +2216,6 @@ export class Editor {
     this.composition.ended = true;
     this.syncComposition(true);
     this.composing = false;
-    if (isSafari) this.compositionEndedAt = Date.now();
     this.unsettled.add(this.composition.blockId);
     // Render the block from the model once the browser is done with it: after
     // input that follows in the same task (Firefox sends the last one after
@@ -2201,11 +2237,14 @@ export class Editor {
     this.composition = null;
     for (const id of this.unsettled) this.renderer.invalidate(id);
     this.unsettled.clear();
+    if (this.redecoratePending) this.sourceHighlighter.reset();
     this.paint(this.redecoratePending);
     this.redecoratePending = false;
     this.afterRender();
-    // Composed text opens a popup as typing does: a full-width slash opens the slash menu.
-    if (composed) this.typedForSuggestion();
+    const replacement = this.pendingMarkdown;
+    this.pendingMarkdown = null;
+    if (replacement) this.setMarkdown(replacement.markdown, { history: replacement.history });
+    else if (composed) this.typedForSuggestion();
     if (this.pendingMode) this.setMode(this.pendingMode);
   }
 
@@ -2240,11 +2279,13 @@ export class Editor {
    * Picking a suggestion item while composing does this first.
    */
   private endComposition(): void {
-    if (!this.composing || !this.composition) return;
-    this.composition.ended = true;
-    this.syncComposition();
-    this.composing = false;
-    this.unsettled.add(this.composition.blockId);
+    if (!this.composition) return;
+    if (this.composing) {
+      this.composition.ended = true;
+      this.syncComposition();
+      this.composing = false;
+      this.unsettled.add(this.composition.blockId);
+    }
     if (this.settleFrame !== null) cancelAnimationFrame(this.settleFrame);
     this.settleFrame = null;
     this.settleComposition();
@@ -2370,8 +2411,12 @@ export class Editor {
   private onKeyDown(e: KeyboardEvent): void {
     this.caretKey = null;
     if (this.fromControl(e)) return;
-    if (e.isComposing || e.keyCode === 229) return;
-    if (this.composition?.ended) this.syncDomSelection();
+    if (this.composing || isCompositionKey(e)) return;
+    if (this.composition?.ended) {
+      // beforeinput can still target the clause after keydown restores the caret.
+      this.composition.clauseBeforeKey = this.readDomSelection();
+      this.restoreCommittedCaret();
+    }
     // Moving the caret, even back to where it was, ends the chance to undo a shortcut with Backspace.
     if (CARET_KEY.test(e.key)) this.shortcut = null;
     const mod = isMac ? e.metaKey : e.ctrlKey;
@@ -2382,12 +2427,7 @@ export class Editor {
       fn();
     };
 
-    // Safari sends the Enter that commits a composition after compositionend, with keyCode 229 in
-    // shipped versions; as extra protection, the first key within 100 ms of it never reaches the popup.
-    const justComposed = Date.now() - this.compositionEndedAt < 100;
-    this.compositionEndedAt = 0;
-    // Open menus take the navigation keys.
-    if (this.suggestions.isOpen && !justComposed) {
+    if (this.suggestions.isOpen) {
       this.refreshSelection();
       if (this.suggestions.keydown(e)) {
         e.preventDefault();
@@ -2805,6 +2845,7 @@ export class Editor {
     if (this.fromControl(e)) return;
     e.preventDefault();
     if (this.readOnly) return;
+    this.endComposition();
     this.refreshSelection();
     for (const ext of this.extensions) if (ext.handlePaste?.({ editor: this, event: e })) return;
     const data = e.clipboardData;
@@ -2896,8 +2937,10 @@ export class Editor {
   }
 
   private onDrop(e: DragEvent): void {
+    if (this.fromControl(e)) return;
     e.preventDefault();
     if (this.readOnly) return;
+    this.endComposition();
     const position = this.positionAtPoint(e.clientX, e.clientY);
     for (const ext of this.extensions) if (ext.handleDrop?.({ editor: this, event: e, position })) return;
     // Dropped text is inserted where it lands, like a paste there.

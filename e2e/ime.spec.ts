@@ -1,5 +1,4 @@
-import { type Page, expect, test } from '@playwright/test';
-import { blocks, md } from './helpers';
+import { type Page, blocks, expect, md, test } from './helpers';
 
 // Input methods are simulated two ways:
 // - In Chromium, through the Chrome DevTools Protocol, the way an input method
@@ -236,6 +235,26 @@ test.describe('input method through the DevTools Protocol', () => {
     await expect(page.locator('#editor')).toHaveText('가나');
   });
 
+  test('source mode keeps a space after the last committed Korean syllable', async ({ page }) => {
+    await page.evaluate(() => (window as any).editor.setOptions({ mode: 'source' }));
+    for (const syllable of '안녕하세') await compose(page, [syllable], syllable);
+    const ime = await startComposing(page, ['ㅇ', '요']);
+    await page.evaluate(() => {
+      const root = document.getElementById('editor')!;
+      root.addEventListener('compositionend', () => {
+        // Deliver the next input in the same frame as Chromium's native commit.
+        root.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: ' ', bubbles: true, cancelable: true }));
+      }, { once: true });
+    });
+    await ime.commit('요');
+    expect(await md(page)).toBe('안녕하세요 ');
+    await page.keyboard.press('ControlOrMeta+z');
+    expect(await md(page)).toBe('안녕하세요');
+    await page.keyboard.press('ControlOrMeta+Shift+z');
+    await page.keyboard.type('X');
+    expect(await md(page)).toBe('안녕하세요 X');
+  });
+
   test('marks chosen before composing apply to all of the composed text', async ({ page }) => {
     await page.keyboard.press('Control+b');
     // The input method replaces "k" with "か": the first composed character is replaced too.
@@ -469,6 +488,137 @@ const ime = {
   },
 };
 
+test('composition keys stay with the IME in the editor and the link input', async ({ page }) => {
+  await installIme(page);
+  await page.keyboard.type('/');
+  await expect(page.locator('.mbe-slash-menu')).toBeVisible();
+  await ime.start(page);
+  const root = page.locator('#editor');
+  for (const key of ['ArrowDown', 'Tab', 'Enter', 'Escape']) {
+    expect(await root.evaluate((el, key) => el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })), key)).toBe(true);
+  }
+  await expect(page.locator('.mbe-slash-menu')).toBeVisible();
+  await ime.commit(page, '', 'end last');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('ControlOrMeta+k');
+  const input = page.locator('.mbe-popover-input');
+  await expect(input).toBeFocused();
+  for (const key of ['Enter', 'Escape']) {
+    for (const flags of [{ isComposing: true }, { keyCode: 229 }]) {
+      expect(await input.evaluate((el, init) => el.dispatchEvent(new KeyboardEvent('keydown', init)), { key, ...flags, cancelable: true, bubbles: true })).toBe(true);
+      await expect(input).toBeFocused();
+    }
+  }
+  await input.press('Escape');
+  await expect(input).toBeHidden();
+});
+
+test('the confirming Enter leaves the menu open and an immediate second Enter picks the item', async ({ page }) => {
+  await installIme(page);
+  await page.keyboard.type('/');
+  await expect(page.locator('.mbe-slash-menu')).toBeVisible();
+  const handled = await page.evaluate(() => {
+    (window as any).ime.compose(['ta'], 'tab', 'end last');
+    const root = document.getElementById('editor')!;
+    const press = (keyCode: number) => !root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode, bubbles: true, cancelable: true }));
+    return [press(229), press(13)];
+  });
+  expect(handled).toEqual([false, true]);
+  expect(await blocks(page)).toEqual([expect.stringMatching(/^table:/)]);
+});
+
+test('the code language input keeps its DOM and focus during composition', async ({ page }) => {
+  await page.evaluate(() => (window as any).editor.setMarkdown('```js\nlet x\n```'));
+  const input = page.locator('.mbe-code-lang');
+  await input.focus();
+  expect(await input.evaluate((el) => {
+    el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: '中', inputType: 'insertCompositionText', isComposing: true }));
+    el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '中' }));
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: '中', inputType: 'insertCompositionText' }));
+    return document.activeElement === el && el.isConnected;
+  })).toBe(true);
+  await expect(input).toBeFocused();
+});
+
+test('pasting during composition keeps the word and the following text', async ({ page }) => {
+  await installIme(page);
+  await page.keyboard.type('ab');
+  await page.keyboard.press('ArrowLeft');
+  await ime.start(page);
+  await ime.update(page, '한');
+  await page.evaluate(() => {
+    const data = new DataTransfer();
+    data.setData('text/plain', '中');
+    document.getElementById('editor')!.dispatchEvent((window as any).clipboardEvent('paste', data));
+  });
+  await frame(page);
+  await page.keyboard.type('!');
+  expect(await md(page)).toBe('a한中!b\n');
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.keyboard.press('ControlOrMeta+z');
+  expect(await md(page)).toBe('a한b\n');
+});
+
+test('updating presentation options keeps the composing DOM attached until commit', async ({ page }) => {
+  await installIme(page);
+  await ime.start(page);
+  await ime.update(page, 'kan');
+  expect(await page.evaluate(() => {
+    const node = getSelection()!.focusNode!;
+    (window as any).editor.setOptions({ theme: { classes: { paragraph: 'custom-paragraph' } }, resolveUrl: (url: string) => url });
+    return node.isConnected && getSelection()!.focusNode === node;
+  })).toBe(true);
+  await ime.commit(page, '漢', 'end last');
+  await expect(page.locator('#editor p')).toHaveClass(/custom-paragraph/);
+  await page.keyboard.type('!');
+  expect(await md(page)).toBe('漢!\n');
+});
+
+test('an editor command finishes the composition before changing its block or undoing it', async ({ page }) => {
+  await installIme(page);
+  await ime.start(page);
+  await ime.update(page, '한');
+  await page.evaluate(() => (window as any).editor.commands.toggleHeading({ level: 2 }));
+  expect(await blocks(page)).toEqual(['h2:한']);
+  expect(await page.evaluate(() => (window as any).editor.isComposing)).toBe(false);
+  await ime.start(page);
+  await ime.update(page, '字');
+  await page.evaluate(() => (window as any).editor.commands.undo());
+  expect(await blocks(page)).toEqual(['h2:한']);
+  await page.keyboard.type('!');
+  expect(await blocks(page)).toEqual(['h2:한!']);
+});
+
+test('a formatting command uses the mode requested during composition', async ({ page }) => {
+  await installIme(page);
+  await ime.start(page);
+  await ime.update(page, '字');
+  await page.evaluate(() => {
+    const editor = (window as any).editor;
+    editor.setOptions({ mode: 'source' });
+    editor.commands.toggleHeading({ level: 2 });
+  });
+  expect(await md(page)).toContain('## 字');
+  await expect(page.locator('#editor .mbe-source')).toHaveCount(1);
+});
+
+test('switching to read-only while composing keeps the word and releases the editing host', async ({ page }) => {
+  await installIme(page);
+  await ime.start(page);
+  await ime.update(page, '한');
+  await page.evaluate(() => (window as any).editor.setOptions({ editable: false }));
+  expect(await page.evaluate(() => (window as any).editor.isComposing)).toBe(false);
+  await expect(page.locator('#editor')).toHaveAttribute('contenteditable', 'false');
+  expect(await md(page)).toBe('한\n');
+  await page.evaluate(() => (window as any).editor.setOptions({ editable: true }));
+  await page.locator('#editor').click();
+  await page.keyboard.press('End');
+  await page.keyboard.type('!');
+  expect(await md(page)).toBe('한!\n');
+});
+
 test('typing before the settle frame does not replace the last IME clause', async ({ page }) => {
   await installIme(page);
   await page.evaluate(() => {
@@ -477,6 +627,7 @@ test('typing before the settle frame does not replace the last IME clause', asyn
     const text = document.createTreeWalker(root, NodeFilter.SHOW_TEXT).nextNode()!;
     getSelection()!.setBaseAndExtent(text, 0, text, 2);
     document.dispatchEvent(new Event('selectionchange'));
+    root.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'X' }));
     const input = new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: 'X' });
     Object.defineProperty(input, 'getTargetRanges', { value: () => [new StaticRange({ startContainer: text, startOffset: 0, endContainer: text, endOffset: 2 })] });
     root.dispatchEvent(input);
@@ -556,6 +707,96 @@ for (const [order, browsers] of [['end last', 'Chromium, Safari'], ['end first',
   test.describe(`composition events, compositionend ${order.slice(4)} (${browsers})`, () => {
     test.beforeEach(async ({ page }) => installIme(page));
 
+    for (const { steps, word, before, after } of [
+      { steps: ['안녕하세', '안녕하세요'], word: '안녕하세요', before: '', after: '' },
+      { steps: ['にほんご'], word: '日本語', before: '# Heading\n\n本文', after: '' },
+      { steps: ['shu', 'shurufa'], word: '输入法', before: '**中文', after: '**\n下一行' },
+    ]) {
+      test(`source mode inserts an immediate space after ${word}`, async ({ page }) => {
+        await page.evaluate(({ steps, word, before, after, order }) => {
+          const editor = (window as any).editor;
+          editor.setOptions({ mode: 'source' });
+          editor.setMarkdown(before + after);
+          const pos = { blockId: editor.state.doc.blocks[0].id, offset: before.length };
+          editor.setSelection({ anchor: pos, focus: pos });
+          (window as any).ime.compose(steps, word, order);
+          // The space arrives before the editor repaints the line the IME edited.
+          const root = document.getElementById('editor')!;
+          root.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true, cancelable: true }));
+          root.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: ' ', bubbles: true, cancelable: true }));
+        }, { steps, word, before, after, order });
+        await frame(page);
+        expect(await md(page)).toBe(before + word + ' ' + after);
+        await page.keyboard.type('X');
+        expect(await md(page)).toBe(before + word + ' X' + after);
+      });
+    }
+
+    for (const mode of ['source', 'rich']) {
+      test(`reconversion keeps a backward selection in ${mode} mode and undoes in one step`, async ({ page }) => {
+        const selected = await page.evaluate(({ mode, order }) => {
+          const editor = (window as any).editor;
+          editor.setOptions({ mode });
+          editor.setMarkdown('前かな後');
+          editor.setSelection({ anchor: { block: 0, offset: 3 }, focus: { block: 0, offset: 1 } });
+          const selection = getSelection()!;
+          const root = document.getElementById('editor')!;
+          root.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: 'かな' }));
+          const range = selection.getRangeAt(0);
+          const reading = range.toString();
+          range.deleteContents();
+          const text = document.createTextNode('仮名');
+          range.insertNode(text);
+          selection.collapse(text, 2);
+          const end = () => root.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '仮名' }));
+          if (order === 'end first') end();
+          root.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertCompositionText', data: '仮名', isComposing: order === 'end last' }));
+          if (order === 'end last') end();
+          return reading;
+        }, { mode, order });
+        expect(selected).toBe('かな');
+        await frame(page);
+        await page.keyboard.type('!');
+        expect((await md(page)).trimEnd()).toBe('前仮名!後');
+        await page.keyboard.press('ControlOrMeta+z');
+        await page.keyboard.press('ControlOrMeta+z');
+        expect((await md(page)).trimEnd()).toBe('前かな後');
+      });
+    }
+
+    test('a document replacement waits for the last IME input and keeps undo history when requested', async ({ page }) => {
+      await ime.start(page);
+      await ime.update(page, 'kanji');
+      await page.evaluate(() => {
+        const editor = (window as any).editor;
+        editor.setMarkdown('first');
+        editor.setMarkdown('outside', { history: 'keep' });
+      });
+      expect(await md(page)).toBe('kanji\n');
+      await ime.commit(page, '漢字', order);
+      expect(await md(page)).toBe('outside');
+      await page.keyboard.press('ControlOrMeta+z');
+      expect(await md(page)).toBe('漢字\n');
+    });
+
+    test('the first space after a deferred document replacement edits the new document', async ({ page }) => {
+      await page.evaluate((order) => {
+        const editor = (window as any).editor;
+        editor.setOptions({ mode: 'source' });
+        const ime = (window as any).ime;
+        ime.start();
+        ime.update('ni');
+        editor.setMarkdown('旧');
+        editor.setMarkdown('');
+        ime.commit('你', order);
+        document.getElementById('editor')!.dispatchEvent(new InputEvent('beforeinput', {
+          bubbles: true, cancelable: true, inputType: 'insertText', data: ' ',
+        }));
+      }, order);
+      await frame(page);
+      expect(await md(page)).toBe(' ');
+    });
+
     test('the model follows the composition, and it is one undo step', async ({ page }) => {
       await ime.start(page);
       await ime.update(page, 'k');
@@ -601,6 +842,8 @@ for (const [order, browsers] of [['end last', 'Chromium, Safari'], ['end first',
       await page.keyboard.press('Shift+ArrowUp');
       await ime.compose(page, ['中'], '中', order);
       expect(await md(page)).toBe('one中\n');
+      await page.keyboard.press('ControlOrMeta+z');
+      expect(await md(page)).toBe('one\n\ntwo\n');
     });
 
     test('in a heading, a list item, a quote, a code block and a table cell', async ({ page }) => {

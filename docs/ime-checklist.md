@@ -1,6 +1,6 @@
 # Manual IME checklist
 
-Automated tests (`e2e/ime.spec.ts`) simulate IME input in Chromium only: composition goes through the Chrome DevTools Protocol, and the events mobile keyboards send are dispatched by the test. They cannot show the candidate window, the order in which other browsers send events, or what a real keyboard does. Before a release, run this checklist by hand with real input methods.
+The browser tests in `e2e/ime.spec.ts` drive Chromium through the Chrome DevTools Protocol. In Chromium, Firefox and WebKit they also replay composition events with the last input arriving before or after `compositionend`. The native candidate window and operating-system keyboard still need a device check. Before a release, run this checklist by hand with real input methods.
 
 ## Setups
 
@@ -47,11 +47,10 @@ The last column names the automated test that covers the same behavior in Chromi
 | 24 | Android and iOS: with the tag popup open and a word still underlined, tap an item. The output has the picked tag once, and the underlined word is not added again. | a click on an item while composing commits the composed text once, then picks |
 | 25 | Android: type `#wor` in a word that already exists (`#wor` then `k`, all underlined by the keyboard). The popup opens as you type. | composed text in a token opens the popup and filters it |
 | 26 | Safari, Pinyin: in an empty paragraph, type a reading (`ceshi`) and pick a candidate with Space or a number. The output has the word picked (`测试`), not the reading. Then type a reading in another empty paragraph and delete it with Backspace: the paragraph stays empty. | the committed word replaces the reading; a composition deleted without a commit leaves the block empty (events only) |
-
 | 27 | Japanese: convert a sentence with several clauses, select a clause in the middle, then commit and type another character. It appears after the committed sentence. | committing a Japanese clause selection leaves the caret after the word (Chromium CDP) |
 | 28 | Compose in a table cell, click a paragraph, type more text, then save and reload. Both the composed word and the later text remain. | leaving an unfinished table composition keeps later typing in saved Markdown |
+| 29 | In Markdown source mode, type 안녕하세요 at the end of a line, pause two seconds, commit and immediately type a space. Continue typing. Repeat with Japanese and Chinese candidates and in the middle of existing text. The space and the next character follow the committed word. | source mode inserts an immediate space; source mode keeps a space after the last committed Korean syllable |
+| 30 | Select an existing Japanese word, including a backward selection, and start reconversion (Windows conversion key or macOS Kana twice). Pick a different candidate, type punctuation, then undo both edits. The original word and surrounding text return. | reconversion keeps a backward selection |
+| 31 | In the link or image alt-text field, use Enter to confirm a candidate and Escape to dismiss the candidate list. The field keeps focus. A separate Enter applies the value and a separate Escape closes the field. | composition keys stay with the IME |
 
-## Not handled yet
-
-- A composition that starts over a selection inside one block deletes the selection first. Japanese reconversion (select text, then press the conversion key) may lose the selected text as the reading. Check on Windows (Microsoft IME, 変換 key) and macOS (Kana key twice).
-- Chinese IMEs type `、` for `/` by default. It does not open the slash menu.
+Some Chinese input methods type `、` on the slash key. The editor keeps it as punctuation. Enter `/` or `／` to open the slash menu.

@@ -65,9 +65,6 @@ export function visibleViewport(view: Window): { left: number; top: number; widt
 
 export const isMac = typeof navigator !== 'undefined' && /Mac|iP(hone|ad|od)/.test(navigator.platform);
 
-/** Safari, which sends the Enter that commits a composition after `compositionend`. */
-export const isSafari = typeof navigator !== 'undefined' && /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|CriOS|Edg|Android/.test(navigator.userAgent);
-
 /** True on touch devices, which have no hover and show their own menu over a selection. */
 export const isTouch = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 

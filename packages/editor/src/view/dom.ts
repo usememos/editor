@@ -486,15 +486,10 @@ function isSourceLine(n: Node): n is HTMLElement {
   return n instanceof HTMLElement && n.classList.contains(SOURCE_LINE);
 }
 
-/** Source mode's line elements with their text lengths: from the lines as rendered, or from the elements when the browser changed them. */
+/** An IME can change a line's text before the renderer sees it. Map the caret using the live DOM. */
 function* sourceLineLengths(contentEl: HTMLElement): Generator<[HTMLElement, number]> {
-  const rendered = sourceLines.get(contentEl);
-  const cached = rendered && rendered.length === contentEl.childElementCount ? rendered : null;
-  let i = 0;
   for (let n = contentEl.firstChild; n; n = n.nextSibling) {
-    if (!isSourceLine(n)) continue;
-    yield [n, cached ? cached[i]!.text.length : n.textContent!.length];
-    i++;
+    if (isSourceLine(n)) yield [n, n.textContent!.length];
   }
 }
 

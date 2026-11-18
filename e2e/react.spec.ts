@@ -48,8 +48,10 @@ test('React: an outside value during IME composition waits for the composition t
   await page.evaluate(() => (document.querySelector('#set-outside') as HTMLButtonElement).click());
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
   await expect(root).toHaveText('startに');
-  await cdp.send('Input.insertText', { text: 'に' });
+  await cdp.send('Input.imeSetComposition', { text: 'にほん', selectionStart: 3, selectionEnd: 3 });
+  await cdp.send('Input.insertText', { text: '日本' });
   await expect(root).toHaveText('from outside');
+  await expect(page.locator('#value')).toHaveText('from outside');
 });
 
 test('React: useEditor and EditorContent', async ({ page }) => {
